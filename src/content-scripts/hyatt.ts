@@ -1,0 +1,322 @@
+/**
+ * Content script for hyatt.com (World of Hyatt).
+ * Runs in ISOLATED WORLD.
+ *
+ * Two-phase scrape orchestrated by the service worker:
+ *   1. Account Overview (/profile/en-US/account-overview) → EXTRACTION_DONE
+ *   2. Awards page (/profile/en-US/awards) → AWARDS_SCRAPED
+ */
+
+import type { HyattLoyaltyData, LoginState } from "../lib/types";
+import { createContentScriptRunControl } from "../lib/content-script-run-control";
+import { showOverlay, updateOverlay } from "../lib/overlay";
+
+const runControl = createContentScriptRunControl("hyatt");
+
+// ── Login detection ──────────────────────────────────────────
+
+function detectLoginState(): LoginState {
+  const url = window.location.href.toLowerCase();
+
+  // Sign-in pages
+  if (url.includes("/sign-in") || url.includes("/login") || url.includes("/signin")) {
+    return "logged_out";
+  }
+
+  // Account/profile pages indicate logged in
+  if (url.includes("/profile/") || url.includes("/loyalty/")) {
+    return "logged_in";
+  }
+
+  return "unknown";
+}
+
+// ── Wait for content to render ───────────────────────────────
+
+function waitForSelector(selector: string, maxWaitMs = 15000): Promise<Element | null> {
+  return new Promise((resolve) => {
+    const existing = document.querySelector(selector);
+    if (existing) {
+      resolve(existing);
+      return;
+    }
+
+    const timeout = setTimeout(() => {
+      observer.disconnect();
+      resolve(null);
+    }, maxWaitMs);
+
+    const observer = new MutationObserver(() => {
+      const el = document.querySelector(selector);
+      if (el) {
+        observer.disconnect();
+        clearTimeout(timeout);
+        resolve(el);
+      }
+    });
+
+    observer.observe(document.body, { childList: true, subtree: true });
+  });
+}
+
+// ── Helpers ──────────────────────────────────────────────────
+
+function parseIntSafe(str: string): number | null {
+  const n = parseInt(str.replace(/[,\s]/g, ""), 10);
+  return Number.isNaN(n) ? null : n;
+}
+
+// ── Scrape account overview page ─────────────────────────────
+
+function scrapeAccountPage(): HyattLoyaltyData {
+  const data: HyattLoyaltyData = {
+    pointsBalance: null,
+    eliteStatus: null,
+    qualifyingNights: null,
+    basePoints: null,
+    memberSince: null,
+    memberName: null,
+    memberNumber: null,
+    validatedThrough: null,
+    milestoneNights: null,
+    milestoneProgress: null,
+    milestoneTotal: null,
+    milestoneChoices: [],
+    awards: [],
+  };
+
+  // Points balance — data-locator="points-balance"
+  try {
+    const el = document.querySelector('[data-locator="points-balance"]');
+    if (el) data.pointsBalance = parseIntSafe(el.textContent?.trim() ?? "");
+  } catch (e) { console.warn("[NextCard Hyatt] pointsBalance:", e); }
+
+  // Elite status / tier — data-locator="type"
+  try {
+    const el = document.querySelector('[data-locator="type"]');
+    if (el) data.eliteStatus = el.textContent?.trim() ?? null;
+  } catch (e) { console.warn("[NextCard Hyatt] eliteStatus:", e); }
+
+  // Member name — data-locator="name"
+  try {
+    const el = document.querySelector('[data-locator="name"]');
+    if (el) data.memberName = el.textContent?.trim() ?? null;
+  } catch (e) { console.warn("[NextCard Hyatt] memberName:", e); }
+
+  // Member number — data-locator="member-number"
+  try {
+    const el = document.querySelector('[data-locator="member-number"]');
+    if (el) data.memberNumber = el.textContent?.trim() ?? null;
+  } catch (e) { console.warn("[NextCard Hyatt] memberNumber:", e); }
+
+  // Member since — data-locator="status" (e.g. "Member since Jan 2, 2022" or "Globalist through Feb 28, 2027")
+  try {
+    const statusEls = document.querySelectorAll('[data-locator="status"]');
+    for (const el of statusEls) {
+      const text = el.textContent?.trim() ?? "";
+      if (text.toLowerCase().includes("member since")) {
+        data.memberSince = text;
+      }
+      const throughMatch = text.match(/through\s+(.+)/i);
+      if (throughMatch) {
+        data.validatedThrough = throughMatch[1].trim();
+      }
+    }
+  } catch (e) { console.warn("[NextCard Hyatt] memberSince:", e); }
+
+  // Year-to-date progress — data-locator="pointBox"
+  try {
+    const boxes = document.querySelectorAll('[data-locator="pointBox"]');
+    for (const box of boxes) {
+      const text = box.textContent?.toLowerCase() ?? "";
+      // The pointBox text is like "1515Qualifying Nights" — extract the number
+      const numMatch = box.textContent?.match(/^[\s]*(\d[\d,]*)/);
+      const value = numMatch ? parseIntSafe(numMatch[1]) : null;
+
+      if (text.includes("qualifying nights")) {
+        data.qualifyingNights = value;
+      } else if (text.includes("base points")) {
+        data.basePoints = value;
+      }
+    }
+  } catch (e) { console.warn("[NextCard Hyatt] yearProgress:", e); }
+
+  // Milestone progress — data-locator="page-tracker" (e.g. "1 / 14")
+  try {
+    const tracker = document.querySelector('[data-locator="page-tracker"]');
+    if (tracker) {
+      const match = tracker.textContent?.match(/(\d+)\s*\/\s*(\d+)/);
+      if (match) {
+        data.milestoneProgress = parseInt(match[1], 10);
+        data.milestoneTotal = parseInt(match[2], 10);
+      }
+    }
+  } catch (e) { console.warn("[NextCard Hyatt] milestoneProgress:", e); }
+
+  // Milestone nights from previous year section — data-locator="title"
+  try {
+    const prevYear = document.querySelector('[data-locator="milestones-previous-year"]');
+    if (prevYear) {
+      const title = prevYear.querySelector('[data-locator="title"]');
+      const nightsMatch = title?.textContent?.match(/(\d+)\s*Nights?\s*Milestone/i);
+      if (nightsMatch) data.milestoneNights = parseInt(nightsMatch[1], 10);
+    }
+  } catch (e) { console.warn("[NextCard Hyatt] milestoneNights:", e); }
+
+  // Milestone choices — from both current and previous year sections
+  try {
+    // Current year choices: data-locator="milestones-current-year" > data-locator="award"
+    const currentYear = document.querySelector('[data-locator="milestones-current-year"]');
+    if (currentYear) {
+      const awards = currentYear.querySelectorAll('[data-locator="award"]');
+      for (const award of awards) {
+        const name = award.querySelector('[data-locator="name"]')?.textContent?.trim();
+        const description = award.querySelector('[data-locator="description"]')?.textContent?.trim() ?? null;
+        if (name) data.milestoneChoices.push({ name, description });
+      }
+    }
+
+    // Previous year choices (if form is expanded): data-locator="choice-submit-form"
+    if (data.milestoneChoices.length === 0) {
+      const form = document.querySelector('[data-locator="choice-submit-form"]');
+      if (form) {
+        const awards = form.querySelectorAll('[data-locator="award-info"]');
+        for (const award of awards) {
+          const name = award.querySelector('[data-locator="name"]')?.textContent?.trim();
+          const description = award.querySelector('[data-locator="description"]')?.textContent?.trim() ?? null;
+          if (name) data.milestoneChoices.push({ name, description });
+        }
+      }
+    }
+  } catch (e) { console.warn("[NextCard Hyatt] milestoneChoices:", e); }
+
+  console.log("[NextCard Hyatt] Scraped overview data:", data);
+  return data;
+}
+
+// ── Scrape awards page ───────────────────────────────────────
+
+type Award = { name: string; description: string | null; expiryDate: string | null };
+
+function scrapeAwardsPage(): Award[] {
+  const awards: Award[] = [];
+
+  try {
+    const awardLists = document.querySelectorAll('[data-locator="awardList"]');
+    for (const list of awardLists) {
+      // Group header (e.g. "Free Night Awards (1)")
+      const header = list.querySelector('[class*="List_header"]');
+      const groupName = header?.textContent?.trim() ?? "";
+
+      // Individual award items: li with AwardsListItem class
+      const items = list.querySelectorAll('li[class*="AwardsListItem"]');
+      for (const item of items) {
+        const name = item.querySelector('[data-locator="description"]')?.textContent?.trim();
+        const expiryText = item.querySelector('[data-locator="expiration"]')?.textContent?.trim() ?? null;
+        // Clean up "Expires " prefix
+        const expiryDate = expiryText?.replace(/^Expires\s+/i, "") ?? null;
+
+        if (name) {
+          awards.push({
+            name,
+            description: groupName || null,
+            expiryDate,
+          });
+        }
+      }
+    }
+  } catch (e) { console.warn("[NextCard Hyatt] awards scrape:", e); }
+
+  console.log(`[NextCard Hyatt] Scraped ${awards.length} awards`);
+  return awards;
+}
+
+// ── Orchestration ────────────────────────────────────────────
+
+async function runExtraction(attemptId: string) {
+  const loginState = detectLoginState();
+  console.log("[NextCard Hyatt] Login state:", loginState);
+  await runControl.sendMessage(attemptId, { type: "LOGIN_STATE", state: loginState });
+
+  if (loginState !== "logged_in") {
+    showOverlay("waiting_for_login", "hyatt");
+    await runControl.sendMessage(attemptId, {
+      type: "STATUS_UPDATE",
+      status: "waiting_for_login",
+      data: null,
+      error: null,
+    });
+    return;
+  }
+
+  updateOverlay("extracting", "hyatt");
+  console.log("[NextCard Hyatt] Waiting for account content...");
+  await waitForSelector('[data-locator="points-balance"], [data-locator="type"]', 20000);
+  await runControl.sleep(3000, attemptId);
+
+  runControl.throwIfCancelled(attemptId);
+  const data = scrapeAccountPage();
+  await runControl.sendMessage(attemptId, { type: "EXTRACTION_DONE", data });
+}
+
+async function runAwardsScrape(attemptId: string) {
+  console.log("[NextCard Hyatt] Scraping awards page...");
+
+  // Wait briefly for the page to render, then check if awards exist.
+  // Some members (e.g. basic Member tier) may have no awards at all.
+  const el = await waitForSelector('[data-locator="awardList"]', 8000);
+  if (!el) {
+    console.log("[NextCard Hyatt] No awards found on page");
+    await runControl.sendMessage(attemptId, { type: "AWARDS_SCRAPED", awards: [] });
+    return;
+  }
+
+  await runControl.sleep(1000, attemptId);
+
+  runControl.throwIfCancelled(attemptId);
+  const awards = scrapeAwardsPage();
+  await runControl.sendMessage(attemptId, { type: "AWARDS_SCRAPED", awards });
+}
+
+// ── Message listener ─────────────────────────────────────────
+
+chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+  if (runControl.handleAbort(message)) {
+    sendResponse({ ok: true });
+    return true;
+  }
+  if (message.type === "START_EXTRACTION") {
+    if (typeof message.attemptId !== "string") {
+      sendResponse({ ok: false });
+      return true;
+    }
+    runControl.beginAttempt(message.attemptId);
+    runExtraction(message.attemptId);
+    sendResponse({ ok: true });
+  }
+  if (message.type === "SCRAPE_AWARDS") {
+    if (typeof message.attemptId !== "string") {
+      sendResponse({ ok: false });
+      return true;
+    }
+    runControl.beginAttempt(message.attemptId);
+    runAwardsScrape(message.attemptId);
+    sendResponse({ ok: true });
+  }
+  if (message.type === "GET_LOGIN_STATE") {
+    sendResponse({ state: detectLoginState() });
+  }
+  return true;
+});
+
+const initialState = detectLoginState();
+chrome.runtime.sendMessage({ type: "GET_PROVIDER_STATUS", provider: "hyatt" }, (r) => {
+  const s = r?.status;
+  if (s === "extracting" || (s === "detecting_login" && initialState === "logged_in")) {
+    showOverlay("extracting", "hyatt");
+  } else if ((s === "waiting_for_login" || s === "detecting_login") && initialState !== "logged_in") {
+    showOverlay("waiting_for_login", "hyatt");
+  }
+});
+chrome.runtime.sendMessage({ type: "LOGIN_STATE", provider: "hyatt", state: initialState }).catch(() => {});
+console.log("[NextCard Hyatt] Content script loaded. Login state:", initialState);

@@ -1,0 +1,39 @@
+{
+  "manifest_version": 3,
+  "incognito": "split",
+  "name": "nextcard sync",
+  "short_name": "nextcard sync",
+  "version": "0.4.5",
+  "description": "Sync your loyalty program balances and credit card benefit usage to your nextcard wallet.",
+  "permissions": ["storage", "scripting", "sidePanel", "tabs"],
+  "host_permissions": [],
+  "externally_connectable": {
+    "matches": ["https://nextcard.com/*", "https://*.nextcard.com/*"]
+  },
+  "background": {
+    "service_worker": "src/background/service-worker.ts",
+    "type": "module"
+  },
+  "content_scripts": [],
+  "side_panel": {
+    "default_path": "src/popup/popup.html"
+  },
+  "icons": {
+    "16": "src/icons/icon16.png",
+    "48": "src/icons/icon48.png",
+    "128": "src/icons/icon128.png"
+  },
+  "web_accessible_resources": [
+    {
+      "resources": ["src/icons/*.png"],
+      "matches": ["<all_urls>"]
+    }
+  ],
+  "action": {
+    "default_icon": {
+      "16": "src/icons/icon16.png",
+      "48": "src/icons/icon48.png",
+      "128": "src/icons/icon128.png"
+    }
+  }
+}

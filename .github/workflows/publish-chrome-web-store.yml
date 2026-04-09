@@ -1,0 +1,82 @@
+name: Publish Chrome Web Store
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9.15.4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Run tests
+        run: pnpm test:run
+
+      - name: Typecheck
+        run: pnpm typecheck
+
+      - name: Build extension
+        run: pnpm build
+
+      - name: Package extension zip
+        run: |
+          cd dist
+          zip -r ../extension.zip .
+
+      - name: Upload extension artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: nextcard-ext-package
+          path: extension.zip
+
+      - name: Publish to Chrome Web Store
+        env:
+          CHROME_CLIENT_ID: ${{ secrets.CHROME_CLIENT_ID }}
+          CHROME_CLIENT_SECRET: ${{ secrets.CHROME_CLIENT_SECRET }}
+          CHROME_REFRESH_TOKEN: ${{ secrets.CHROME_REFRESH_TOKEN }}
+          CHROME_EXTENSION_ID: ${{ secrets.CHROME_EXTENSION_ID }}
+          CHROME_PUBLISHER_ID: ${{ secrets.CHROME_PUBLISHER_ID }}
+        run: |
+          set -euo pipefail
+
+          # Refresh a short-lived token in CI so no access token is stored long term.
+          access_token=$(curl -fsS https://oauth2.googleapis.com/token \
+            -d "client_id=${CHROME_CLIENT_ID}" \
+            -d "client_secret=${CHROME_CLIENT_SECRET}" \
+            -d "refresh_token=${CHROME_REFRESH_TOKEN}" \
+            -d "grant_type=refresh_token" | python3 -c 'import json,sys; print(json.load(sys.stdin)["access_token"])')
+
+          # Upload first, then publish against the same item ID so the current store flow stays unchanged.
+          upload_response=$(curl -fsS \
+            -H "Authorization: Bearer ${access_token}" \
+            -X POST \
+            -T extension.zip \
+            "https://chromewebstore.googleapis.com/upload/v2/publishers/${CHROME_PUBLISHER_ID}/items/${CHROME_EXTENSION_ID}:upload")
+
+          echo "Upload response: ${upload_response}"
+
+          publish_response=$(curl -fsS \
+            -H "Authorization: Bearer ${access_token}" \
+            -X POST \
+            "https://chromewebstore.googleapis.com/v2/publishers/${CHROME_PUBLISHER_ID}/items/${CHROME_EXTENSION_ID}:publish")
+
+          echo "Publish response: ${publish_response}"

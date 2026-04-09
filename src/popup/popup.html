@@ -1,0 +1,1444 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>nextcard sync</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Nunito:wght@400;500;600;700;800&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="./popup.css" />
+  </head>
+  <body>
+    <!-- SIGN-IN VIEW -->
+    <div class="view" id="authView">
+      <div class="auth-screen">
+        <img class="auth-logo" id="authLogo" alt="nextcard" />
+        <div class="auth-title">nextcard sync</div>
+        <div class="auth-subtitle">
+          Sign in to your nextcard account to sync your loyalty programs.
+        </div>
+        <button class="auth-sign-in-btn" id="authSignInBtn">
+          Sign in to nextcard
+        </button>
+      </div>
+    </div>
+
+    <!-- ONBOARDING VIEW -->
+    <div class="view active" id="disclosureView">
+      <div class="onboarding">
+        <!-- Step 1: Welcome -->
+        <div class="onboarding-step active" data-step="0">
+          <img class="auth-logo" id="disclosureLogo" alt="nextcard" />
+          <div class="auth-title">Welcome to nextcard sync</div>
+          <div class="onboarding-subtitle">
+            Sync your loyalty programs to see all your points, status, and benefits in one place.
+          </div>
+          <div class="onboarding-carousel-wrapper">
+            <div class="onboarding-carousel" id="onboardingProviders"></div>
+          </div>
+        </div>
+
+        <!-- Step 2: What does this extension do? -->
+        <div class="onboarding-step" data-step="1">
+          <div class="auth-title" style="margin-bottom: 16px;">What nextcard sync does</div>
+          <div class="onboarding-subtitle" style="margin-bottom: 20px;">
+            We connect to your loyalty programs and credit card accounts to show everything in one place.
+          </div>
+          <div class="onboarding-how">
+            <div class="onboarding-how-item">
+              <div class="onboarding-how-num">1</div>
+              <div class="onboarding-how-text">
+                <strong>Points & miles</strong><br/>
+                <span>See balances across all your airline and hotel programs</span>
+              </div>
+            </div>
+            <div class="onboarding-how-item">
+              <div class="onboarding-how-num">2</div>
+              <div class="onboarding-how-text">
+                <strong>Elite status & tier progress</strong><br/>
+                <span>Track your progress toward the next tier in every program</span>
+              </div>
+            </div>
+            <div class="onboarding-how-item">
+              <div class="onboarding-how-num">3</div>
+              <div class="onboarding-how-text">
+                <strong>Benefits & perks</strong><br/>
+                <span>Never miss a companion cert, lounge pass, or credit card benefit</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Step 3: Create account / Sign in -->
+        <div class="onboarding-step" data-step="2">
+          <div class="auth-title" style="margin-bottom: 8px;">Create your free account</div>
+          <div class="onboarding-subtitle" style="margin-bottom: 20px;">
+            Your account lets us securely store your synced data and show you personalized insights on nextcard.com.
+          </div>
+          <div class="onboarding-dashboard-preview">
+            <div class="onboarding-dashboard-header">Your nextcard wallet</div>
+            <div class="onboarding-dashboard-row">
+              <div class="onboarding-dashboard-item">
+                <div class="onboarding-dashboard-label">Total Points</div>
+                <div class="onboarding-dashboard-value">243,891</div>
+              </div>
+              <div class="onboarding-dashboard-item">
+                <div class="onboarding-dashboard-label">Programs</div>
+                <div class="onboarding-dashboard-value">6</div>
+              </div>
+            </div>
+            <div class="onboarding-dashboard-row">
+              <div class="onboarding-dashboard-item">
+                <div class="onboarding-dashboard-label">Benefits tracked</div>
+                <div class="onboarding-dashboard-value">12</div>
+              </div>
+              <div class="onboarding-dashboard-item">
+                <div class="onboarding-dashboard-label">Est. value</div>
+                <div class="onboarding-dashboard-value">$4,210</div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Footer: dots + button -->
+        <div class="onboarding-footer">
+          <div class="onboarding-dots">
+            <button class="onboarding-dot active" data-dot="0"></button>
+            <button class="onboarding-dot" data-dot="1"></button>
+            <button class="onboarding-dot" data-dot="2"></button>
+          </div>
+          <button class="auth-sign-in-btn onboarding-btn" id="onboardingBtn">Next</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- HOME VIEW -->
+    <div class="view" id="homeView">
+      <div class="user-bar" id="userBar">
+        <div class="user-avatar" id="userAvatar"></div>
+        <div class="user-info">
+          <div class="user-name" id="userName"></div>
+          <div class="user-email" id="userEmail"></div>
+        </div>
+        <button class="user-sign-out" id="userSignOutBtn">Sign out</button>
+      </div>
+      <div class="tour-tooltip" id="tourTooltip">↓ Tap a hotel to start your first sync</div>
+      <div class="provider-list" id="providerList"></div>
+      <div class="version-footer" id="versionFooter"></div>
+      <div class="changelog" id="changelog">
+        <h4>v0.4.3</h4>
+        <ul>
+          <li>New onboarding walkthrough for first-time users</li>
+          <li>Privacy consent screen before your first sync</li>
+          <li>Sync overlay redesigned — now shows in the center of the page</li>
+          <li>Syncs are more reliable and recover automatically if something stalls</li>
+          <li>"View your nextcard wallet" button after syncing</li>
+        </ul>
+        <h4>v0.4.2</h4>
+        <ul>
+          <li>
+            In-page sync status banner — shows what nextcard is doing and when
+            it's safe to navigate
+          </li>
+          <li>Fix Amex sync getting stuck when not logged in</li>
+          <li>
+            Fix Amex freezing on cards without Membership Rewards (e.g. Blue
+            Business Cash)
+          </li>
+          <li>Fix login detection when already signed in</li>
+          <li>Fix sidebar card hover effect bouncing/repeating</li>
+        </ul>
+        <h4>v0.4.1</h4>
+        <ul>
+          <li>Fix Chase sync on compact dashboard view</li>
+          <li>
+            Fix United TravelBank showing expiring amount instead of total
+            balance
+          </li>
+          <li>
+            Fix Amex quarterly benefits showing annual total instead of period
+            amount
+          </li>
+          <li>Added Bilt Rewards sync</li>
+        </ul>
+        <h4>v0.4.0</h4>
+        <ul>
+          <li>
+            Sync all your cards at once — Chase, Amex, and Capital One now
+            detect every card on your account
+          </li>
+          <li>Chase benefit credits tracked per card (dining, travel, etc.)</li>
+          <li>Hilton tier progress tracking</li>
+          <li>Reliability and sync fixes across all providers</li>
+        </ul>
+        <h4>v0.3.0</h4>
+        <ul>
+          <li>Added Hilton Honors and Capital One sync</li>
+          <li>Amex benefit credit tracking</li>
+        </ul>
+        <h4>v0.2.4</h4>
+        <ul>
+          <li>Data auto-restores on login or reinstall</li>
+          <li>Hyatt magic link login support</li>
+        </ul>
+        <h4>v0.2.3</h4>
+        <ul>
+          <li>Added World of Hyatt sync</li>
+          <li>Grouped providers by category (Hotels, Airlines, Banks)</li>
+        </ul>
+        <h4>v0.2.2</h4>
+        <ul>
+          <li>Added American Airlines AAdvantage sync</li>
+          <li>Added Delta SkyMiles sync</li>
+          <li>Added United MileagePlus sync</li>
+          <li>Reduced auth verification frequency</li>
+        </ul>
+      </div>
+    </div>
+
+    <!-- MARRIOTT DETAIL VIEW -->
+    <div class="view" id="marriottView">
+      <div class="header">
+        <button class="back-btn" data-back>&larr;</button>
+        <h1>Marriott Bonvoy</h1>
+      </div>
+
+      <div class="status-bar">
+        <div class="status-dot idle" id="marriottStatusDot"></div>
+        <span id="marriottStatusText">Ready to sync</span>
+      </div>
+      <div class="status-subtitle" id="marriottStatusSubtitle"></div>
+
+      <div
+        class="last-synced"
+        id="marriottLastSynced"
+        style="display: none"
+      ></div>
+
+      <button class="sync-btn" id="marriottSyncBtn">
+        Sync Marriott Bonvoy
+      </button>
+      <button class="cancel-btn" id="marriottCancelBtn" style="display: none">
+        Cancel
+      </button>
+      <button class="clear-btn" id="marriottClearBtn" style="display: none">
+        Clear synced data
+      </button>
+      <button class="wallet-btn" id="marriottWalletBtn" style="display: none">
+        View your nextcard wallet
+      </button>
+
+      <div id="marriottErrorContainer"></div>
+
+      <div class="login-prompt" id="marriottLoginPrompt">
+        <div class="login-steps">
+          <h3>Complete sign-in to continue</h3>
+          <ol>
+            <li>Enter your email and password</li>
+            <li>Complete 2FA verification if prompted</li>
+            <li>Once logged in, we'll read your account automatically</li>
+          </ol>
+        </div>
+        <div class="privacy-note">
+          <span class="shield">&#128274;</span>
+          <span
+            >nextcard never sees or stores your login credentials. We only read
+            publicly visible account data after you log in.</span
+          >
+        </div>
+      </div>
+
+      <div class="data-section" id="marriottDataSection" style="display: none">
+        <h2>Account</h2>
+        <div class="data-grid">
+          <div class="data-card">
+            <div class="data-label">Points Balance</div>
+            <div class="data-value" id="marriottPoints">--</div>
+          </div>
+          <div class="data-card">
+            <div class="data-label">Elite Status</div>
+            <div class="data-value" id="marriottEliteStatus">--</div>
+          </div>
+          <div class="data-card">
+            <div class="data-label">Nights (This Year)</div>
+            <div class="data-value" id="marriottNightsCurrent">--</div>
+          </div>
+          <div class="data-card">
+            <div class="data-label">Nights (Lifetime)</div>
+            <div class="data-value" id="marriottNightsLifetime">--</div>
+          </div>
+          <div class="data-card">
+            <div class="data-label">Nights Stayed</div>
+            <div class="data-value" id="marriottNightsStayed">--</div>
+          </div>
+          <div class="data-card">
+            <div class="data-label">Bonus Nights</div>
+            <div class="data-value" id="marriottBonusNights">--</div>
+          </div>
+          <div class="data-card">
+            <div class="data-label">Qualified Spend</div>
+            <div class="data-value" id="marriottQualifiedSpend">--</div>
+          </div>
+          <div class="data-card">
+            <div class="data-label">Next Tier</div>
+            <div
+              class="data-value"
+              id="marriottNextTier"
+              style="font-size: 12px"
+            >
+              --
+            </div>
+          </div>
+          <div class="data-card full-width">
+            <div class="data-label">Member</div>
+            <div class="data-value" id="marriottMemberInfo">--</div>
+          </div>
+        </div>
+
+        <div
+          id="marriottLifetimeContainer"
+          style="margin-top: 16px; display: none"
+        >
+          <h2>Lifetime Stats</h2>
+          <div class="data-grid">
+            <div class="data-card">
+              <div class="data-label">Years Silver+</div>
+              <div class="data-value" id="marriottYearsSilver">--</div>
+            </div>
+            <div class="data-card">
+              <div class="data-label">Years Gold+</div>
+              <div class="data-value" id="marriottYearsGold">--</div>
+            </div>
+            <div class="data-card">
+              <div class="data-label">Years Platinum</div>
+              <div class="data-value" id="marriottYearsPlatinum">--</div>
+            </div>
+          </div>
+        </div>
+
+        <div
+          id="marriottCertsContainer"
+          style="margin-top: 16px; display: none"
+        >
+          <h2>Certificates</h2>
+          <ul class="certs-list" id="marriottCertsList"></ul>
+        </div>
+      </div>
+
+      <button class="raw-toggle" id="marriottRawToggle" style="display: none">
+        Show raw captured data
+      </button>
+      <div class="raw-data" id="marriottRawData"></div>
+    </div>
+
+    <!-- ATMOS DETAIL VIEW -->
+    <div class="view" id="atmosView">
+      <div class="header">
+        <button class="back-btn" data-back>&larr;</button>
+        <h1>Alaska Atmos</h1>
+      </div>
+
+      <div class="status-bar">
+        <div class="status-dot idle" id="atmosStatusDot"></div>
+        <span id="atmosStatusText">Ready to sync</span>
+      </div>
+      <div class="status-subtitle" id="atmosStatusSubtitle"></div>
+
+      <div class="last-synced" id="atmosLastSynced" style="display: none"></div>
+
+      <button class="sync-btn" id="atmosSyncBtn">Sync Alaska Atmos</button>
+      <button class="cancel-btn" id="atmosCancelBtn" style="display: none">
+        Cancel
+      </button>
+      <button class="clear-btn" id="atmosClearBtn" style="display: none">
+        Clear synced data
+      </button>
+      <button class="wallet-btn" id="atmosWalletBtn" style="display: none">
+        View your nextcard wallet
+      </button>
+
+      <div id="atmosErrorContainer"></div>
+
+      <div class="login-prompt" id="atmosLoginPrompt">
+        <div class="login-steps">
+          <h3>Complete sign-in to continue</h3>
+          <ol>
+            <li>Enter your Alaska Airlines credentials</li>
+            <li>Complete verification if prompted</li>
+            <li>Once logged in, we'll read your account automatically</li>
+          </ol>
+        </div>
+        <div class="privacy-note">
+          <span class="shield">&#128274;</span>
+          <span
+            >nextcard never sees or stores your login credentials. We only read
+            publicly visible account data after you log in.</span
+          >
+        </div>
+      </div>
+
+      <div class="data-section" id="atmosDataSection" style="display: none">
+        <h2>Account</h2>
+        <div class="data-grid">
+          <div class="data-card">
+            <div class="data-label">Available Points</div>
+            <div class="data-value" id="atmosAvailablePoints">--</div>
+          </div>
+          <div class="data-card">
+            <div class="data-label">Status Points</div>
+            <div class="data-value" id="atmosStatusPoints">--</div>
+          </div>
+          <div class="data-card">
+            <div class="data-label">Status Level</div>
+            <div class="data-value" id="atmosStatusLevel">--</div>
+          </div>
+          <div class="data-card">
+            <div class="data-label">Member</div>
+            <div class="data-value" id="atmosMemberInfo">--</div>
+          </div>
+        </div>
+
+        <div id="atmosRewardsContainer" style="margin-top: 16px; display: none">
+          <h2>Rewards &amp; Passes</h2>
+          <ul class="certs-list" id="atmosRewardsList"></ul>
+        </div>
+
+        <div
+          id="atmosDiscountsContainer"
+          style="margin-top: 16px; display: none"
+        >
+          <h2>Companion &amp; Discount Codes</h2>
+          <ul class="certs-list" id="atmosDiscountsList"></ul>
+        </div>
+      </div>
+
+      <button class="raw-toggle" id="atmosRawToggle" style="display: none">
+        Show raw captured data
+      </button>
+      <div class="raw-data" id="atmosRawData"></div>
+    </div>
+
+    <!-- CHASE DETAIL VIEW -->
+    <div class="view" id="chaseView">
+      <div class="header">
+        <button class="back-btn" data-back>&larr;</button>
+        <h1>Chase</h1>
+      </div>
+
+      <div class="status-bar">
+        <div class="status-dot idle" id="chaseStatusDot"></div>
+        <span id="chaseStatusText">Ready to sync</span>
+      </div>
+      <div class="status-subtitle" id="chaseStatusSubtitle"></div>
+
+      <div class="last-synced" id="chaseLastSynced" style="display: none"></div>
+
+      <button class="sync-btn" id="chaseSyncBtn">Sync Chase</button>
+      <button class="cancel-btn" id="chaseCancelBtn" style="display: none">
+        Cancel
+      </button>
+      <button class="clear-btn" id="chaseClearBtn" style="display: none">
+        Clear synced data
+      </button>
+      <button class="wallet-btn" id="chaseWalletBtn" style="display: none">
+        View your nextcard wallet
+      </button>
+
+      <div id="chaseErrorContainer"></div>
+
+      <div class="login-prompt" id="chaseLoginPrompt">
+        <div class="login-steps">
+          <h3>Complete sign-in to continue</h3>
+          <ol>
+            <li>Enter your Chase username and password</li>
+            <li>Complete 2FA verification if prompted</li>
+            <li>Select the card to view once logged in</li>
+            <li>We'll read your points dashboard automatically</li>
+          </ol>
+        </div>
+        <div class="privacy-note">
+          <span class="shield">&#128274;</span>
+          <span
+            >nextcard never sees or stores your login credentials. We only read
+            publicly visible account data after you log in.</span
+          >
+        </div>
+      </div>
+
+      <div class="data-section" id="chaseDataSection" style="display: none">
+        <div id="chaseCardsContainer"></div>
+      </div>
+
+      <button class="raw-toggle" id="chaseRawToggle" style="display: none">
+        Show raw captured data
+      </button>
+      <div class="raw-data" id="chaseRawData"></div>
+    </div>
+
+    <!-- AA DETAIL VIEW -->
+    <div class="view" id="aaView">
+      <div class="header">
+        <button class="back-btn" data-back>&larr;</button>
+        <h1>American Airlines AAdvantage</h1>
+      </div>
+
+      <div class="status-bar">
+        <div class="status-dot idle" id="aaStatusDot"></div>
+        <span id="aaStatusText">Ready to sync</span>
+      </div>
+      <div class="status-subtitle" id="aaStatusSubtitle"></div>
+
+      <div class="last-synced" id="aaLastSynced" style="display: none"></div>
+
+      <button class="sync-btn" id="aaSyncBtn">Sync AAdvantage</button>
+      <button class="cancel-btn" id="aaCancelBtn" style="display: none">
+        Cancel
+      </button>
+      <button class="clear-btn" id="aaClearBtn" style="display: none">
+        Clear synced data
+      </button>
+      <button class="wallet-btn" id="aaWalletBtn" style="display: none">
+        View your nextcard wallet
+      </button>
+
+      <div id="aaErrorContainer"></div>
+
+      <div class="login-prompt" id="aaLoginPrompt">
+        <div class="login-steps">
+          <h3>Complete sign-in to continue</h3>
+          <ol>
+            <li>Enter your AAdvantage credentials</li>
+            <li>Complete verification if prompted</li>
+            <li>Once logged in, we'll read your account automatically</li>
+          </ol>
+        </div>
+        <div class="privacy-note">
+          <span class="shield">&#128274;</span>
+          <span
+            >nextcard never sees or stores your login credentials. We only read
+            publicly visible account data after you log in.</span
+          >
+        </div>
+      </div>
+
+      <div class="data-section" id="aaDataSection" style="display: none">
+        <h2>Account</h2>
+        <div class="data-grid">
+          <div class="data-card">
+            <div class="data-label">Miles Balance</div>
+            <div class="data-value" id="aaMilesBalance">--</div>
+          </div>
+          <div class="data-card">
+            <div class="data-label">Elite Status</div>
+            <div class="data-value" id="aaEliteStatus">--</div>
+          </div>
+          <div class="data-card">
+            <div class="data-label">Loyalty Points</div>
+            <div class="data-value" id="aaLoyaltyPoints">--</div>
+          </div>
+          <div class="data-card">
+            <div class="data-label">Next Status</div>
+            <div class="data-value" id="aaLpToNextTier">--</div>
+          </div>
+          <div class="data-card">
+            <div class="data-label">Million Miler</div>
+            <div class="data-value" id="aaMillionMiler">--</div>
+          </div>
+          <div class="data-card full-width">
+            <div class="data-label">Member</div>
+            <div class="data-value" id="aaMemberInfo">--</div>
+          </div>
+        </div>
+      </div>
+
+      <button class="raw-toggle" id="aaRawToggle" style="display: none">
+        Show raw captured data
+      </button>
+      <div class="raw-data" id="aaRawData"></div>
+    </div>
+
+    <!-- DELTA DETAIL VIEW -->
+    <div class="view" id="deltaView">
+      <div class="header">
+        <button class="back-btn" data-back>&larr;</button>
+        <h1>Delta SkyMiles</h1>
+      </div>
+
+      <div class="status-bar">
+        <div class="status-dot idle" id="deltaStatusDot"></div>
+        <span id="deltaStatusText">Ready to sync</span>
+      </div>
+      <div class="status-subtitle" id="deltaStatusSubtitle"></div>
+
+      <div class="last-synced" id="deltaLastSynced" style="display: none"></div>
+
+      <button class="sync-btn" id="deltaSyncBtn">Sync Delta SkyMiles</button>
+      <button class="cancel-btn" id="deltaCancelBtn" style="display: none">
+        Cancel
+      </button>
+      <button class="clear-btn" id="deltaClearBtn" style="display: none">
+        Clear synced data
+      </button>
+      <button class="wallet-btn" id="deltaWalletBtn" style="display: none">
+        View your nextcard wallet
+      </button>
+
+      <div id="deltaErrorContainer"></div>
+
+      <div class="login-prompt" id="deltaLoginPrompt">
+        <div class="login-steps">
+          <h3>Complete sign-in to continue</h3>
+          <ol>
+            <li>Enter your Delta SkyMiles credentials</li>
+            <li>Complete verification if prompted</li>
+            <li>Once logged in, we'll read your account automatically</li>
+          </ol>
+        </div>
+        <div class="privacy-note">
+          <span class="shield">&#128274;</span>
+          <span
+            >nextcard never sees or stores your login credentials. We only read
+            publicly visible account data after you log in.</span
+          >
+        </div>
+      </div>
+
+      <div class="data-section" id="deltaDataSection" style="display: none">
+        <h2>Account</h2>
+        <div class="data-grid">
+          <div class="data-card">
+            <div class="data-label">Miles Balance</div>
+            <div class="data-value" id="deltaMilesBalance">--</div>
+          </div>
+          <div class="data-card">
+            <div class="data-label">Medallion Status</div>
+            <div class="data-value" id="deltaEliteStatus">--</div>
+          </div>
+          <div class="data-card">
+            <div class="data-label">MQDs Earned</div>
+            <div class="data-value" id="deltaMqds">--</div>
+          </div>
+          <div class="data-card">
+            <div class="data-label">Next Status</div>
+            <div class="data-value" id="deltaMqdsToNext">--</div>
+          </div>
+          <div class="data-card">
+            <div class="data-label">Lifetime Miles</div>
+            <div class="data-value" id="deltaLifetimeMiles">--</div>
+          </div>
+          <div class="data-card">
+            <div class="data-label">Delta Amex Card</div>
+            <div class="data-value" id="deltaDeltaAmexCard">--</div>
+          </div>
+          <div class="data-card">
+            <div class="data-label">Member Since</div>
+            <div class="data-value" id="deltaMemberSince">--</div>
+          </div>
+          <div class="data-card full-width">
+            <div class="data-label">Member</div>
+            <div class="data-value" id="deltaMemberInfo">--</div>
+          </div>
+        </div>
+      </div>
+
+      <button class="raw-toggle" id="deltaRawToggle" style="display: none">
+        Show raw captured data
+      </button>
+      <div class="raw-data" id="deltaRawData"></div>
+    </div>
+
+    <!-- UNITED DETAIL VIEW -->
+    <div class="view" id="unitedView">
+      <div class="header">
+        <button class="back-btn" data-back>&larr;</button>
+        <h1>United MileagePlus</h1>
+      </div>
+
+      <div class="status-bar">
+        <div class="status-dot idle" id="unitedStatusDot"></div>
+        <span id="unitedStatusText">Ready to sync</span>
+      </div>
+      <div class="status-subtitle" id="unitedStatusSubtitle"></div>
+
+      <div
+        class="last-synced"
+        id="unitedLastSynced"
+        style="display: none"
+      ></div>
+
+      <button class="sync-btn" id="unitedSyncBtn">
+        Sync United MileagePlus
+      </button>
+      <button class="cancel-btn" id="unitedCancelBtn" style="display: none">
+        Cancel
+      </button>
+      <button class="clear-btn" id="unitedClearBtn" style="display: none">
+        Clear synced data
+      </button>
+      <button class="wallet-btn" id="unitedWalletBtn" style="display: none">
+        View your nextcard wallet
+      </button>
+
+      <div id="unitedErrorContainer"></div>
+
+      <div class="login-prompt" id="unitedLoginPrompt">
+        <div class="login-steps">
+          <h3>Complete sign-in to continue</h3>
+          <ol>
+            <li>Enter your MileagePlus credentials</li>
+            <li>Complete verification if prompted</li>
+            <li>Once logged in, we'll read your account automatically</li>
+          </ol>
+        </div>
+        <div class="privacy-note">
+          <span class="shield">&#128274;</span>
+          <span
+            >nextcard never sees or stores your login credentials. We only read
+            publicly visible account data after you log in.</span
+          >
+        </div>
+      </div>
+
+      <div class="data-section" id="unitedDataSection" style="display: none">
+        <h2>Account</h2>
+        <div class="data-grid">
+          <div class="data-card">
+            <div class="data-label">Miles Balance</div>
+            <div class="data-value" id="unitedMilesBalance">--</div>
+          </div>
+          <div class="data-card">
+            <div class="data-label">Premier Status</div>
+            <div class="data-value" id="unitedEliteStatus">--</div>
+          </div>
+          <div class="data-card">
+            <div class="data-label">PQPs</div>
+            <div class="data-value" id="unitedPqps">--</div>
+          </div>
+          <div class="data-card">
+            <div class="data-label">PQFs</div>
+            <div class="data-value" id="unitedPqfs">--</div>
+          </div>
+          <div class="data-card">
+            <div class="data-label">Lifetime Miles</div>
+            <div class="data-value" id="unitedLifetimeMiles">--</div>
+          </div>
+          <div class="data-card">
+            <div class="data-label">TravelBank</div>
+            <div class="data-value" id="unitedTravelBankBalance">--</div>
+          </div>
+          <div class="data-card full-width">
+            <div class="data-label">Member</div>
+            <div class="data-value" id="unitedMemberInfo">--</div>
+          </div>
+        </div>
+      </div>
+
+      <button class="raw-toggle" id="unitedRawToggle" style="display: none">
+        Show raw captured data
+      </button>
+      <div class="raw-data" id="unitedRawData"></div>
+    </div>
+
+    <!-- SOUTHWEST DETAIL VIEW -->
+    <div class="view" id="southwestView">
+      <div class="header">
+        <button class="back-btn" data-back>&larr;</button>
+        <h1>Southwest Rapid Rewards</h1>
+      </div>
+
+      <div class="status-bar">
+        <div class="status-dot idle" id="southwestStatusDot"></div>
+        <span id="southwestStatusText">Ready to sync</span>
+      </div>
+      <div class="status-subtitle" id="southwestStatusSubtitle"></div>
+
+      <div
+        class="last-synced"
+        id="southwestLastSynced"
+        style="display: none"
+      ></div>
+
+      <button class="sync-btn" id="southwestSyncBtn">
+        Sync Southwest Rapid Rewards
+      </button>
+      <button class="cancel-btn" id="southwestCancelBtn" style="display: none">
+        Cancel
+      </button>
+      <button class="clear-btn" id="southwestClearBtn" style="display: none">
+        Clear synced data
+      </button>
+      <button class="wallet-btn" id="southwestWalletBtn" style="display: none">
+        View your nextcard wallet
+      </button>
+
+      <div id="southwestErrorContainer"></div>
+
+      <div class="login-prompt" id="southwestLoginPrompt">
+        <div class="login-steps">
+          <h3>Complete sign-in to continue</h3>
+          <ol>
+            <li>Enter your Southwest credentials</li>
+            <li>Complete verification if prompted</li>
+            <li>Once logged in, we'll read your account automatically</li>
+          </ol>
+          <p class="privacy-note">
+            We never see or store your password. Data is read from the page
+            after you sign in.
+          </p>
+        </div>
+      </div>
+
+      <div class="data-section" id="southwestDataSection" style="display: none">
+        <h2>Account</h2>
+        <div class="data-grid">
+          <div class="data-card">
+            <div class="data-label">Points Balance</div>
+            <div class="data-value" id="southwestMilesBalance">--</div>
+          </div>
+          <div class="data-card">
+            <div class="data-label">Elite Status</div>
+            <div class="data-value" id="southwestEliteStatus">--</div>
+          </div>
+          <div class="data-card">
+            <div class="data-label">Available Credits</div>
+            <div class="data-value" id="southwestAvailableCredits">--</div>
+          </div>
+          <div class="data-card">
+            <div class="data-label">Member Since</div>
+            <div class="data-value" id="southwestMemberSince">--</div>
+          </div>
+          <div class="data-card">
+            <div class="data-label">A-List Progress</div>
+            <div class="data-value" id="southwestAListProgress">--</div>
+          </div>
+          <div class="data-card">
+            <div class="data-label">Companion Pass Progress</div>
+            <div class="data-value" id="southwestCompanionPassProgress">--</div>
+          </div>
+          <div class="data-card full-width">
+            <div class="data-label">Member</div>
+            <div class="data-value" id="southwestMemberInfo">--</div>
+          </div>
+        </div>
+      </div>
+
+      <button class="raw-toggle" id="southwestRawToggle" style="display: none">
+        Show raw captured data
+      </button>
+      <div class="raw-data" id="southwestRawData"></div>
+    </div>
+
+    <!-- IHG DETAIL VIEW -->
+    <div class="view" id="ihgView">
+      <div class="header">
+        <button class="back-btn" data-back>&larr;</button>
+        <h1>IHG One Rewards</h1>
+      </div>
+
+      <div class="status-bar">
+        <div class="status-dot idle" id="ihgStatusDot"></div>
+        <span id="ihgStatusText">Ready to sync</span>
+      </div>
+      <div class="status-subtitle" id="ihgStatusSubtitle"></div>
+
+      <div class="last-synced" id="ihgLastSynced" style="display: none"></div>
+
+      <button class="sync-btn" id="ihgSyncBtn">Sync IHG One Rewards</button>
+      <button class="cancel-btn" id="ihgCancelBtn" style="display: none">
+        Cancel
+      </button>
+      <button class="clear-btn" id="ihgClearBtn" style="display: none">
+        Clear synced data
+      </button>
+      <button class="wallet-btn" id="ihgWalletBtn" style="display: none">
+        View your nextcard wallet
+      </button>
+
+      <div id="ihgErrorContainer"></div>
+
+      <div class="login-prompt" id="ihgLoginPrompt">
+        <div class="login-steps">
+          <h3>Complete sign-in to continue</h3>
+          <ol>
+            <li>Enter your IHG One Rewards credentials</li>
+            <li>Complete verification if prompted</li>
+            <li>Once logged in, we'll read your account automatically</li>
+          </ol>
+          <p class="privacy-note">
+            We never see or store your password. Data is read from the page
+            after you sign in.
+          </p>
+        </div>
+      </div>
+
+      <div class="data-section" id="ihgDataSection" style="display: none">
+        <h2>Account</h2>
+        <div class="data-grid">
+          <div class="data-card">
+            <div class="data-label">Points Balance</div>
+            <div class="data-value" id="ihgPointsBalance">--</div>
+          </div>
+          <div class="data-card">
+            <div class="data-label">Elite Status</div>
+            <div class="data-value" id="ihgEliteStatus">--</div>
+          </div>
+          <div class="data-card">
+            <div class="data-label">Next Tier</div>
+            <div class="data-value" id="ihgNextTier">--</div>
+          </div>
+          <div class="data-card">
+            <div class="data-label">Qualifying Nights</div>
+            <div class="data-value" id="ihgQualifyingNights">--</div>
+          </div>
+          <div class="data-card">
+            <div class="data-label">Nights To Milestone</div>
+            <div class="data-value" id="ihgMilestoneNights">--</div>
+          </div>
+          <div class="data-card">
+            <div class="data-label">Next Reward At</div>
+            <div class="data-value" id="ihgMilestoneRewardAt">--</div>
+          </div>
+          <div class="data-card" id="ihgMemberNameCard">
+            <div class="data-label">Name</div>
+            <div class="data-value" id="ihgMemberName">--</div>
+          </div>
+          <div class="data-card" id="ihgMemberNumberCard">
+            <div class="data-label">Member #</div>
+            <div class="data-value" id="ihgMemberNumber">--</div>
+          </div>
+        </div>
+
+        <div id="ihgProgressSection" style="display: none">
+          <h2 id="ihgProgressHeading">Progress</h2>
+          <div class="data-grid" id="ihgProgressCards"></div>
+        </div>
+      </div>
+
+      <button class="raw-toggle" id="ihgRawToggle" style="display: none">
+        Show raw captured data
+      </button>
+      <div class="raw-data" id="ihgRawData"></div>
+    </div>
+
+    <!-- HYATT DETAIL VIEW -->
+    <div class="view" id="hyattView">
+      <div class="header">
+        <button class="back-btn" data-back>&larr;</button>
+        <h1>World of Hyatt</h1>
+      </div>
+
+      <div class="status-bar">
+        <div class="status-dot idle" id="hyattStatusDot"></div>
+        <span id="hyattStatusText">Ready to sync</span>
+      </div>
+      <div class="status-subtitle" id="hyattStatusSubtitle"></div>
+
+      <div class="last-synced" id="hyattLastSynced" style="display: none"></div>
+
+      <button class="sync-btn" id="hyattSyncBtn">Sync World of Hyatt</button>
+      <button class="cancel-btn" id="hyattCancelBtn" style="display: none">
+        Cancel
+      </button>
+      <button class="clear-btn" id="hyattClearBtn" style="display: none">
+        Clear synced data
+      </button>
+      <button class="wallet-btn" id="hyattWalletBtn" style="display: none">
+        View your nextcard wallet
+      </button>
+
+      <div id="hyattErrorContainer"></div>
+
+      <div class="login-prompt" id="hyattLoginPrompt">
+        <div class="login-steps">
+          <h3>Complete sign-in to continue</h3>
+          <ol>
+            <li>Enter your World of Hyatt credentials</li>
+            <li>Complete verification if prompted</li>
+            <li>Once logged in, we'll read your account automatically</li>
+          </ol>
+        </div>
+        <div class="privacy-note">
+          <span class="shield">&#128274;</span>
+          <span
+            >nextcard never sees or stores your login credentials. We only read
+            publicly visible account data after you log in.</span
+          >
+        </div>
+      </div>
+
+      <div class="data-section" id="hyattDataSection" style="display: none">
+        <h2>Account</h2>
+        <div class="data-grid">
+          <div class="data-card">
+            <div class="data-label">Points Balance</div>
+            <div class="data-value" id="hyattPointsBalance">--</div>
+          </div>
+          <div class="data-card">
+            <div class="data-label">Elite Status</div>
+            <div class="data-value" id="hyattEliteStatus">--</div>
+          </div>
+          <div class="data-card" id="hyattQualifyingNightsCard">
+            <div class="data-label">Qualifying Nights</div>
+            <div class="data-value" id="hyattQualifyingNights">--</div>
+          </div>
+          <div class="data-card">
+            <div class="data-label">Member Since</div>
+            <div class="data-value" id="hyattMemberSince">--</div>
+          </div>
+          <div class="data-card" id="hyattMemberNameCard">
+            <div class="data-label">Name</div>
+            <div class="data-value" id="hyattMemberName">--</div>
+          </div>
+          <div class="data-card" id="hyattMemberNumberCard">
+            <div class="data-label">Member #</div>
+            <div class="data-value" id="hyattMemberNumber">--</div>
+          </div>
+        </div>
+
+        <div id="hyattMilestoneChoicesSection" style="display: none">
+          <h2>Milestone Rewards</h2>
+          <div id="hyattMilestoneChoices"></div>
+        </div>
+
+        <div id="hyattAwardsSection" style="display: none">
+          <h2>Awards &amp; Certificates</h2>
+          <div id="hyattAwards"></div>
+        </div>
+      </div>
+
+      <button class="raw-toggle" id="hyattRawToggle" style="display: none">
+        Show raw captured data
+      </button>
+      <div class="raw-data" id="hyattRawData"></div>
+    </div>
+
+    <!-- HILTON DETAIL VIEW -->
+    <div class="view" id="hiltonView">
+      <div class="header">
+        <button class="back-btn" data-back>&larr;</button>
+        <h1>Hilton Honors</h1>
+      </div>
+
+      <div class="status-bar">
+        <div class="status-dot idle" id="hiltonStatusDot"></div>
+        <span id="hiltonStatusText">Ready to sync</span>
+      </div>
+      <div class="status-subtitle" id="hiltonStatusSubtitle"></div>
+
+      <div
+        class="last-synced"
+        id="hiltonLastSynced"
+        style="display: none"
+      ></div>
+
+      <button class="sync-btn" id="hiltonSyncBtn">Sync Hilton Honors</button>
+      <button class="cancel-btn" id="hiltonCancelBtn" style="display: none">
+        Cancel
+      </button>
+      <button class="clear-btn" id="hiltonClearBtn" style="display: none">
+        Clear synced data
+      </button>
+      <button class="wallet-btn" id="hiltonWalletBtn" style="display: none">
+        View your nextcard wallet
+      </button>
+
+      <div id="hiltonErrorContainer"></div>
+
+      <div class="login-prompt" id="hiltonLoginPrompt">
+        <div class="login-steps">
+          <h3>Complete sign-in to continue</h3>
+          <ol>
+            <li>Enter your Hilton Honors credentials</li>
+            <li>Complete verification if prompted</li>
+            <li>Once logged in, we'll read your account automatically</li>
+          </ol>
+          <p class="privacy-note">
+            We never see or store your password. Data is read from the page
+            after you sign in.
+          </p>
+        </div>
+      </div>
+
+      <div class="data-section" id="hiltonDataSection" style="display: none">
+        <h2>Account</h2>
+        <div class="data-grid">
+          <div class="data-card">
+            <div class="data-label">Points Balance</div>
+            <div class="data-value" id="hiltonPointsBalance">--</div>
+          </div>
+          <div class="data-card">
+            <div class="data-label">Elite Status</div>
+            <div class="data-value" id="hiltonEliteStatus">--</div>
+          </div>
+          <div class="data-card" id="hiltonMemberNameCard">
+            <div class="data-label">Name</div>
+            <div class="data-value" id="hiltonMemberName">--</div>
+          </div>
+          <div class="data-card" id="hiltonMemberNumberCard">
+            <div class="data-label">Member #</div>
+            <div class="data-value" id="hiltonMemberNumber">--</div>
+          </div>
+        </div>
+
+        <div id="hiltonProgressSection" style="display: none">
+          <h2 id="hiltonProgressHeading">Progress</h2>
+          <div
+            id="hiltonProgressCards"
+            style="display: flex; flex-direction: column; gap: 8px"
+          ></div>
+        </div>
+      </div>
+
+      <button class="raw-toggle" id="hiltonRawToggle" style="display: none">
+        Show raw captured data
+      </button>
+      <div class="raw-data" id="hiltonRawData"></div>
+    </div>
+
+    <!-- AMEX DETAIL VIEW -->
+    <div class="view" id="amexView">
+      <div class="header">
+        <button class="back-btn" data-back>&larr;</button>
+        <h1>American Express</h1>
+      </div>
+
+      <div class="status-bar">
+        <div class="status-dot idle" id="amexStatusDot"></div>
+        <span id="amexStatusText">Ready to sync</span>
+      </div>
+      <div class="status-subtitle" id="amexStatusSubtitle"></div>
+
+      <div class="last-synced" id="amexLastSynced" style="display: none"></div>
+
+      <button class="sync-btn" id="amexSyncBtn">Sync American Express</button>
+      <button class="cancel-btn" id="amexCancelBtn" style="display: none">
+        Cancel
+      </button>
+      <button class="clear-btn" id="amexClearBtn" style="display: none">
+        Clear synced data
+      </button>
+      <button class="wallet-btn" id="amexWalletBtn" style="display: none">
+        View your nextcard wallet
+      </button>
+
+      <div id="amexErrorContainer"></div>
+
+      <div class="login-prompt" id="amexLoginPrompt">
+        <div class="login-steps">
+          <h3>Complete sign-in to continue</h3>
+          <ol>
+            <li>Enter your Amex username and password</li>
+            <li>Complete 2FA verification if prompted</li>
+            <li>Once logged in, we'll read your account automatically</li>
+          </ol>
+        </div>
+        <div class="privacy-note">
+          <span class="shield">&#128274;</span>
+          <span
+            >nextcard never sees or stores your login credentials. We only read
+            publicly visible account data after you log in.</span
+          >
+        </div>
+      </div>
+
+      <div class="data-section" id="amexDataSection" style="display: none">
+        <div id="amexCardsContainer"></div>
+      </div>
+
+      <button class="raw-toggle" id="amexRawToggle" style="display: none">
+        Show raw captured data
+      </button>
+      <div class="raw-data" id="amexRawData"></div>
+    </div>
+
+    <!-- CAPITAL ONE DETAIL VIEW -->
+    <div class="view" id="capitaloneView">
+      <div class="header">
+        <button class="back-btn" data-back>&larr;</button>
+        <h1>Capital One</h1>
+      </div>
+
+      <div class="status-bar">
+        <div class="status-dot idle" id="capitaloneStatusDot"></div>
+        <span id="capitaloneStatusText">Ready to sync</span>
+      </div>
+      <div class="status-subtitle" id="capitaloneStatusSubtitle"></div>
+
+      <div
+        class="last-synced"
+        id="capitaloneLastSynced"
+        style="display: none"
+      ></div>
+
+      <button class="sync-btn" id="capitaloneSyncBtn">Sync Capital One</button>
+      <button class="cancel-btn" id="capitaloneCancelBtn" style="display: none">
+        Cancel
+      </button>
+      <button class="clear-btn" id="capitaloneClearBtn" style="display: none">
+        Clear synced data
+      </button>
+      <button class="wallet-btn" id="capitaloneWalletBtn" style="display: none">
+        View your nextcard wallet
+      </button>
+
+      <div id="capitaloneErrorContainer"></div>
+
+      <div class="login-prompt" id="capitaloneLoginPrompt">
+        <div class="login-steps">
+          <h3>Complete sign-in to continue</h3>
+          <ol>
+            <li>Enter your Capital One username and password</li>
+            <li>Complete 2FA verification if prompted</li>
+            <li>Once logged in, we'll read your account automatically</li>
+          </ol>
+        </div>
+        <div class="privacy-note">
+          <span class="shield">&#128274;</span>
+          <span
+            >nextcard never sees or stores your login credentials. We only read
+            publicly visible account data after you log in.</span
+          >
+        </div>
+      </div>
+
+      <div
+        class="data-section"
+        id="capitaloneDataSection"
+        style="display: none"
+      >
+        <div id="capitaloneCardsContainer"></div>
+      </div>
+
+      <button class="raw-toggle" id="capitaloneRawToggle" style="display: none">
+        Show raw captured data
+      </button>
+      <div class="raw-data" id="capitaloneRawData"></div>
+    </div>
+
+    <!-- FRONTIER DETAIL VIEW -->
+    <div class="view" id="frontierView">
+      <div class="header">
+        <button class="back-btn" data-back>&larr;</button>
+        <h1>Frontier Miles</h1>
+      </div>
+
+      <div class="status-bar">
+        <div class="status-dot idle" id="frontierStatusDot"></div>
+        <span id="frontierStatusText">Ready to sync</span>
+      </div>
+      <div class="status-subtitle" id="frontierStatusSubtitle"></div>
+
+      <div
+        class="last-synced"
+        id="frontierLastSynced"
+        style="display: none"
+      ></div>
+
+      <button class="sync-btn" id="frontierSyncBtn">Sync Frontier Miles</button>
+      <button class="cancel-btn" id="frontierCancelBtn" style="display: none">
+        Cancel
+      </button>
+      <button class="clear-btn" id="frontierClearBtn" style="display: none">
+        Clear synced data
+      </button>
+      <button class="wallet-btn" id="frontierWalletBtn" style="display: none">
+        View your nextcard wallet
+      </button>
+
+      <div id="frontierErrorContainer"></div>
+
+      <div class="login-prompt" id="frontierLoginPrompt">
+        <div class="login-steps">
+          <h3>Complete sign-in to continue</h3>
+          <ol>
+            <li>Enter your Frontier Miles credentials</li>
+            <li>Complete verification if prompted</li>
+            <li>Once logged in, we'll read your account automatically</li>
+          </ol>
+          <p class="privacy-note">
+            We never see or store your password. Data is read from the page
+            after you sign in.
+          </p>
+        </div>
+      </div>
+
+      <div class="data-section" id="frontierDataSection" style="display: none">
+        <h2>Account</h2>
+        <div class="data-grid">
+          <div class="data-card">
+            <div class="data-label">Miles Balance</div>
+            <div class="data-value" id="frontierMilesBalance">--</div>
+          </div>
+          <div class="data-card">
+            <div class="data-label">Elite Status</div>
+            <div class="data-value" id="frontierEliteStatus">--</div>
+          </div>
+          <div class="data-card">
+            <div class="data-label">Elite Status Points</div>
+            <div class="data-value" id="frontierEliteStatusPoints">--</div>
+          </div>
+          <div class="data-card">
+            <div class="data-label">Status Expiration</div>
+            <div class="data-value" id="frontierStatusExpiration">--</div>
+          </div>
+          <div class="data-card">
+            <div class="data-label">Next Tier</div>
+            <div class="data-value" id="frontierNextEliteStatus">--</div>
+          </div>
+          <div class="data-card full-width">
+            <div class="data-label">Member</div>
+            <div class="data-value" id="frontierMemberInfo">--</div>
+          </div>
+        </div>
+      </div>
+
+      <button class="raw-toggle" id="frontierRawToggle" style="display: none">
+        Show raw captured data
+      </button>
+      <div class="raw-data" id="frontierRawData"></div>
+    </div>
+
+    <!-- BILT DETAIL VIEW -->
+    <div class="view" id="biltView">
+      <div class="header">
+        <button class="back-btn" data-back>&larr;</button>
+        <h1>Bilt Rewards</h1>
+      </div>
+
+      <div class="status-bar">
+        <div class="status-dot idle" id="biltStatusDot"></div>
+        <span id="biltStatusText">Ready to sync</span>
+      </div>
+      <div class="status-subtitle" id="biltStatusSubtitle"></div>
+
+      <div class="last-synced" id="biltLastSynced" style="display: none"></div>
+
+      <button class="sync-btn" id="biltSyncBtn">Sync Bilt Rewards</button>
+      <button class="cancel-btn" id="biltCancelBtn" style="display: none">
+        Cancel
+      </button>
+      <button class="clear-btn" id="biltClearBtn" style="display: none">
+        Clear synced data
+      </button>
+      <button class="wallet-btn" id="biltWalletBtn" style="display: none">
+        View your nextcard wallet
+      </button>
+
+      <div id="biltErrorContainer"></div>
+
+      <div class="login-prompt" id="biltLoginPrompt">
+        <div class="login-steps">
+          <h3>Complete sign-in to continue</h3>
+          <ol>
+            <li>Enter your Bilt Rewards credentials</li>
+            <li>Complete verification if prompted</li>
+            <li>Once logged in, we'll read your account automatically</li>
+          </ol>
+          <p class="privacy-note">
+            We never see or store your password. Data is read from the page
+            after you sign in.
+          </p>
+        </div>
+      </div>
+
+      <div class="data-section" id="biltDataSection" style="display: none">
+        <h2>Account</h2>
+        <div class="data-grid">
+          <div class="data-card">
+            <div class="data-label">Points Balance</div>
+            <div class="data-value" id="biltPointsBalance">--</div>
+          </div>
+          <div class="data-card">
+            <div class="data-label">Elite Status</div>
+            <div class="data-value" id="biltEliteStatus">--</div>
+          </div>
+          <div class="data-card" id="biltMemberNameCard">
+            <div class="data-label">Name</div>
+            <div class="data-value" id="biltMemberName">--</div>
+          </div>
+          <div class="data-card" id="biltMemberNumberCard">
+            <div class="data-label">Member #</div>
+            <div class="data-value" id="biltMemberNumber">--</div>
+          </div>
+        </div>
+
+        <div id="biltProgressSection" style="display: none">
+          <h2>Status Progress</h2>
+          <div
+            id="biltProgressCards"
+            style="display: flex; flex-direction: column; gap: 8px"
+          ></div>
+        </div>
+      </div>
+
+      <button class="raw-toggle" id="biltRawToggle" style="display: none">
+        Show raw captured data
+      </button>
+      <div class="raw-data" id="biltRawData"></div>
+    </div>
+
+    <!-- Confirmation modal -->
+    <div class="modal-overlay" id="confirmModal">
+      <div class="modal-card">
+        <div class="modal-icon">&#128465;</div>
+        <div class="modal-title" id="confirmModalTitle">
+          Delete synced data?
+        </div>
+        <div class="modal-desc" id="confirmModalDesc">
+          This removes all synced data from nextcard. You'll need to re-sync to
+          get it back.
+        </div>
+        <div class="modal-actions">
+          <button class="modal-btn modal-btn-cancel" id="confirmModalCancel">
+            Keep it
+          </button>
+          <button class="modal-btn modal-btn-danger" id="confirmModalConfirm">
+            Delete
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- CONGRATS OVERLAY -->
+    <div class="congrats-overlay" id="congratsBanner">
+      <div class="congrats-card">
+        <div class="congrats-check">
+          <svg viewBox="0 0 52 52" class="congrats-check-svg">
+            <circle cx="26" cy="26" r="24" fill="none" stroke="#34c759" stroke-width="3" class="congrats-circle"/>
+            <path d="M15 27l7 7 15-15" fill="none" stroke="#34c759" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" class="congrats-tick"/>
+          </svg>
+        </div>
+        <div class="congrats-title">First sync complete</div>
+        <div class="congrats-text">Your account data is now on nextcard. Sync the rest to see everything in one place.</div>
+        <button class="auth-sign-in-btn congrats-btn" id="congratsBtn">Sync more programs</button>
+      </div>
+    </div>
+
+    <!-- CONSENT MODAL -->
+    <div class="consent-modal-backdrop" id="consentModal">
+      <div class="consent-modal">
+        <div class="auth-title" style="margin-bottom: 12px;">Before we sync</div>
+        <div class="onboarding-privacy">
+          <p>
+            <strong>nextcard never sees, intercepts, or stores your login credentials.</strong>
+            You sign in directly on the provider's own website — we only read the page after you're logged in.
+          </p>
+          <p>
+            Your synced data is encrypted and stored in your nextcard account. You can delete it at any time.
+          </p>
+        </div>
+        <label class="onboarding-check-row">
+          <input type="checkbox" id="consentCheckbox" />
+          <span class="onboarding-check-label">I understand that nextcard does not access or store my login credentials</span>
+        </label>
+        <button class="auth-sign-in-btn consent-btn" id="consentContinueBtn" disabled>Continue & Sync</button>
+      </div>
+    </div>
+
+    <script src="popup.ts" type="module"></script>
+  </body>
+</html>
