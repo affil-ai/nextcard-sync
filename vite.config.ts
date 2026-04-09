@@ -11,10 +11,15 @@ import {
 export default defineConfig(({ mode }) => {
   // Load local env files so the extension repo can point at the existing NextCard services.
   const env = loadEnv(mode, process.cwd(), "");
+  // Keep real endpoints in local .env files so tracked config stays reusable across environments.
+  const nextCardUrl =
+    env.NEXTCARD_URL
+    ?? process.env.NEXTCARD_URL
+    ?? "https://your-nextcard-web-url.example";
   const convexUrl =
     env.CONVEX_SITE_URL
     ?? process.env.CONVEX_SITE_URL
-    ?? "https://laudable-turtle-546.convex.site";
+    ?? "https://your-convex-site-url.example";
   const hostPermissions = Array.from(
     new Set([
       ...providerIds.flatMap((providerId) => {
@@ -37,12 +42,8 @@ export default defineConfig(({ mode }) => {
     ],
     publicDir: "public",
     define: {
-      __NEXTCARD_URL__: JSON.stringify(
-        env.NEXTCARD_URL ?? process.env.NEXTCARD_URL ?? "https://nextcard.com",
-      ),
-      __CONVEX_SITE_URL__: JSON.stringify(
-        convexUrl,
-      ),
+      __NEXTCARD_URL__: JSON.stringify(nextCardUrl),
+      __CONVEX_SITE_URL__: JSON.stringify(convexUrl),
     },
     build: {
       outDir: mode === "development" ? "dist-dev" : "dist",
