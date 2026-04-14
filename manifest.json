@@ -3,7 +3,7 @@
   "incognito": "split",
   "name": "nextcard sync",
   "short_name": "nextcard sync",
-  "version": "0.4.5",
+  "version": "0.4.6",
   "description": "Sync your loyalty program balances and credit card benefit usage to your nextcard wallet.",
   "permissions": ["storage", "scripting", "sidePanel", "tabs"],
   "host_permissions": [],

@@ -5,7 +5,8 @@ const confirmModalTitle = document.getElementById("confirmModalTitle") as HTMLDi
 const confirmModalCancel = document.getElementById("confirmModalCancel") as HTMLButtonElement;
 const confirmModalConfirm = document.getElementById("confirmModalConfirm") as HTMLButtonElement;
 
-export const WALLET_URL = `${__NEXTCARD_URL__}/wallet/dashboard?tab=travel`;
+// Keep the extension's wallet CTA aligned with the current NextCard dashboard route.
+export const WALLET_URL = `${__NEXTCARD_URL__}/dashboard/wallet`;
 
 export const STATUS_LABELS: Record<SyncStatus, string> = {
   idle: "Ready to sync",
