@@ -23,6 +23,7 @@ let shadowRoot: ShadowRoot | null = null;
 let pollInterval: ReturnType<typeof setInterval> | null = null;
 let currentStatus: OverlayStatus | null = null;
 let knownProvider: string | null = null;
+let lastProgressMessage: string | null = null;
 
 function getStatusConfig(status: OverlayStatus) {
   switch (status) {
@@ -36,17 +37,15 @@ function getStatusConfig(status: OverlayStatus) {
         ],
         dotClass: "dot-waiting",
         showShield: true,
+        showProgressMessage: false,
       };
     case "extracting":
       return {
         heading: "nextcard is reading your account",
-        steps: [
-          "Pulling your balances, status, and benefits",
-          "<strong>Don't click anything, close, or leave this page</strong>",
-          "This usually takes a few seconds",
-        ],
+        steps: [],
         dotClass: "dot-extracting",
         showShield: false,
+        showProgressMessage: true,
       };
     case "done":
       return {
@@ -54,6 +53,7 @@ function getStatusConfig(status: OverlayStatus) {
         steps: [],
         dotClass: "dot-done",
         showShield: false,
+        showProgressMessage: false,
       };
     case "error":
       return {
@@ -61,6 +61,7 @@ function getStatusConfig(status: OverlayStatus) {
         steps: ["Try syncing again from the nextcard sidebar"],
         dotClass: "dot-error",
         showShield: false,
+        showProgressMessage: false,
       };
     case "cancelled":
       return {
@@ -68,6 +69,7 @@ function getStatusConfig(status: OverlayStatus) {
         steps: [],
         dotClass: "dot-error",
         showShield: false,
+        showProgressMessage: false,
       };
   }
 }
@@ -295,6 +297,52 @@ const OVERLAY_STYLES = /* css */ `
     0%   { transform: translateX(-100%); }
     100% { transform: translateX(350%); }
   }
+
+  /* ── Progress message (extracting only) ── */
+
+  .nc-progress-message {
+    font-size: 12px;
+    color: #8c7a6e;
+    line-height: 1.45;
+    min-height: 17px;
+    transition: opacity 0.2s ease;
+    padding-left: 14px;
+    position: relative;
+  }
+
+  .nc-progress-message::before {
+    content: "";
+    position: absolute;
+    left: 0;
+    top: 6.5px;
+    width: 4px;
+    height: 4px;
+    border-radius: 50%;
+    background: #f6b156;
+    animation: nc-pulse 0.9s ease-in-out infinite;
+  }
+
+  .nc-progress-message:empty { display: none; }
+
+  .nc-static-warning {
+    font-size: 12px;
+    font-weight: 700;
+    color: #342019;
+    line-height: 1.45;
+    padding-left: 14px;
+    position: relative;
+  }
+
+  .nc-static-warning::before {
+    content: "";
+    position: absolute;
+    left: 0;
+    top: 6.5px;
+    width: 4px;
+    height: 4px;
+    border-radius: 50%;
+    background: #d0c8c0;
+  }
 `;
 
 const SHIELD_SVG = `<svg viewBox="0 0 12 12" fill="none" xmlns="http://www.w3.org/2000/svg">
@@ -310,9 +358,17 @@ function buildBanner(status: OverlayStatus): string {
   const shieldHtml = cfg.showShield
     ? `<div class="nc-shield">${SHIELD_SVG} nextcard never sees or stores your login credentials</div>`
     : "";
-  const progressHtml = status === "extracting"
-    ? `<div class="nc-progress"><div class="nc-progress-bar"></div></div>`
-    : "";
+
+  let extractingHtml = "";
+  if (cfg.showProgressMessage) {
+    extractingHtml = `
+      <div class="nc-progress-message"></div>
+      <div class="nc-static-warning">Don't click anything, close, or leave this page</div>
+      <div class="nc-progress"><div class="nc-progress-bar"></div></div>
+    `;
+  } else if (status === "extracting") {
+    extractingHtml = `<div class="nc-progress"><div class="nc-progress-bar"></div></div>`;
+  }
 
   const logoHtml = `<img class="nc-logo" src="${ICON_URL}" alt="nextcard" />`;
 
@@ -328,7 +384,7 @@ function buildBanner(status: OverlayStatus): string {
           ${cfg.heading}
         </div>
         ${stepsHtml}
-        ${progressHtml}
+        ${extractingHtml}
         ${shieldHtml}
       </div>
     </div>
@@ -372,6 +428,10 @@ function startPollIfNeeded() {
       } else if (s === "error" || s === "cancelled") {
         hideOverlay(s === "error" ? "error" : "cancelled");
       }
+      // Update progress message from service worker (for multi-phase/multi-card flows)
+      if (s === "extracting" && r?.progressMessage) {
+        updateOverlayProgress(r.progressMessage);
+      }
     });
   }, 2000);
 }
@@ -409,15 +469,66 @@ export function updateOverlay(status: OverlayStatus, provider?: string): void {
     startPollIfNeeded();
     return;
   }
-  if (status === "waiting_for_login") {
-    hostEl.classList.add("nc-login");
+
+  // Crossfade the banner content when switching states (e.g. waiting_for_login → extracting)
+  const banner = shadowRoot.querySelector(".nc-banner") as HTMLElement | null;
+  if (banner) {
+    banner.style.transition = "opacity 0.25s ease";
+    banner.style.opacity = "0";
+    setTimeout(() => {
+      if (status === "waiting_for_login") {
+        hostEl!.classList.add("nc-login");
+      } else {
+        hostEl!.classList.remove("nc-login");
+      }
+      shadowRoot!.innerHTML = buildBanner(status);
+      currentStatus = status;
+      const newBanner = shadowRoot!.querySelector(".nc-banner") as HTMLElement | null;
+      if (newBanner) {
+        newBanner.style.opacity = "0";
+        newBanner.style.transition = "opacity 0.3s ease";
+        requestAnimationFrame(() => { newBanner.style.opacity = "1"; });
+      }
+    }, 250);
   } else {
-    hostEl.classList.remove("nc-login");
+    if (status === "waiting_for_login") {
+      hostEl.classList.add("nc-login");
+    } else {
+      hostEl.classList.remove("nc-login");
+    }
+    shadowRoot.innerHTML = buildBanner(status);
+    currentStatus = status;
   }
-  shadowRoot.innerHTML = buildBanner(status);
-  currentStatus = status;
 
   startPollIfNeeded();
+}
+
+/**
+ * Stop the overlay's automatic status polling. Use when the content script
+ * manages the overlay lifecycle directly (e.g. Southwest in-place login).
+ */
+export function stopOverlayPoll(): void {
+  if (pollInterval) { clearInterval(pollInterval); pollInterval = null; }
+}
+
+/**
+ * Update the animated progress message in the extracting overlay.
+ * Crossfades to the new message. No-op if not in extracting state.
+ */
+export function updateOverlayProgress(message: string): void {
+  if (!shadowRoot || currentStatus !== "extracting") return;
+  if (message === lastProgressMessage) return;
+  lastProgressMessage = message;
+
+  const el = shadowRoot.querySelector(".nc-progress-message") as HTMLElement | null;
+  if (!el) return;
+
+  // Crossfade: fade out → swap text → fade in
+  el.style.opacity = "0";
+  setTimeout(() => {
+    el.textContent = message;
+    el.style.opacity = "1";
+  }, 200);
 }
 
 /**
@@ -439,6 +550,7 @@ export function hideOverlay(finalStatus: "done" | "error" | "cancelled" = "done"
         shadowRoot = null;
         currentStatus = null;
         knownProvider = null;
+        lastProgressMessage = null;
       }, 350);
     }
   }, finalStatus === "done" ? 1500 : 800);

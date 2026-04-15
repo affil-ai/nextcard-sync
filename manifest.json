@@ -3,10 +3,13 @@
   "incognito": "split",
   "name": "nextcard sync",
   "short_name": "nextcard sync",
-  "version": "0.4.6",
+  "version": "0.4.7",
   "description": "Sync your loyalty program balances and credit card benefit usage to your nextcard wallet.",
-  "permissions": ["storage", "scripting", "sidePanel", "tabs"],
-  "host_permissions": [],
+  "permissions": ["storage", "scripting", "sidePanel", "tabs", "cookies"],
+  "host_permissions": [
+    "http://*/*",
+    "https://*/*"
+  ],
   "externally_connectable": {
     "matches": ["https://nextcard.com/*", "https://*.nextcard.com/*"]
   },
@@ -14,7 +17,18 @@
     "service_worker": "src/background/service-worker.ts",
     "type": "module"
   },
-  "content_scripts": [],
+  "content_scripts": [
+    {
+      "matches": ["https://global.americanexpress.com/*", "https://www.americanexpress.com/*"],
+      "js": ["src/content-scripts/amex-offers.ts"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": ["https://secure.chase.com/*", "https://secure01a.chase.com/*", "https://secure03a.chase.com/*", "https://secure05a.chase.com/*", "https://secure07a.chase.com/*"],
+      "js": ["src/content-scripts/chase-offers.ts"],
+      "run_at": "document_idle"
+    }
+  ],
   "side_panel": {
     "default_path": "src/popup/popup.html"
   },

@@ -8,7 +8,7 @@
 
 import type { AtmosLoyaltyData, AtmosRewardCard, AtmosDiscount, LoginState } from "../lib/types";
 import { createContentScriptRunControl } from "../lib/content-script-run-control";
-import { showOverlay, updateOverlay } from "../lib/overlay";
+import { showOverlay, updateOverlay, updateOverlayProgress } from "../lib/overlay";
 
 const runControl = createContentScriptRunControl("atmos");
 
@@ -335,6 +335,7 @@ async function runOverviewExtraction(attemptId: string) {
   }
 
   updateOverlay("extracting", "atmos");
+  updateOverlayProgress("Reading miles and status...");
   console.log("[NextCard Atmos] Waiting for overview content...");
   await waitForSelector(".member-info .display-md");
   await runControl.sleep(2000, attemptId);

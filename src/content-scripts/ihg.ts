@@ -5,7 +5,7 @@
 
 import type { IHGLoyaltyData, LoginState } from "../lib/types";
 import { createContentScriptRunControl } from "../lib/content-script-run-control";
-import { showOverlay, updateOverlay } from "../lib/overlay";
+import { showOverlay, updateOverlay, updateOverlayProgress } from "../lib/overlay";
 
 const runControl = createContentScriptRunControl("ihg");
 
@@ -180,6 +180,7 @@ async function runExtraction(attemptId: string) {
   }
 
   updateOverlay("extracting", "ihg");
+  updateOverlayProgress("Reading points and nights progress...");
   const hasContent = await waitForAccountContent(attemptId);
   if (!hasContent) {
     await runControl.sendMessage(attemptId, {

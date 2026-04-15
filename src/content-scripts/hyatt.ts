@@ -9,7 +9,7 @@
 
 import type { HyattLoyaltyData, LoginState } from "../lib/types";
 import { createContentScriptRunControl } from "../lib/content-script-run-control";
-import { showOverlay, updateOverlay } from "../lib/overlay";
+import { showOverlay, updateOverlay, updateOverlayProgress } from "../lib/overlay";
 
 const runControl = createContentScriptRunControl("hyatt");
 
@@ -125,13 +125,15 @@ function scrapeAccountPage(): HyattLoyaltyData {
   } catch (e) { console.warn("[NextCard Hyatt] memberSince:", e); }
 
   // Year-to-date progress — data-locator="pointBox"
+  // Hyatt renders the number twice (desktop + mobile responsive spans), so
+  // reading textContent concatenates them (e.g. "22Qualifying Nights" for 2 nights).
+  // Instead, read from the desktop-only element with the PointBox_points class.
   try {
     const boxes = document.querySelectorAll('[data-locator="pointBox"]');
     for (const box of boxes) {
       const text = box.textContent?.toLowerCase() ?? "";
-      // The pointBox text is like "1515Qualifying Nights" — extract the number
-      const numMatch = box.textContent?.match(/^[\s]*(\d[\d,]*)/);
-      const value = numMatch ? parseIntSafe(numMatch[1]) : null;
+      const pointsEl = box.querySelector('[class*="PointBox_points"]');
+      const value = pointsEl ? parseIntSafe(pointsEl.textContent?.trim() ?? "") : null;
 
       if (text.includes("qualifying nights")) {
         data.qualifyingNights = value;
@@ -141,15 +143,26 @@ function scrapeAccountPage(): HyattLoyaltyData {
     }
   } catch (e) { console.warn("[NextCard Hyatt] yearProgress:", e); }
 
-  // Milestone progress — data-locator="page-tracker" (e.g. "1 / 14")
+  // Milestone progress — count how many milestone thresholds the user has reached.
+  // Each milestone can be reached via qualifying nights OR base points.
+  // The page-tracker element is a carousel pagination indicator, NOT milestone progress.
   try {
-    const tracker = document.querySelector('[data-locator="page-tracker"]');
-    if (tracker) {
-      const match = tracker.textContent?.match(/(\d+)\s*\/\s*(\d+)/);
-      if (match) {
-        data.milestoneProgress = parseInt(match[1], 10);
-        data.milestoneTotal = parseInt(match[2], 10);
+    const milestoneLabels = document.querySelectorAll('[data-locator="milestone-timeline"] [data-locator="milestone-label"]');
+    if (milestoneLabels.length > 0) {
+      data.milestoneTotal = milestoneLabels.length;
+      let reached = 0;
+      for (const label of milestoneLabels) {
+        const nightsEl = label.querySelector('[data-locator="nights-threshold"]');
+        const pointsEl = label.querySelector('[data-locator="points-threshold"]');
+        const nightsMatch = nightsEl?.textContent?.match(/(\d[\d,]*)\s*Nights/i);
+        const pointsMatch = pointsEl?.textContent?.match(/([\d,]+)\s*Base Points/i);
+        const nightsThreshold = nightsMatch ? parseIntSafe(nightsMatch[1]) : null;
+        const pointsThreshold = pointsMatch ? parseIntSafe(pointsMatch[1]) : null;
+        const metNights = nightsThreshold != null && data.qualifyingNights != null && data.qualifyingNights >= nightsThreshold;
+        const metPoints = pointsThreshold != null && data.basePoints != null && data.basePoints >= pointsThreshold;
+        if (metNights || metPoints) reached++;
       }
+      data.milestoneProgress = reached;
     }
   } catch (e) { console.warn("[NextCard Hyatt] milestoneProgress:", e); }
 
@@ -250,6 +263,7 @@ async function runExtraction(attemptId: string) {
   }
 
   updateOverlay("extracting", "hyatt");
+  updateOverlayProgress("Reading points and tier progress...");
   console.log("[NextCard Hyatt] Waiting for account content...");
   await waitForSelector('[data-locator="points-balance"], [data-locator="type"]', 20000);
   await runControl.sleep(3000, attemptId);

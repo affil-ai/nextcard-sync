@@ -179,6 +179,8 @@ export const providerRegistry = {
       "https://americanexpress.com/*",
     ],
     contentScriptPath: "src/content-scripts/amex.ts",
+    benefitsMatches: ["https://global.americanexpress.com/*"],
+    benefitsContentScriptPath: "src/content-scripts/amex-offers.ts",
   },
   capitalone: {
     id: "capitalone",
@@ -245,6 +247,34 @@ export const providerRegistry = {
     extraHostPermissions: ["https://www.biltrewards.com/*"],
     contentScriptPath: "src/content-scripts/bilt.ts",
   },
+  discover: {
+    id: "discover",
+    name: "Discover",
+    description: "Credit card cashback balance",
+    group: "Banks",
+    iconPath: "src/icons/discover-36.png",
+    syncStrategy: "generic",
+    syncUrl: "https://portal.discover.com/customersvcs/universalLogin/ac_main",
+    tabUrlPattern: "https://*.discover.com/*",
+    accountUrlPattern: "https://card.discover.com/web/achome/*",
+    accountUrl: "https://card.discover.com/web/achome/homepage",
+    manifestMatches: ["https://card.discover.com/*", "https://portal.discover.com/*", "https://www.discover.com/*"],
+    contentScriptPath: "src/content-scripts/discover.ts",
+  },
+  citi: {
+    id: "citi",
+    name: "Citi",
+    description: "Credit card points & miles",
+    group: "Banks",
+    iconPath: "src/icons/citi-36.png",
+    syncStrategy: "generic",
+    syncUrl: "https://www.citi.com/login",
+    tabUrlPattern: "https://*.citi.com/*",
+    accountUrlPattern: "https://online.citi.com/US/ag/dashboard.*",
+    accountUrl: "https://online.citi.com/US/ag/dashboard/summary",
+    manifestMatches: ["https://online.citi.com/*", "https://www.citi.com/*"],
+    contentScriptPath: "src/content-scripts/citi.ts",
+  },
 } satisfies Record<ProviderId, ProviderDefinition>;
 
 export function getProviderIconUrl(providerId: ProviderId) {
@@ -285,6 +315,28 @@ export function buildProviderContentScripts() {
     }
 
     return entries;
+  });
+
+  // Tool content scripts (offer management, not sync)
+  scripts.push({
+    matches: ["https://global.americanexpress.com/*", "https://www.americanexpress.com/*"],
+    js: ["src/content-scripts/amex-offers.ts"],
+    run_at: "document_idle" as const,
+  });
+  scripts.push({
+    matches: ["https://secure.chase.com/*", "https://secure01a.chase.com/*", "https://secure03a.chase.com/*", "https://secure05a.chase.com/*", "https://secure07a.chase.com/*"],
+    js: ["src/content-scripts/chase-offers.ts"],
+    run_at: "document_idle" as const,
+  });
+  scripts.push({
+    matches: ["https://online.citi.com/*", "https://www.citi.com/*"],
+    js: ["src/content-scripts/citi-offers.ts"],
+    run_at: "document_idle" as const,
+  });
+  scripts.push({
+    matches: ["https://card.discover.com/*", "https://www.discover.com/*"],
+    js: ["src/content-scripts/discover-bonus.ts"],
+    run_at: "document_idle" as const,
   });
 
   return scripts;

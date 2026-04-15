@@ -5,7 +5,7 @@
 
 import type { FrontierLoyaltyData, LoginState } from "../lib/types";
 import { createContentScriptRunControl } from "../lib/content-script-run-control";
-import { showOverlay, updateOverlay } from "../lib/overlay";
+import { showOverlay, updateOverlay, updateOverlayProgress } from "../lib/overlay";
 
 const runControl = createContentScriptRunControl("frontier");
 
@@ -278,6 +278,7 @@ async function runExtraction(attemptId: string) {
   }
 
   updateOverlay("extracting", "frontier");
+  updateOverlayProgress("Reading miles and status...");
   console.log("[NextCard Frontier] Waiting for profile content...");
   await waitForSelector(".member-container, .loyalty-tile, .user-logged-in .user-name", 20000);
   // Frontier account tiles hydrate after the shell appears, so give them a short buffer.

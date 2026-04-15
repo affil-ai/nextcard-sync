@@ -5,7 +5,7 @@
 
 import type { SouthwestLoyaltyData, LoginState } from "../lib/types";
 import { createContentScriptRunControl } from "../lib/content-script-run-control";
-import { showOverlay, updateOverlay } from "../lib/overlay";
+import { showOverlay, updateOverlay, updateOverlayProgress, stopOverlayPoll } from "../lib/overlay";
 
 const runControl = createContentScriptRunControl("southwest");
 
@@ -22,20 +22,21 @@ function detectLoginState(): LoginState {
     const descriptor = `${input.type} ${input.name} ${input.id} ${input.placeholder} ${input.autocomplete}`.toLowerCase();
     return descriptor.includes("password") || descriptor.includes("username") || descriptor.includes("account");
   });
-  const hasGreeting = /\bHi,\s*[^\n]+/i.test(pageText);
+  const hasGreeting = /Hi,\s*[A-Z]/i.test(pageText);
   const hasMemberNumber = /\bRR#\s*\d{6,}/i.test(pageText) || /Rapid Rewards number[\s#]*\d/i.test(pageText);
   const hasAccountMetrics = /available points/i.test(pageText) || /a-list progress/i.test(pageText);
 
-  // The visible auth modal should always win over account text rendered behind it.
+  // If we see a real greeting + account data, the user is logged in — this wins over
+  // any visible login CTAs that might appear in the nav or promotional banners.
+  if ((hasGreeting || hasMemberNumber) && hasAccountMetrics) return "logged_in";
+
+  // The visible auth modal should win over account scaffolding rendered behind it.
   if (hasVisibleAuthModal || hasVisibleLoginForm || hasVisibleTopLoginCta) return "logged_out";
 
   // Southwest keeps auth on the same domain, so URL-only detection is too weak on its own.
   if ((url.includes("/login") || url.includes("/account/login")) && !(hasGreeting || hasMemberNumber)) {
     return "logged_out";
   }
-
-  // Require a real identity marker so cached account-shell scaffolding does not count as auth.
-  if ((hasGreeting || hasMemberNumber) && hasAccountMetrics) return "logged_in";
 
   return "unknown";
 }
@@ -176,7 +177,7 @@ function hasRenderableAccountData() {
   if (hasVisibleLoginModal() || hasVisibleLoginCta()) return false;
 
   const pageText = getPageText();
-  const hasGreeting = /\bHi,\s*[^\n]+/i.test(pageText);
+  const hasGreeting = /Hi,\s*[A-Z]/i.test(pageText);
   const hasMemberNumber = /\bRR#\s*\d{6,}/i.test(pageText) || /Rapid Rewards number[\s#]*\d/i.test(pageText);
   return (hasGreeting || hasMemberNumber) && /available points/i.test(pageText);
 }
@@ -267,7 +268,12 @@ function scrapeAccountPage(): SouthwestLoyaltyData {
 // ── Orchestration ────────────────────────────────────────────
 
 async function runExtraction(attemptId: string) {
-  const loginState = detectLoginState();
+  // Southwest authenticates in-place — same URL, no navigation. The login form
+  // appears as a modal overlay and disappears after auth. We handle the entire
+  // login-wait + extraction loop here in the content script instead of relying
+  // on the service worker's generic login flow (which expects URL changes).
+
+  let loginState = detectLoginState();
   console.log("[NextCard Southwest] Login state:", loginState);
   await runControl.sendMessage(attemptId, { type: "LOGIN_STATE", state: loginState });
 
@@ -279,25 +285,40 @@ async function runExtraction(attemptId: string) {
       data: null,
       error: null,
     });
-    return;
+
+    // Poll until login completes (up to 2 minutes)
+    for (let i = 0; i < 120; i++) {
+      await runControl.sleep(1000, attemptId);
+      loginState = detectLoginState();
+      if (loginState === "logged_in") break;
+    }
+
+    if (loginState !== "logged_in") return;
+    console.log("[NextCard Southwest] Login detected, proceeding to extraction");
+    // Stop the overlay poll — we're driving the overlay from here
+    stopOverlayPoll();
+    await runControl.sendMessage(attemptId, { type: "LOGIN_STATE", state: "logged_in" });
   }
 
   updateOverlay("extracting", "southwest");
+  updateOverlayProgress("Reading points and A-List progress...");
   await waitForAccountContent(20000);
   await runControl.sleep(2000, attemptId);
 
   runControl.throwIfCancelled(attemptId);
   const data = scrapeAccountPage();
+
   if (!hasAuthenticatedData(data)) {
-    showOverlay("waiting_for_login", "southwest");
+    console.warn("[NextCard Southwest] No authenticated data found after extraction");
     await runControl.sendMessage(attemptId, {
       type: "STATUS_UPDATE",
-      status: "waiting_for_login",
+      status: "error",
       data: null,
-      error: null,
+      error: "Could not read account data. Please try again.",
     });
     return;
   }
+
   await runControl.sendMessage(attemptId, { type: "EXTRACTION_DONE", data });
 }
 

@@ -5,7 +5,7 @@
 
 import type { AALoyaltyData, LoginState } from "../lib/types";
 import { createContentScriptRunControl } from "../lib/content-script-run-control";
-import { showOverlay, updateOverlay } from "../lib/overlay";
+import { showOverlay, updateOverlay, updateOverlayProgress } from "../lib/overlay";
 
 const runControl = createContentScriptRunControl("aa");
 
@@ -149,6 +149,7 @@ async function runExtraction(attemptId: string) {
   }
 
   updateOverlay("extracting", "aa");
+  updateOverlayProgress("Reading miles and loyalty points...");
   console.log("[NextCard AA] Waiting for account content...");
   await waitForSelector(".reward-miles, [class*='_member-name_']", 20000);
   await runControl.sleep(3000, attemptId);

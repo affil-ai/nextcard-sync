@@ -15,7 +15,7 @@
 
 import type { LoginState } from "../lib/types";
 import { createContentScriptRunControl } from "../lib/content-script-run-control";
-import { showOverlay, updateOverlay, hideOverlay } from "../lib/overlay";
+import { showOverlay, updateOverlay, updateOverlayProgress, hideOverlay } from "../lib/overlay";
 
 const runControl = createContentScriptRunControl("amex");
 // ── Login detection ──────────────────────────────────────────
@@ -334,6 +334,7 @@ async function runExtraction(attemptId: string, cardIndex?: number) {
   }
 
   updateOverlay("extracting", "amex");
+  updateOverlayProgress("Reading rewards and benefits...");
   console.log("[NextCard Amex] Checking page state...");
 
   // Wait for either the rewards content OR a non-eligible/unavailable state to appear.

@@ -1284,3 +1284,122 @@
       .modal-btn-danger:hover {
         background: #e0342a;
       }
+
+/* ── Tab bar ── */
+
+.tab-bar {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 14px;
+  background: #f5f0ec;
+  border-radius: 10px;
+  padding: 3px;
+  position: relative;
+}
+.tab-bar.hidden { display: none; }
+.tab-slider {
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: calc(50% - 5px);
+  height: calc(100% - 6px);
+  background: #fff;
+  border-radius: 8px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08), 0 1px 2px rgba(0, 0, 0, 0.04);
+  transition: transform 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+  pointer-events: none;
+}
+.tab-bar[data-active="tools"] .tab-slider {
+  transform: translateX(calc(100% + 4px));
+}
+.tab-btn {
+  flex: 1;
+  padding: 6px 0;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: #8c7a6e;
+  background: none;
+  border: none;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: color 0.2s ease;
+  font-family: inherit;
+  position: relative;
+  z-index: 1;
+}
+.tab-btn:hover { color: #5a4a3e; }
+.tab-btn.active { color: #342019; }
+
+/* ── Tools tab ── */
+
+.tools-section {
+  padding: 16px;
+}
+.tools-heading {
+  font-size: 14px;
+  font-weight: 700;
+  color: #342019;
+  margin: 0 0 4px;
+}
+.tools-desc {
+  font-size: 12px;
+  color: #8c7a6e;
+  margin: 0 0 12px;
+}
+.tools-status {
+  font-size: 12px;
+  color: #5a4a3e;
+  margin: 8px 0;
+}
+.tools-error {
+  color: #ff3b30;
+}
+.tools-progress-wrap {
+  height: 6px;
+  background: #f0ece8;
+  border-radius: 3px;
+  overflow: hidden;
+  margin: 8px 0;
+}
+.tools-progress-bar {
+  height: 100%;
+  background: #f6b156;
+  border-radius: 3px;
+  width: 0%;
+  transition: width 0.3s ease;
+}
+.tools-card-select {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+  font-size: 12px;
+  color: #5a4a3e;
+}
+.tools-card-select select {
+  flex: 1;
+  font-size: 12px;
+  padding: 4px 8px;
+  border: 1px solid #d0c8c0;
+  border-radius: 6px;
+  background: #fff;
+  color: #342019;
+}
+
+/* Pulsating progress bar for offer tools */
+.offers-progress-bar {
+  height: 6px;
+  border-radius: 3px;
+  overflow: hidden;
+  margin-bottom: 6px;
+  background: linear-gradient(90deg, #f0ece8 0%, #f6b156 50%, #f0ece8 100%);
+  background-size: 200% 100%;
+  animation: offers-sweep 1.5s linear infinite;
+}
+.offers-progress-bar-fill {
+  display: none;
+}
+@keyframes offers-sweep {
+  0% { background-position: 100% 0; }
+  100% { background-position: -100% 0; }
+}

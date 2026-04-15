@@ -5,7 +5,7 @@
 
 import type { DeltaLoyaltyData, LoginState } from "../lib/types";
 import { createContentScriptRunControl } from "../lib/content-script-run-control";
-import { showOverlay, updateOverlay } from "../lib/overlay";
+import { showOverlay, updateOverlay, updateOverlayProgress } from "../lib/overlay";
 
 const runControl = createContentScriptRunControl("delta");
 
@@ -176,6 +176,7 @@ async function runExtraction(attemptId: string) {
   }
 
   updateOverlay("extracting", "delta");
+  updateOverlayProgress("Reading miles and Medallion status...");
   console.log("[NextCard Delta] Waiting for account content...");
   // Wait for the overview page trackers or fall back to the banner
   await waitForSelector(".skymiles-landing-page-tracker, .skymiles-medallion-banner", 20000);

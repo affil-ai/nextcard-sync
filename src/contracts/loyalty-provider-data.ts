@@ -259,6 +259,31 @@ export const biltProviderDataSchema = z.object({
 
 export type BiltProviderData = z.infer<typeof biltProviderDataSchema>;
 
+// ── Discover ────────────────────────────────────────────────
+
+export const discoverProviderDataSchema = z.object({
+  cardName: z.string().nullable(),
+  lastFourDigits: z.string().nullable(),
+  cashbackBalance: z.number().nullable(),
+}).passthrough();
+
+export type DiscoverProviderData = z.infer<typeof discoverProviderDataSchema>;
+
+// ── Citi ────────────────────────────────────────────────────
+
+const citiCardSchema = z.object({
+  cardName: z.string().nullable(),
+  lastFourDigits: z.string().nullable(),
+  rewardsBalance: z.number().nullable(),
+  rewardsLabel: z.string().nullable(),
+});
+
+export const citiProviderDataSchema = z.object({
+  cards: z.array(citiCardSchema).default([]),
+}).passthrough();
+
+export type CitiProviderData = z.infer<typeof citiProviderDataSchema>;
+
 export const qualifyingMetricSchema = z.object({
   label: z.string(),
   current: z.number().nullable(),

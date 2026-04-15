@@ -5,7 +5,7 @@
 
 import type { UnitedLoyaltyData, LoginState } from "../lib/types";
 import { createContentScriptRunControl } from "../lib/content-script-run-control";
-import { showOverlay, updateOverlay } from "../lib/overlay";
+import { showOverlay, updateOverlay, updateOverlayProgress } from "../lib/overlay";
 
 const runControl = createContentScriptRunControl("united");
 
@@ -173,6 +173,7 @@ async function runExtraction(attemptId: string) {
   }
 
   updateOverlay("extracting", "united");
+  updateOverlayProgress("Reading miles and Premier status...");
   console.log("[NextCard United] Waiting for account content...");
   await waitForSelector('[class*="MileageBalance"], [class*="accountSummary"]', 20000);
   await runControl.sleep(3000, attemptId);

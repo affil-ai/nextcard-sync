@@ -20,6 +20,8 @@ import {
   marriottProviderDataSchema,
   southwestProviderDataSchema,
   unitedProviderDataSchema,
+  discoverProviderDataSchema,
+  citiProviderDataSchema,
 } from "../contracts/loyalty-provider-data";
 import { orderedProviderIds } from "../providers/provider-groups";
 
@@ -144,6 +146,8 @@ export function hydrateStoredProviderStates(record: Record<string, unknown>): Pr
       record.provider_frontier,
     ),
     bilt: normalizeProviderState(biltProviderDataSchema, record.provider_bilt),
+    discover: normalizeProviderState(discoverProviderDataSchema, record.provider_discover),
+    citi: normalizeProviderState(citiProviderDataSchema, record.provider_citi),
   };
 }
 
@@ -223,6 +227,8 @@ export async function pollPopupSnapshot() {
     hilton: normalizeProviderState(hiltonProviderDataSchema, record.hilton),
     frontier: normalizeProviderState(frontierProviderDataSchema, record.frontier),
     bilt: normalizeProviderState(biltProviderDataSchema, record.bilt),
+    discover: normalizeProviderState(discoverProviderDataSchema, record.discover),
+    citi: normalizeProviderState(citiProviderDataSchema, record.citi),
   };
   return { auth, allStates };
 }

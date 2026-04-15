@@ -12,7 +12,7 @@
 
 import type { BiltLoyaltyData, LoginState } from "../lib/types";
 import { createContentScriptRunControl } from "../lib/content-script-run-control";
-import { showOverlay, updateOverlay } from "../lib/overlay";
+import { showOverlay, updateOverlay, updateOverlayProgress } from "../lib/overlay";
 
 const runControl = createContentScriptRunControl("bilt");
 
@@ -366,6 +366,7 @@ async function runExtraction(attemptId: string) {
   }
 
   updateOverlay("extracting", "bilt");
+  updateOverlayProgress("Reading wallet and points...");
   console.log("[NextCard Bilt] Waiting for page content...");
   const readySelector = url.includes("/wallet")
     ? '[data-testid="user-info-points-pill"]'

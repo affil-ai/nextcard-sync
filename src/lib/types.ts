@@ -13,11 +13,13 @@ import type {
   BiltProviderData,
   SouthwestProviderData,
   ChaseProviderData,
+  DiscoverProviderData,
+  CitiProviderData,
 } from "../contracts/loyalty-provider-data";
 
 // ── Provider system ──────────────────────────────────────────
 
-export type ProviderId = "marriott" | "atmos" | "chase" | "aa" | "delta" | "united" | "southwest" | "ihg" | "hyatt" | "amex" | "capitalone" | "hilton" | "frontier" | "bilt";
+export type ProviderId = "marriott" | "atmos" | "chase" | "aa" | "delta" | "united" | "southwest" | "ihg" | "hyatt" | "amex" | "capitalone" | "hilton" | "frontier" | "bilt" | "discover" | "citi";
 
 export type SyncStatus = "idle" | "detecting_login" | "waiting_for_login" | "extracting" | "done" | "cancelled" | "error";
 
@@ -66,6 +68,10 @@ export type FrontierLoyaltyData = FrontierProviderData;
 
 export type BiltLoyaltyData = BiltProviderData;
 
+export type DiscoverLoyaltyData = DiscoverProviderData;
+
+export type CitiLoyaltyData = CitiProviderData;
+
 // ── Chase types ────────────────────────────────────────────
 
 export type ChaseURData = ChaseProviderData;
@@ -96,6 +102,8 @@ export interface ProviderDataMap {
   hilton: HiltonLoyaltyData;
   frontier: FrontierLoyaltyData;
   bilt: BiltLoyaltyData;
+  discover: DiscoverLoyaltyData;
+  citi: CitiLoyaltyData;
 }
 
 export type ProviderStateMap = {
@@ -120,7 +128,7 @@ export type ExtensionMessage =
   | { type: "GET_STATUS"; provider?: ProviderId }
   | { type: "GET_ALL_STATUS" }
   | (ProviderMessageBase & { type: "START_EXTRACTION"; cardIndex?: number })
-  | (ProviderMessageBase & { type: "EXTRACTION_DONE"; data: MarriottLoyaltyData | AtmosLoyaltyData | ChaseURData | AALoyaltyData | DeltaLoyaltyData | UnitedLoyaltyData | SouthwestLoyaltyData | IHGLoyaltyData | HyattLoyaltyData | AmexLoyaltyData | CapitalOneLoyaltyData | HiltonLoyaltyData | FrontierLoyaltyData | BiltLoyaltyData })
+  | (ProviderMessageBase & { type: "EXTRACTION_DONE"; data: MarriottLoyaltyData | AtmosLoyaltyData | ChaseURData | AALoyaltyData | DeltaLoyaltyData | UnitedLoyaltyData | SouthwestLoyaltyData | IHGLoyaltyData | HyattLoyaltyData | AmexLoyaltyData | CapitalOneLoyaltyData | HiltonLoyaltyData | FrontierLoyaltyData | BiltLoyaltyData | DiscoverLoyaltyData | CitiLoyaltyData })
   | (ProviderMessageBase & { type: "LOGIN_STATE"; state: LoginState })
   | (ProviderMessageBase & { type: "STATUS_UPDATE"; status: SyncStatus; data: unknown; error: string | null })
   | (ProviderMessageBase & { type: "ATMOS_OVERVIEW_DONE"; data: Partial<AtmosLoyaltyData> })

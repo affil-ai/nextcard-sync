@@ -228,12 +228,398 @@ export function createMessageRouter(options: {
         return true;
       }
 
+      // ── Amex Offers relay ──────────────────────────────
+      case "AMEX_OFFERS_DISCOVER": {
+        (async () => {
+          try {
+            // Find or open an Amex tab
+            let tabId = amexOffersTabId;
+            if (tabId) {
+              try {
+                const tab = await chrome.tabs.get(tabId);
+                if (!tab.url?.includes("americanexpress.com")) tabId = null;
+              } catch { tabId = null; }
+            }
+            if (!tabId) {
+              const tab = await chrome.tabs.create({ url: "https://global.americanexpress.com/offers", active: true });
+              tabId = tab.id!;
+              amexOffersTabId = tabId;
+              // Wait for page load + content script init
+              await new Promise<void>((resolve) => {
+                const onUpdated = (id: number, info: chrome.tabs.TabChangeInfo) => {
+                  if (id === tabId && info.status === "complete") {
+                    chrome.tabs.onUpdated.removeListener(onUpdated);
+                    resolve();
+                  }
+                };
+                chrome.tabs.onUpdated.addListener(onUpdated);
+                setTimeout(() => { chrome.tabs.onUpdated.removeListener(onUpdated); resolve(); }, 30000);
+              });
+              await new Promise((r) => setTimeout(r, 3000));
+            }
+
+            chrome.tabs.sendMessage(tabId, { type: "AMEX_OFFERS_DISCOVER" }, (response) => {
+              if (chrome.runtime.lastError) {
+                sendResponse({ type: "AMEX_OFFERS_READY", cards: [], offerCount: 0, error: "content_script_unavailable" });
+                return;
+              }
+              sendResponse(response);
+            });
+          } catch (e) {
+            sendResponse({ type: "AMEX_OFFERS_READY", cards: [], offerCount: 0, error: String(e) });
+          }
+        })();
+        return true;
+      }
+
+      case "AMEX_OFFERS_FETCH": {
+        // Execute fetch in the page's MAIN world via chrome.scripting.executeScript.
+        // This makes the request from the page's origin (same-site to functions.americanexpress.com),
+        // so it carries all cookies and doesn't trigger CORS preflight.
+        const fetchUrl = message.url as string;
+        const fetchMethod = (message.method as string) ?? "GET";
+        const fetchHeaders = (message.headers as Record<string, string>) ?? {};
+        const fetchBody = (message.body as string) ?? undefined;
+
+        (async () => {
+          try {
+            // Find the Amex tab
+            const tabs = await chrome.tabs.query({ url: "https://global.americanexpress.com/*" });
+            const tabId = tabs[0]?.id;
+            if (!tabId) {
+              sendResponse({ status: 0, data: null, error: "No Amex tab found" });
+              return;
+            }
+
+            const results = await chrome.scripting.executeScript({
+              target: { tabId },
+              world: "MAIN",
+              func: async (url: string, method: string, headers: Record<string, string>, body: string | undefined) => {
+                try {
+                  const resp = await fetch(url, {
+                    method,
+                    headers,
+                    credentials: "include",
+                    redirect: "follow",
+                    referrerPolicy: "same-origin",
+                    body: body ?? undefined,
+                  });
+                  let data = null;
+                  try { data = await resp.json(); } catch { /* */ }
+                  return { status: resp.status, data };
+                } catch (e) {
+                  return { status: 0, data: null, error: String(e) };
+                }
+              },
+              args: [fetchUrl, fetchMethod, fetchHeaders, fetchBody ?? ""],
+            });
+
+            const result = results?.[0]?.result;
+            sendResponse(result ?? { status: 0, data: null });
+          } catch (e) {
+            console.error("[NextCard SW] AMEX_OFFERS_FETCH error:", e);
+            sendResponse({ status: 0, data: null, error: String(e) });
+          }
+        })();
+        return true;
+      }
+
+      case "AMEX_OFFERS_BATCH_ENROLL": {
+        // Enroll offers in chunks of 10 via executeScript in MAIN world.
+        // Send progress between chunks so the UI updates.
+        const enrollCardId = message.cardId as string;
+        const enrollOfferIds = message.offerIds as string[];
+        const enrollLocale = (message.locale as string) ?? "en-US";
+        const CHUNK_SIZE = 10;
+
+        (async () => {
+          try {
+            const tabs = await chrome.tabs.query({ url: "https://global.americanexpress.com/*" });
+            const tabId = tabs[0]?.id;
+            if (!tabId) {
+              chrome.runtime.sendMessage({ type: "AMEX_OFFERS_BATCH_RESULT", added: 0, skipped: 0, failed: enrollOfferIds.length }).catch(() => {});
+              return;
+            }
+
+            let totalAdded = 0;
+            let totalSkipped = 0;
+            let totalFailed = 0;
+
+            for (let start = 0; start < enrollOfferIds.length; start += CHUNK_SIZE) {
+              const chunk = enrollOfferIds.slice(start, start + CHUNK_SIZE);
+
+              const results = await chrome.scripting.executeScript({
+                target: { tabId },
+                world: "MAIN",
+                func: async (cardId: string, offerIds: string[], locale: string) => {
+                  const delay = (ms: number) => new Promise((r) => setTimeout(r, ms));
+                  const jitter = () => Math.floor(Math.random() * 60) + 20;
+                  let added = 0, skipped = 0, failed = 0;
+
+                  for (const offerId of offerIds) {
+                    try {
+                      const resp = await fetch("https://functions.americanexpress.com/CreateOffersHubEnrollment.web.v1", {
+                        method: "POST",
+                        headers: { "content-type": "application/json", accept: "application/json", "ce-source": "WEB" },
+                        credentials: "include",
+                        body: JSON.stringify({ accountNumberProxy: cardId, locale, offerId, requestType: "OFFERSHUB_ENROLLMENT", synchronizeOnly: false, enrollmentTrigger: "OFFERSHUB_TILE" }),
+                      });
+                      let json: Record<string, unknown> | null = null;
+                      try { json = await resp.json(); } catch { /* */ }
+                      const ok = resp.status === 200 && ((json?.status as Record<string, unknown>)?.purpose === "SUCCESS" || (json?.isEnrolled && json.isEnrolled !== "false"));
+                      const dup = resp.status === 200 && json?.explanationCode === "PZN4107";
+                      if (ok) added++;
+                      else if (dup) skipped++;
+                      else { failed++; if (resp.status === 429) await delay(3000 + jitter()); }
+                    } catch { failed++; }
+                    await delay(50 + jitter());
+                  }
+                  return { added, skipped, failed };
+                },
+                args: [enrollCardId, chunk, enrollLocale],
+              });
+
+              const chunkResult = results?.[0]?.result ?? { added: 0, skipped: 0, failed: chunk.length };
+              totalAdded += chunkResult.added;
+              totalSkipped += chunkResult.skipped;
+              totalFailed += chunkResult.failed;
+
+              // Send progress between chunks
+              chrome.runtime.sendMessage({ type: "AMEX_OFFERS_BATCH_PROGRESS", added: totalAdded, skipped: totalSkipped, failed: totalFailed, total: enrollOfferIds.length }).catch(() => {});
+            }
+
+            chrome.runtime.sendMessage({ type: "AMEX_OFFERS_BATCH_RESULT", added: totalAdded, skipped: totalSkipped, failed: totalFailed }).catch(() => {});
+          } catch (e) {
+            console.error("[NextCard SW] AMEX_OFFERS_BATCH_ENROLL error:", e);
+            chrome.runtime.sendMessage({ type: "AMEX_OFFERS_BATCH_RESULT", added: 0, skipped: 0, failed: enrollOfferIds.length }).catch(() => {});
+          }
+        })();
+        sendResponse({ ok: true });
+        return true;
+      }
+
+      case "AMEX_OFFERS_RUN":
+      case "AMEX_OFFERS_STOP": {
+        if (amexOffersTabId) {
+          chrome.tabs.sendMessage(amexOffersTabId, message, () => {
+            if (chrome.runtime.lastError) { /* tab may be closed */ }
+          });
+        }
+        sendResponse({ ok: true });
+        return true;
+      }
+
+      case "AMEX_OFFERS_PROGRESS":
+      case "AMEX_OFFERS_COMPLETE":
+        sendResponse({ ok: true });
+        return true;
+
+      // ── Citi Offers ──────────────────────────────────
+      case "CITI_OFFERS_FETCH": {
+        const citiUrl = message.url as string;
+        const citiMethod = (message.method as string) ?? "GET";
+        const citiBody = (message.body as string) ?? null;
+
+        (async () => {
+          try {
+            const tabs = await chrome.tabs.query({ url: "https://online.citi.com/*" });
+            const tabId = tabs[0]?.id;
+            if (!tabId) { sendResponse({ status: 0, data: null }); return; }
+
+            const results = await chrome.scripting.executeScript({
+              target: { tabId },
+              world: "MAIN",
+              func: async (url: string, method: string, body: string | null) => {
+                // Build auth headers from cookies
+                const getCookie = (name: string) => {
+                  const match = document.cookie.match(new RegExp(`(?:^|;)\\s*${name}=([^;]*)`));
+                  return match ? decodeURIComponent(match[1]) : "";
+                };
+                const headers: Record<string, string> = {
+                  Accept: "application/json",
+                  "Content-Type": "application/json",
+                  TMXSessionId: getCookie("tmx_sessionid"),
+                  appVersion: getCookie("appVersion"),
+                  businessCode: getCookie("businessCode"),
+                  channelId: getCookie("channelId"),
+                  client_id: getCookie("client_id"),
+                  countryCode: getCookie("countryCode"),
+                  environmentID: "SuperMarioPROD",
+                };
+                try {
+                  const resp = await fetch(url, {
+                    method,
+                    headers,
+                    credentials: "include",
+                    body: body ?? undefined,
+                  });
+                  let data = null;
+                  try { data = await resp.json(); } catch { /* */ }
+                  return { status: resp.status, data };
+                } catch (e) {
+                  return { status: 0, data: null, error: String(e) };
+                }
+              },
+              args: [citiUrl, citiMethod, citiBody],
+            });
+            sendResponse(results?.[0]?.result ?? { status: 0, data: null });
+          } catch (e) {
+            sendResponse({ status: 0, data: null, error: String(e) });
+          }
+        })();
+        return true;
+      }
+
+      case "CITI_OFFERS_BATCH_ENROLL": {
+        const citiAccountId = message.accountId as string;
+        const citiOfferIds = message.offerIds as string[];
+        const CHUNK = 10;
+
+        (async () => {
+          try {
+            const tabs = await chrome.tabs.query({ url: "https://online.citi.com/*" });
+            const tabId = tabs[0]?.id;
+            if (!tabId) {
+              chrome.runtime.sendMessage({ type: "CITI_OFFERS_BATCH_RESULT", added: 0, failed: citiOfferIds.length }).catch(() => {});
+              return;
+            }
+
+            let totalAdded = 0;
+            let totalFailed = 0;
+
+            for (let start = 0; start < citiOfferIds.length; start += CHUNK) {
+              const chunk = citiOfferIds.slice(start, start + CHUNK);
+              const results = await chrome.scripting.executeScript({
+                target: { tabId },
+                world: "MAIN",
+                func: async (accountId: string, offerIds: string[], useFallback: boolean) => {
+                  const delay = (ms: number) => new Promise((r) => setTimeout(r, ms));
+                  const jitter = () => Math.floor(Math.random() * 60) + 20;
+                  const getCookie = (name: string) => {
+                    const match = document.cookie.match(new RegExp(`(?:^|;)\\s*${name}=([^;]*)`));
+                    return match ? decodeURIComponent(match[1]) : "";
+                  };
+                  const headers: Record<string, string> = {
+                    Accept: "application/json",
+                    "Content-Type": "application/json",
+                    TMXSessionId: getCookie("tmx_sessionid"),
+                    appVersion: getCookie("appVersion"),
+                    businessCode: getCookie("businessCode"),
+                    channelId: getCookie("channelId"),
+                    client_id: getCookie("client_id"),
+                    countryCode: getCookie("countryCode"),
+                    environmentID: "SuperMarioPROD",
+                  };
+                  let added = 0, failed = 0;
+                  let fallback = useFallback;
+                  // Fire all enrollments in parallel for speed
+                  const results = await Promise.allSettled(offerIds.map(async (offerId) => {
+                    const url = fallback
+                      ? "https://online.citi.com/gcgapi/prod/public/v1/digital/customers/creditCards/merchantOffers/enrollment"
+                      : "https://online.citi.com/gcgapi/prod/public/v1/digital/customers/creditCards/accounts/rewards/specialOffers/enrollMerchantOffer";
+                    try {
+                      const resp = await fetch(url, { method: "POST", headers, credentials: "include", body: JSON.stringify({ offerId, accountId }) });
+                      if (resp.status === 404 && !fallback) { fallback = true; return false; }
+                      let json: Record<string, unknown> | null = null;
+                      try { json = await resp.json(); } catch { /* */ }
+                      return resp.status === 200 && !!((json?.EnrolledOfferInfo as Record<string, unknown>)?.enrollmentId || json?.enrollmentId);
+                    } catch { return false; }
+                  }));
+                  for (const r of results) {
+                    if (r.status === "fulfilled" && r.value) added++;
+                    else failed++;
+                  }
+                  return { added, failed, useFallback: fallback };
+                },
+                args: [citiAccountId, chunk, false],
+              });
+
+              const chunkResult = results?.[0]?.result ?? { added: 0, failed: chunk.length };
+              totalAdded += chunkResult.added;
+              totalFailed += chunkResult.failed;
+              chrome.runtime.sendMessage({ type: "CITI_OFFERS_BATCH_PROGRESS", added: totalAdded, failed: totalFailed, total: citiOfferIds.length }).catch(() => {});
+            }
+
+            chrome.runtime.sendMessage({ type: "CITI_OFFERS_BATCH_RESULT", added: totalAdded, failed: totalFailed }).catch(() => {});
+          } catch (e) {
+            chrome.runtime.sendMessage({ type: "CITI_OFFERS_BATCH_RESULT", added: 0, failed: citiOfferIds.length }).catch(() => {});
+          }
+        })();
+        sendResponse({ ok: true });
+        return true;
+      }
+
+      case "CITI_OFFERS_PROGRESS":
+      case "CITI_OFFERS_COMPLETE":
+        sendResponse({ ok: true });
+        return true;
+
+      // ── Chase Bonus Registration ─────────────────────
+      case "CHASE_BONUS_ENROLL": {
+        const bonusCards = message.cards as string[];
+        const bonusLastName = message.lastName as string;
+        const bonusZip = message.zip as string;
+
+        (async () => {
+          try {
+            // Get auth token
+            const auth = await options.getCachedAuth();
+            if (!auth?.token) {
+              sendResponse({ error: "Not signed in to NextCard" });
+              return;
+            }
+
+            const convexUrl = __CONVEX_SITE_URL__;
+
+            // Enroll each card
+            const results: Array<{ cardLast4: string; success: boolean; error?: string }> = [];
+
+            for (const cardLast4 of bonusCards) {
+              try {
+                const resp = await fetch(`${convexUrl}/extension/bonus-enroll`, {
+                  method: "POST",
+                  headers: {
+                    "Content-Type": "application/json",
+                    Authorization: `Bearer ${auth.token}`,
+                  },
+                  body: JSON.stringify({
+                    issuer: "chase",
+                    credentials: {
+                      type: "card",
+                      cardLast4,
+                      zipCode: bonusZip,
+                      lastName: bonusLastName,
+                    },
+                  }),
+                });
+
+                const data = await resp.json();
+                results.push({
+                  cardLast4,
+                  success: resp.ok,
+                  error: resp.ok ? undefined : (data.error ?? "Failed"),
+                });
+              } catch (e) {
+                results.push({ cardLast4, success: false, error: String(e) });
+              }
+            }
+
+            sendResponse({ ok: true, results });
+          } catch (e) {
+            sendResponse({ error: String(e) });
+          }
+        })();
+        return true;
+      }
+
       default:
         sendResponse({ ok: true });
         return true;
     }
   };
 }
+
+let amexOffersTabId: number | null = null;
 
 export function createExternalMessageRouter(options: {
   nextCardOrigin: string;

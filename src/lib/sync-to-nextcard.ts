@@ -9,7 +9,7 @@
  *   - Credit card issuers (Chase/Amex/CapitalOne) → StandardizedIssuerData
  */
 
-import type { ProviderId, MarriottLoyaltyData, AtmosLoyaltyData, ChaseURData, AALoyaltyData, DeltaLoyaltyData, UnitedLoyaltyData, SouthwestLoyaltyData, IHGLoyaltyData, HyattLoyaltyData, AmexLoyaltyData, CapitalOneLoyaltyData, HiltonLoyaltyData, FrontierLoyaltyData, BiltLoyaltyData } from "./types";
+import type { ProviderId, MarriottLoyaltyData, AtmosLoyaltyData, ChaseURData, AALoyaltyData, DeltaLoyaltyData, UnitedLoyaltyData, SouthwestLoyaltyData, IHGLoyaltyData, HyattLoyaltyData, AmexLoyaltyData, CapitalOneLoyaltyData, HiltonLoyaltyData, FrontierLoyaltyData, BiltLoyaltyData, DiscoverLoyaltyData, CitiLoyaltyData } from "./types";
 import {
   atmosProviderDataSchema,
   chaseProviderDataSchema,
@@ -25,6 +25,8 @@ import {
   hiltonProviderDataSchema,
   frontierProviderDataSchema,
   biltProviderDataSchema,
+  discoverProviderDataSchema,
+  citiProviderDataSchema,
 } from "../contracts/loyalty-provider-data";
 import type { StandardizedLoyaltyData, StandardizedIssuerData, QualifyingMetric, Stat } from "../contracts/loyalty-provider-data";
 import { getAuth } from "./auth";
@@ -45,11 +47,13 @@ const PROVIDER_TO_SLUG: Record<ProviderId, string> = {
   hilton: "hilton-honors",
   frontier: "frontier-miles",
   bilt: "bilt-rewards",
+  discover: "discover",
+  citi: "citi",
 };
 
-const ISSUER_PROVIDERS = new Set<ProviderId>(["chase", "amex", "capitalone"]);
+const ISSUER_PROVIDERS = new Set<ProviderId>(["chase", "amex", "capitalone", "discover", "citi"]);
 
-export type AnyProviderData = MarriottLoyaltyData | AtmosLoyaltyData | ChaseURData | AALoyaltyData | DeltaLoyaltyData | UnitedLoyaltyData | SouthwestLoyaltyData | IHGLoyaltyData | HyattLoyaltyData | AmexLoyaltyData | CapitalOneLoyaltyData | HiltonLoyaltyData | FrontierLoyaltyData | BiltLoyaltyData;
+export type AnyProviderData = MarriottLoyaltyData | AtmosLoyaltyData | ChaseURData | AALoyaltyData | DeltaLoyaltyData | UnitedLoyaltyData | SouthwestLoyaltyData | IHGLoyaltyData | HyattLoyaltyData | AmexLoyaltyData | CapitalOneLoyaltyData | HiltonLoyaltyData | FrontierLoyaltyData | BiltLoyaltyData | DiscoverLoyaltyData | CitiLoyaltyData;
 
 export type ProviderDataValidationResult =
   | { ok: true; data: AnyProviderData }
@@ -74,6 +78,8 @@ export function validateProviderData(
     hilton: hiltonProviderDataSchema,
     frontier: frontierProviderDataSchema,
     bilt: biltProviderDataSchema,
+    discover: discoverProviderDataSchema,
+    citi: citiProviderDataSchema,
   };
 
   const schema = schemas[provider];
@@ -149,8 +155,11 @@ function toStandardizedLoyaltyData(provider: ProviderId, data: AnyProviderData):
     const d = data as AALoyaltyData;
     const metrics: QualifyingMetric[] = [];
     if (d.loyaltyPoints != null) {
-      const target = d.loyaltyPointsToNextTier ? parseInt(d.loyaltyPointsToNextTier.replace(/[^0-9]/g, ""), 10) : null;
-      metrics.push({ label: "Loyalty Points", current: d.loyaltyPoints, target: Number.isNaN(target) ? null : target, unit: "points" });
+      // loyaltyPointsToNextTier is the *remaining* points (e.g. "5,634 more to reach Gold"),
+      // not the total threshold. Compute the actual target as current + remaining.
+      const remaining = d.loyaltyPointsToNextTier ? parseInt(d.loyaltyPointsToNextTier.replace(/[^0-9]/g, ""), 10) : null;
+      const target = remaining != null && !Number.isNaN(remaining) ? d.loyaltyPoints + remaining : null;
+      metrics.push({ label: "Loyalty Points", current: d.loyaltyPoints, target, unit: "points" });
     }
     const stats: Stat[] = [];
     if (d.millionMilerMiles != null) stats.push({ label: "Million Miler Miles", value: formatNumber(d.millionMilerMiles) });
@@ -489,6 +498,34 @@ function toStandardizedIssuerData(provider: ProviderId, data: AnyProviderData): 
           remaining: b.remaining,
           period: b.period,
         })),
+      }],
+    };
+  }
+
+  if (provider === "citi") {
+    const d = data as CitiLoyaltyData;
+    return {
+      cards: d.cards.map((card) => ({
+        cardName: card.cardName,
+        lastFourDigits: card.lastFourDigits,
+        availablePoints: card.rewardsBalance,
+        pendingPoints: null,
+        rewardsLabel: card.rewardsLabel,
+        benefits: [],
+      })),
+    };
+  }
+
+  if (provider === "discover") {
+    const d = data as DiscoverLoyaltyData;
+    return {
+      cards: [{
+        cardName: d.cardName,
+        lastFourDigits: d.lastFourDigits,
+        availablePoints: d.cashbackBalance,
+        pendingPoints: null,
+        rewardsLabel: "Cashback",
+        benefits: [],
       }],
     };
   }

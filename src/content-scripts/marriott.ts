@@ -13,7 +13,7 @@
 
 import type { MarriottLoyaltyData, LoginState, MarriottCertificate } from "../lib/types";
 import { createContentScriptRunControl } from "../lib/content-script-run-control";
-import { showOverlay, updateOverlay } from "../lib/overlay";
+import { showOverlay, updateOverlay, updateOverlayProgress } from "../lib/overlay";
 
 const runControl = createContentScriptRunControl("marriott");
 
@@ -546,6 +546,7 @@ async function runExtraction(attemptId: string) {
   }
 
   updateOverlay("extracting", "marriott");
+  updateOverlayProgress("Reading account details...");
   console.log("[NextCard] User is logged in, waiting for account content to render...");
   await waitForAccountContent();
 

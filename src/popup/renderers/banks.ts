@@ -3,6 +3,8 @@ import type {
   BiltLoyaltyData,
   CapitalOneLoyaltyData,
   ChaseURData,
+  DiscoverLoyaltyData,
+  CitiLoyaltyData,
   ProviderId,
   ProviderSyncState,
 } from "../../lib/types";
@@ -650,10 +652,165 @@ export function createBankRenderers(
       : "Show raw captured data";
   });
 
+  // ── Discover ──
+
+  const discoverEls = {
+    statusDot: document.getElementById("discoverStatusDot") as HTMLDivElement,
+    statusText: document.getElementById("discoverStatusText") as HTMLSpanElement,
+    statusSubtitle: document.getElementById("discoverStatusSubtitle") as HTMLDivElement,
+    lastSynced: document.getElementById("discoverLastSynced") as HTMLDivElement,
+    lastSyncedTime: document.getElementById("discoverLastSyncedTime") as HTMLSpanElement,
+    syncBtn: document.getElementById("discoverSyncBtn") as HTMLButtonElement,
+    cancelBtn: document.getElementById("discoverCancelBtn") as HTMLButtonElement,
+    clearBtn: document.getElementById("discoverClearBtn") as HTMLButtonElement,
+    walletBtn: document.getElementById("discoverWalletBtn") as HTMLButtonElement,
+    loginPrompt: document.getElementById("discoverLoginPrompt") as HTMLDivElement,
+    errorMsg: document.getElementById("discoverError") as HTMLDivElement,
+    dataSection: document.getElementById("discoverData") as HTMLDivElement,
+    cashback: document.getElementById("discoverCashback") as HTMLSpanElement,
+    cardEnding: document.getElementById("discoverCardEnding") as HTMLSpanElement,
+    rawToggle: document.getElementById("discoverRawToggle") as HTMLButtonElement,
+    rawData: document.getElementById("discoverRawData") as HTMLPreElement,
+  };
+
+  let lastDiscoverJson = "";
+  function renderDiscover(state: ProviderSyncState<DiscoverLoyaltyData>) {
+    const json = JSON.stringify(state);
+    if (json === lastDiscoverJson) return;
+    lastDiscoverJson = json;
+    const s = state.status;
+    discoverEls.statusDot.className = `status-dot ${STATUS_DOT_CLASS[s] ?? "idle"}`;
+    discoverEls.statusText.textContent = STATUS_LABELS[s] ?? "Ready to sync";
+    discoverEls.statusSubtitle.textContent = STATUS_SUBTITLES[s] ?? "";
+    const busy = s === "detecting_login" || s === "waiting_for_login" || s === "extracting";
+    discoverEls.syncBtn.disabled = busy;
+    discoverEls.syncBtn.textContent = s === "done" ? "Sync Again" : busy ? "Syncing..." : "Sync Discover";
+    discoverEls.cancelBtn.style.display = busy ? "" : "none";
+    discoverEls.loginPrompt.style.display = s === "waiting_for_login" ? "" : "none";
+    discoverEls.errorMsg.style.display = s === "error" ? "" : "none";
+    if (s === "error") discoverEls.errorMsg.textContent = state.error ?? "Unknown error";
+    if (state.lastSyncedAt) {
+      discoverEls.lastSynced.style.display = "";
+      discoverEls.lastSyncedTime.textContent = formatRelativeTime(state.lastSyncedAt);
+    } else {
+      discoverEls.lastSynced.style.display = "none";
+    }
+    const d = state.data;
+    if (d) {
+      discoverEls.dataSection.style.display = "";
+      discoverEls.cashback.textContent = d.cashbackBalance != null ? `$${d.cashbackBalance.toFixed(2)}` : "--";
+      discoverEls.cardEnding.textContent = d.lastFourDigits ? `Card ending in ${d.lastFourDigits}` : "--";
+      discoverEls.rawToggle.style.display = "";
+      discoverEls.rawData.textContent = JSON.stringify(d, null, 2);
+      discoverEls.clearBtn.style.display = "";
+    } else {
+      discoverEls.dataSection.style.display = "none";
+      discoverEls.rawToggle.style.display = "none";
+      discoverEls.clearBtn.style.display = "none";
+    }
+  }
+
+  discoverEls.syncBtn.addEventListener("click", () => requestSync("discover"));
+  discoverEls.cancelBtn.addEventListener("click", () => chrome.runtime.sendMessage({ type: "CANCEL_SYNC", provider: "discover" }));
+  discoverEls.walletBtn?.addEventListener("click", () => { /* openWallet */ });
+  discoverEls.clearBtn.addEventListener("click", async () => {
+    if (await showConfirmDelete("Discover")) chrome.runtime.sendMessage({ type: "CLEAR_DATA", provider: "discover" });
+  });
+  discoverEls.rawToggle.addEventListener("click", () => {
+    discoverEls.rawData.classList.toggle("visible");
+    discoverEls.rawToggle.textContent = discoverEls.rawData.classList.contains("visible")
+      ? "Hide raw captured data"
+      : "Show raw captured data";
+  });
+
+  // ── Citi ──
+
+  const citiEls = {
+    statusDot: document.getElementById("citiStatusDot") as HTMLDivElement,
+    statusText: document.getElementById("citiStatusText") as HTMLSpanElement,
+    statusSubtitle: document.getElementById("citiStatusSubtitle") as HTMLDivElement,
+    lastSynced: document.getElementById("citiLastSynced") as HTMLDivElement,
+    lastSyncedTime: document.getElementById("citiLastSyncedTime") as HTMLSpanElement,
+    syncBtn: document.getElementById("citiSyncBtn") as HTMLButtonElement,
+    cancelBtn: document.getElementById("citiCancelBtn") as HTMLButtonElement,
+    clearBtn: document.getElementById("citiClearBtn") as HTMLButtonElement,
+    walletBtn: document.getElementById("citiWalletBtn") as HTMLButtonElement,
+    loginPrompt: document.getElementById("citiLoginPrompt") as HTMLDivElement,
+    errorMsg: document.getElementById("citiError") as HTMLDivElement,
+    dataSection: document.getElementById("citiData") as HTMLDivElement,
+    cardsContainer: document.getElementById("citiCardsContainer") as HTMLDivElement,
+    rawToggle: document.getElementById("citiRawToggle") as HTMLButtonElement,
+    rawData: document.getElementById("citiRawData") as HTMLPreElement,
+  };
+
+  let lastCitiJson = "";
+  function renderCiti(state: ProviderSyncState<CitiLoyaltyData>) {
+    const json = JSON.stringify(state);
+    if (json === lastCitiJson) return;
+    lastCitiJson = json;
+    const s = state.status;
+    citiEls.statusDot.className = `status-dot ${STATUS_DOT_CLASS[s] ?? "idle"}`;
+    citiEls.statusText.textContent = STATUS_LABELS[s] ?? "Ready to sync";
+    citiEls.statusSubtitle.textContent = STATUS_SUBTITLES[s] ?? "";
+    const busy = s === "detecting_login" || s === "waiting_for_login" || s === "extracting";
+    citiEls.syncBtn.disabled = busy;
+    citiEls.syncBtn.textContent = s === "done" ? "Sync Again" : busy ? "Syncing..." : "Sync Citi";
+    citiEls.cancelBtn.style.display = busy ? "" : "none";
+    citiEls.loginPrompt.style.display = s === "waiting_for_login" ? "" : "none";
+    citiEls.errorMsg.style.display = s === "error" ? "" : "none";
+    if (s === "error") citiEls.errorMsg.textContent = state.error ?? "Unknown error";
+    if (state.lastSyncedAt) {
+      citiEls.lastSynced.style.display = "";
+      citiEls.lastSyncedTime.textContent = formatRelativeTime(state.lastSyncedAt);
+    } else {
+      citiEls.lastSynced.style.display = "none";
+    }
+    const d = state.data;
+    if (d && d.cards.length > 0) {
+      citiEls.dataSection.style.display = "";
+      citiEls.cardsContainer.innerHTML = d.cards.map((card) => {
+        const name = escapeHtml(card.cardName ?? "Unknown Card");
+        const last4 = card.lastFourDigits ? ` (${escapeHtml(card.lastFourDigits)})` : "";
+        const balance = card.rewardsBalance != null ? card.rewardsBalance.toLocaleString() : "--";
+        const label = escapeHtml(card.rewardsLabel ?? "Rewards");
+        return `
+          <div style="margin-bottom:16px">
+            <h2 style="font-size:14px;margin:0 0 8px">${name}${last4}</h2>
+            <div class="data-grid">
+              <div class="data-card"><div class="data-label">${label}</div><div class="data-value">${balance}</div></div>
+            </div>
+          </div>
+        `;
+      }).join("");
+      citiEls.rawToggle.style.display = "";
+      citiEls.rawData.textContent = JSON.stringify(d, null, 2);
+      citiEls.clearBtn.style.display = "";
+    } else {
+      citiEls.dataSection.style.display = "none";
+      citiEls.rawToggle.style.display = "none";
+      citiEls.clearBtn.style.display = "none";
+    }
+  }
+
+  citiEls.syncBtn.addEventListener("click", () => requestSync("citi"));
+  citiEls.cancelBtn.addEventListener("click", () => chrome.runtime.sendMessage({ type: "CANCEL_SYNC", provider: "citi" }));
+  citiEls.walletBtn?.addEventListener("click", () => { /* openWallet */ });
+  citiEls.clearBtn.addEventListener("click", async () => {
+    if (await showConfirmDelete("Citi")) chrome.runtime.sendMessage({ type: "CLEAR_DATA", provider: "citi" });
+  });
+  citiEls.rawToggle.addEventListener("click", () => {
+    citiEls.rawData.classList.toggle("visible");
+    citiEls.rawToggle.textContent = citiEls.rawData.classList.contains("visible")
+      ? "Hide raw captured data"
+      : "Show raw captured data";
+  });
+
   return {
     renderChase,
     renderAmex,
     renderCapitalOne,
     renderBilt,
+    renderDiscover,
+    renderCiti,
   };
 }

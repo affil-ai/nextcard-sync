@@ -30,6 +30,8 @@ export const providerViews: Record<ProviderId, HTMLDivElement> = {
   hilton: getRequiredElement<HTMLDivElement>("hiltonView"),
   frontier: getRequiredElement<HTMLDivElement>("frontierView"),
   bilt: getRequiredElement<HTMLDivElement>("biltView"),
+  discover: getRequiredElement<HTMLDivElement>("discoverView"),
+  citi: getRequiredElement<HTMLDivElement>("citiView"),
 };
 
 export const views = {

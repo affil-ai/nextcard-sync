@@ -8,7 +8,7 @@
 
 import type { LoginState } from "../lib/types";
 import { createContentScriptRunControl } from "../lib/content-script-run-control";
-import { showOverlay, updateOverlay } from "../lib/overlay";
+import { showOverlay, updateOverlay, updateOverlayProgress } from "../lib/overlay";
 
 const runControl = createContentScriptRunControl("chase");
 
@@ -141,6 +141,7 @@ async function runExtraction(attemptId: string) {
   }
 
   updateOverlay("extracting", "chase");
+  updateOverlayProgress("Reading card details and points...");
   console.log("[NextCard Chase] Waiting for dashboard content...");
   const found = await waitForSelector(".card-details, .points-balance");
   console.log("[NextCard Chase] Selector found:", !!found);

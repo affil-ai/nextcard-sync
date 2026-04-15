@@ -53,7 +53,7 @@ export function createHomeRenderer(options: {
     for (const group of providerGroups) {
       const groupLabel = document.createElement("div");
       groupLabel.className = "home-section-label";
-      if (group.label === "Hotels") {
+      if (group.label === "Banks") {
         groupLabel.classList.add("tour-target");
       }
       groupLabel.style.marginTop = "16px";
@@ -93,7 +93,7 @@ export function createHomeRenderer(options: {
           <div class="provider-arrow">&rsaquo;</div>
         `;
 
-        if (group.label === "Hotels") {
+        if (group.label === "Banks") {
           card.classList.add("tour-target");
         }
 

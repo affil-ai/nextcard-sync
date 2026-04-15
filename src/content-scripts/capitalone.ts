@@ -12,7 +12,7 @@
 
 import type { LoginState } from "../lib/types";
 import { createContentScriptRunControl } from "../lib/content-script-run-control";
-import { showOverlay, updateOverlay } from "../lib/overlay";
+import { showOverlay, updateOverlay, updateOverlayProgress } from "../lib/overlay";
 import {
   isLikelyCapitalOneCardTile,
   parseCapitalOneRewardsSummary,
@@ -217,6 +217,7 @@ async function runExtraction(attemptId: string) {
   }
 
   updateOverlay("extracting", "capitalone");
+  updateOverlayProgress("Reading rewards and benefits...");
   const url = window.location.href.toLowerCase();
 
   if (url.includes("/rewards/benefits")) {

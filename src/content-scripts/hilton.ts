@@ -5,7 +5,7 @@
 
 import type { HiltonLoyaltyData, LoginState } from "../lib/types";
 import { createContentScriptRunControl } from "../lib/content-script-run-control";
-import { showOverlay, updateOverlay } from "../lib/overlay";
+import { showOverlay, updateOverlay, updateOverlayProgress } from "../lib/overlay";
 
 const runControl = createContentScriptRunControl("hilton");
 
@@ -212,6 +212,7 @@ async function runExtraction(attemptId: string) {
   }
 
   updateOverlay("extracting", "hilton");
+  updateOverlayProgress("Reading points and status...");
   console.log("[NextCard Hilton] Waiting for account content...");
   await waitForSelector('[data-testid="honorsPointsBlock"], [data-testid="tierBlock"], [data-testid="memberInfoBlock"]', 20000);
   await runControl.sleep(2000, attemptId);

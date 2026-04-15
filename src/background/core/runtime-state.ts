@@ -41,6 +41,8 @@ export function createRuntimeStateStore() {
     hilton: defaultState(),
     frontier: defaultState(),
     bilt: defaultState(),
+    discover: defaultState(),
+    citi: defaultState(),
   };
 
   const runRegistry = createSyncRunRegistry();
@@ -113,6 +115,8 @@ export function createRuntimeStateStore() {
       hilton: getPublicState("hilton"),
       frontier: getPublicState("frontier"),
       bilt: getPublicState("bilt"),
+      discover: getPublicState("discover"),
+      citi: getPublicState("citi"),
     };
   }
 
