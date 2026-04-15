@@ -217,7 +217,7 @@ async function runExtraction(attemptId: string) {
   }
 
   updateOverlay("extracting", "capitalone");
-  updateOverlayProgress("Reading rewards and benefits...");
+  updateOverlayProgress("Reading Capital One rewards...");
   const url = window.location.href.toLowerCase();
 
   if (url.includes("/rewards/benefits")) {

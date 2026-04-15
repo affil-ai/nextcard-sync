@@ -19,17 +19,14 @@ interface CitiOffer {
   offerId: string;
   name: string;
   enrolled: boolean;
+  offerTitle: string | null;
+  offerDiscountType: string | null;
+  merchantCategory: string | null;
+  offerEndDate: string | null;
+  redemptionType: string | null;
 }
 
 // ── Helpers ────────────────────────────────────────────────
-
-function delay(ms: number): Promise<void> {
-  return new Promise((r) => setTimeout(r, ms));
-}
-
-function jitter(): number {
-  return Math.floor(Math.random() * 60) + 20;
-}
 
 /** Route a fetch through the service worker's executeScript MAIN world */
 function citiFetch(url: string, method: string, body: string | null): Promise<{ status: number; data: unknown }> {
@@ -106,7 +103,12 @@ async function listOffers(accountId: string): Promise<CitiOffer[]> {
       offers.push({
         offerId,
         name: (o.merchantName ?? o.offerTitle ?? "Unknown") as string,
-        enrolled: (o.enrollmentStatus === "ENROLLED") || (o.enrolled === true),
+        enrolled: (o.enrollmentStatus === "ENROLLED") || (o.enrolled === true) || (o.offerStatus === "ENROLLED"),
+        offerTitle: (o.offerTitle ?? null) as string | null,
+        offerDiscountType: (o.offerDiscountType ?? null) as string | null,
+        merchantCategory: (o.merchantCategory ?? null) as string | null,
+        offerEndDate: (o.offerEndDate ?? null) as string | null,
+        redemptionType: (o.redemptionType ?? null) as string | null,
       });
     }
   }
@@ -158,36 +160,54 @@ async function runEnrollment(accountId: string) {
     return;
   }
 
-  // Batch enroll via service worker executeScript
+  let added = 0;
+  let failed = 0;
+  const enrolledOffers: CitiOffer[] = [];
+
+  for (const offer of eligible) {
+    if (cancelled) break;
+
+    const ok = await enrollOffer(offer.offerId, accountId);
+    if (ok) { added++; enrolledOffers.push(offer); }
+    else failed++;
+
+    sendProgress({ added, failed, total: eligible.length });
+  }
+
+  console.log(`[NextCard Citi Offers] Done: ${added} added, ${failed} failed`);
   chrome.runtime.sendMessage({
-    type: "CITI_OFFERS_BATCH_ENROLL",
+    type: "CITI_OFFERS_COMPLETE",
+    added,
+    failed,
     accountId,
-    offerIds: eligible.map((o) => o.offerId),
-  });
-
-  // Wait for result
-  await new Promise<void>((resolve) => {
-    const timeout = setTimeout(() => {
-      chrome.runtime.onMessage.removeListener(listener);
-      resolve();
-    }, 300000);
-
-    function listener(msg: Record<string, unknown>) {
-      if (msg.type === "CITI_OFFERS_BATCH_PROGRESS") {
-        // Don't relay — popup listens for this directly
-      }
-      if (msg.type === "CITI_OFFERS_BATCH_RESULT") {
-        clearTimeout(timeout);
-        chrome.runtime.onMessage.removeListener(listener);
-        chrome.runtime.sendMessage({ type: "CITI_OFFERS_COMPLETE", added: msg.added, failed: msg.failed }).catch(() => {});
-        resolve();
-      }
-    }
-    chrome.runtime.onMessage.addListener(listener);
-  });
+    cardName: selectedCardName,
+    cardLastDigits: selectedCardLastDigits,
+    enrolledOffers: enrolledOffers.map((o) => {
+      // Parse amount from offerTitle like "4% Back", "$5 Back", "30% Back"
+      const amountMatch = o.offerTitle?.match(/(\$?\d+(?:\.\d+)?)\s*%?\s*Back/i);
+      const rawAmount = amountMatch ? parseFloat(amountMatch[1].replace("$", "")) : null;
+      const isPercentage = o.offerDiscountType === "PERCENTAGE" || (o.offerTitle?.includes("%") ?? false);
+      return {
+        issuerOfferId: o.offerId,
+        merchantName: o.name,
+        offerValue: o.offerTitle,
+        category: o.merchantCategory,
+        expirationDate: o.offerEndDate,
+        rewardType: isPercentage ? "percentage" as const : o.offerDiscountType === "ABSOLUTE" ? "flat_cash" as const : null,
+        rewardAmount: rawAmount,
+        rewardCurrency: "cash",
+        maxReward: null,
+        minSpend: null,
+        merchantUrl: o.merchantName?.includes(".") ? o.merchantName : null,
+      };
+    }),
+  }).catch(() => {});
 }
 
 // ── Message listener ───────────────────────────────────────
+
+let selectedCardName = "";
+let selectedCardLastDigits: string | null = null;
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (message.type === "CITI_OFFERS_DISCOVER") {
@@ -203,6 +223,8 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   }
 
   if (message.type === "CITI_OFFERS_RUN") {
+    selectedCardName = (message.cardName as string) ?? "";
+    selectedCardLastDigits = (message.cardLastDigits as string) ?? null;
     runEnrollment(message.accountId);
     sendResponse({ ok: true });
     return true;

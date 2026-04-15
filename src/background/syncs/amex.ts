@@ -101,12 +101,13 @@ export function createAmexSync(options: AmexSyncDeps) {
       if (!tabId) throw new Error("Could not create tab");
       options.stateStore.recordRunTab("amex", attemptId, tabId, { owned: true });
 
-      await new Promise((resolve) => setTimeout(resolve, 4000));
+      await new Promise((resolve) => setTimeout(resolve, 2000));
       const currentTab = await chrome.tabs.get(tabId);
       const landingUrl = currentTab.url ?? "";
       const isOnRewards = landingUrl.includes("global.americanexpress.com/rewards");
       const isOnDashboard = landingUrl.includes("global.americanexpress.com/dashboard");
-      const isLoggedIn = isOnRewards || isOnDashboard;
+      const isOnBenefits = landingUrl.includes("global.americanexpress.com/card-benefits");
+      const isLoggedIn = isOnRewards || isOnDashboard || isOnBenefits;
 
       console.log(
         `[NextCard SW] Amex: landing URL after stabilization: ${landingUrl}, loggedIn=${isLoggedIn}`,

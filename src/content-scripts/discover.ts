@@ -124,6 +124,8 @@ async function runExtraction(attemptId: string) {
   console.log("[NextCard Discover] Waiting for account content...");
   await waitForSelector('[data-testid="rewardsBalance"], [data-testid="headerCardDetails"]', 20000);
   await runControl.sleep(2000, attemptId);
+  const discoverCardEl = document.querySelector('[data-testid="headerCardDetails"]');
+  if (discoverCardEl) updateOverlayProgress(`Syncing ${discoverCardEl.textContent?.trim()}...`);
 
   runControl.throwIfCancelled(attemptId);
   const data = scrapeAccountPage();

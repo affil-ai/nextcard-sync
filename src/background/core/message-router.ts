@@ -57,6 +57,7 @@ export function createMessageRouter(options: {
   recordConsent: (message: Record<string, unknown>) => Promise<void>;
   pushToNextCard: (providerId: ProviderId, data: unknown) => Promise<unknown>;
   deleteFromNextCard: (providerId: ProviderId) => Promise<{ ok: boolean; error?: string }>;
+  syncEnrolledOffers?: (issuer: string, message: Record<string, unknown>) => void;
 }) {
   return (message: Record<string, unknown>, _sender: chrome.runtime.MessageSender, sendResponse: (response?: unknown) => void) => {
     switch (message.type) {
@@ -272,6 +273,36 @@ export function createMessageRouter(options: {
         return true;
       }
 
+      case "AMEX_OFFERS_READ_PRODUCTS": {
+        // Inject a script into MAIN world that reads digitalData.products
+        // (Amex stores product data on Bootstrapper.digitalData, window.digitalData, or window.a_digitalData)
+        (async () => {
+          try {
+            const tabs = await chrome.tabs.query({ url: "https://global.americanexpress.com/*" });
+            const tabId = tabs[0]?.id;
+            if (!tabId) { sendResponse({ products: null }); return; }
+
+            const results = await chrome.scripting.executeScript({
+              target: { tabId },
+              world: "MAIN",
+              func: () => {
+                // Try multiple sources for products (same as CardPointers' products.js)
+                let products = (window as unknown as Record<string, unknown>).Bootstrapper
+                  && ((window as unknown as Record<string, Record<string, unknown>>).Bootstrapper.digitalData as Record<string, unknown> | undefined)?.products;
+                if (!products) products = ((window as unknown as Record<string, Record<string, unknown>>).digitalData as Record<string, unknown> | undefined)?.products;
+                if (!products) products = ((window as unknown as Record<string, Record<string, unknown>>).a_digitalData as Record<string, unknown> | undefined)?.products;
+                return products ?? null;
+              },
+              args: [],
+            });
+            sendResponse({ products: results?.[0]?.result ?? null });
+          } catch (e) {
+            sendResponse({ products: null, error: String(e) });
+          }
+        })();
+        return true;
+      }
+
       case "AMEX_OFFERS_FETCH": {
         // Execute fetch in the page's MAIN world via chrome.scripting.executeScript.
         // This makes the request from the page's origin (same-site to functions.americanexpress.com),
@@ -324,77 +355,46 @@ export function createMessageRouter(options: {
         return true;
       }
 
-      case "AMEX_OFFERS_BATCH_ENROLL": {
-        // Enroll offers in chunks of 10 via executeScript in MAIN world.
-        // Send progress between chunks so the UI updates.
+      case "AMEX_OFFERS_ENROLL_ONE": {
+        // Enroll a single offer via executeScript in MAIN world.
         const enrollCardId = message.cardId as string;
-        const enrollOfferIds = message.offerIds as string[];
+        const enrollOfferId = message.offerId as string;
         const enrollLocale = (message.locale as string) ?? "en-US";
-        const CHUNK_SIZE = 10;
 
         (async () => {
           try {
             const tabs = await chrome.tabs.query({ url: "https://global.americanexpress.com/*" });
             const tabId = tabs[0]?.id;
-            if (!tabId) {
-              chrome.runtime.sendMessage({ type: "AMEX_OFFERS_BATCH_RESULT", added: 0, skipped: 0, failed: enrollOfferIds.length }).catch(() => {});
-              return;
-            }
+            if (!tabId) { sendResponse({ result: "failed" }); return; }
 
-            let totalAdded = 0;
-            let totalSkipped = 0;
-            let totalFailed = 0;
+            const results = await chrome.scripting.executeScript({
+              target: { tabId },
+              world: "MAIN",
+              func: async (cardId: string, offerId: string, locale: string) => {
+                try {
+                  const resp = await fetch("https://functions.americanexpress.com/CreateOffersHubEnrollment.web.v1", {
+                    method: "POST",
+                    headers: { "content-type": "application/json", accept: "application/json", "ce-source": "WEB" },
+                    credentials: "include",
+                    body: JSON.stringify({ accountNumberProxy: cardId, locale, offerId, requestType: "OFFERSHUB_ENROLLMENT", synchronizeOnly: false, enrollmentTrigger: "OFFERSHUB_TILE" }),
+                  });
+                  let json: Record<string, unknown> | null = null;
+                  try { json = await resp.json(); } catch { /* */ }
+                  const ok = resp.status === 200 && ((json?.status as Record<string, unknown>)?.purpose === "SUCCESS" || (json?.isEnrolled && json.isEnrolled !== "false"));
+                  const dup = resp.status === 200 && json?.explanationCode === "PZN4107";
+                  if (ok) return "added";
+                  if (dup) return "skipped";
+                  return "failed";
+                } catch { return "failed"; }
+              },
+              args: [enrollCardId, enrollOfferId, enrollLocale],
+            });
 
-            for (let start = 0; start < enrollOfferIds.length; start += CHUNK_SIZE) {
-              const chunk = enrollOfferIds.slice(start, start + CHUNK_SIZE);
-
-              const results = await chrome.scripting.executeScript({
-                target: { tabId },
-                world: "MAIN",
-                func: async (cardId: string, offerIds: string[], locale: string) => {
-                  const delay = (ms: number) => new Promise((r) => setTimeout(r, ms));
-                  const jitter = () => Math.floor(Math.random() * 60) + 20;
-                  let added = 0, skipped = 0, failed = 0;
-
-                  for (const offerId of offerIds) {
-                    try {
-                      const resp = await fetch("https://functions.americanexpress.com/CreateOffersHubEnrollment.web.v1", {
-                        method: "POST",
-                        headers: { "content-type": "application/json", accept: "application/json", "ce-source": "WEB" },
-                        credentials: "include",
-                        body: JSON.stringify({ accountNumberProxy: cardId, locale, offerId, requestType: "OFFERSHUB_ENROLLMENT", synchronizeOnly: false, enrollmentTrigger: "OFFERSHUB_TILE" }),
-                      });
-                      let json: Record<string, unknown> | null = null;
-                      try { json = await resp.json(); } catch { /* */ }
-                      const ok = resp.status === 200 && ((json?.status as Record<string, unknown>)?.purpose === "SUCCESS" || (json?.isEnrolled && json.isEnrolled !== "false"));
-                      const dup = resp.status === 200 && json?.explanationCode === "PZN4107";
-                      if (ok) added++;
-                      else if (dup) skipped++;
-                      else { failed++; if (resp.status === 429) await delay(3000 + jitter()); }
-                    } catch { failed++; }
-                    await delay(50 + jitter());
-                  }
-                  return { added, skipped, failed };
-                },
-                args: [enrollCardId, chunk, enrollLocale],
-              });
-
-              const chunkResult = results?.[0]?.result ?? { added: 0, skipped: 0, failed: chunk.length };
-              totalAdded += chunkResult.added;
-              totalSkipped += chunkResult.skipped;
-              totalFailed += chunkResult.failed;
-
-              // Send progress between chunks
-              chrome.runtime.sendMessage({ type: "AMEX_OFFERS_BATCH_PROGRESS", added: totalAdded, skipped: totalSkipped, failed: totalFailed, total: enrollOfferIds.length }).catch(() => {});
-            }
-
-            chrome.runtime.sendMessage({ type: "AMEX_OFFERS_BATCH_RESULT", added: totalAdded, skipped: totalSkipped, failed: totalFailed }).catch(() => {});
-          } catch (e) {
-            console.error("[NextCard SW] AMEX_OFFERS_BATCH_ENROLL error:", e);
-            chrome.runtime.sendMessage({ type: "AMEX_OFFERS_BATCH_RESULT", added: 0, skipped: 0, failed: enrollOfferIds.length }).catch(() => {});
+            sendResponse({ result: results?.[0]?.result ?? "failed" });
+          } catch {
+            sendResponse({ result: "failed" });
           }
         })();
-        sendResponse({ ok: true });
         return true;
       }
 
@@ -410,7 +410,21 @@ export function createMessageRouter(options: {
       }
 
       case "AMEX_OFFERS_PROGRESS":
+        sendResponse({ ok: true });
+        return true;
+
       case "AMEX_OFFERS_COMPLETE":
+        if (message.enrolledOffers && (message.enrolledOffers as unknown[]).length > 0) {
+          options.syncEnrolledOffers?.("amex", message);
+        }
+        sendResponse({ ok: true });
+        return true;
+
+      // ── Chase Offers (sync only — discovery/enrollment handled by content script) ──
+      case "CHASE_OFFERS_COMPLETE":
+        if (message.enrolledOffers && (message.enrolledOffers as unknown[]).length > 0) {
+          options.syncEnrolledOffers?.("chase", message);
+        }
         sendResponse({ ok: true });
         return true;
 
@@ -470,87 +484,14 @@ export function createMessageRouter(options: {
         return true;
       }
 
-      case "CITI_OFFERS_BATCH_ENROLL": {
-        const citiAccountId = message.accountId as string;
-        const citiOfferIds = message.offerIds as string[];
-        const CHUNK = 10;
-
-        (async () => {
-          try {
-            const tabs = await chrome.tabs.query({ url: "https://online.citi.com/*" });
-            const tabId = tabs[0]?.id;
-            if (!tabId) {
-              chrome.runtime.sendMessage({ type: "CITI_OFFERS_BATCH_RESULT", added: 0, failed: citiOfferIds.length }).catch(() => {});
-              return;
-            }
-
-            let totalAdded = 0;
-            let totalFailed = 0;
-
-            for (let start = 0; start < citiOfferIds.length; start += CHUNK) {
-              const chunk = citiOfferIds.slice(start, start + CHUNK);
-              const results = await chrome.scripting.executeScript({
-                target: { tabId },
-                world: "MAIN",
-                func: async (accountId: string, offerIds: string[], useFallback: boolean) => {
-                  const delay = (ms: number) => new Promise((r) => setTimeout(r, ms));
-                  const jitter = () => Math.floor(Math.random() * 60) + 20;
-                  const getCookie = (name: string) => {
-                    const match = document.cookie.match(new RegExp(`(?:^|;)\\s*${name}=([^;]*)`));
-                    return match ? decodeURIComponent(match[1]) : "";
-                  };
-                  const headers: Record<string, string> = {
-                    Accept: "application/json",
-                    "Content-Type": "application/json",
-                    TMXSessionId: getCookie("tmx_sessionid"),
-                    appVersion: getCookie("appVersion"),
-                    businessCode: getCookie("businessCode"),
-                    channelId: getCookie("channelId"),
-                    client_id: getCookie("client_id"),
-                    countryCode: getCookie("countryCode"),
-                    environmentID: "SuperMarioPROD",
-                  };
-                  let added = 0, failed = 0;
-                  let fallback = useFallback;
-                  // Fire all enrollments in parallel for speed
-                  const results = await Promise.allSettled(offerIds.map(async (offerId) => {
-                    const url = fallback
-                      ? "https://online.citi.com/gcgapi/prod/public/v1/digital/customers/creditCards/merchantOffers/enrollment"
-                      : "https://online.citi.com/gcgapi/prod/public/v1/digital/customers/creditCards/accounts/rewards/specialOffers/enrollMerchantOffer";
-                    try {
-                      const resp = await fetch(url, { method: "POST", headers, credentials: "include", body: JSON.stringify({ offerId, accountId }) });
-                      if (resp.status === 404 && !fallback) { fallback = true; return false; }
-                      let json: Record<string, unknown> | null = null;
-                      try { json = await resp.json(); } catch { /* */ }
-                      return resp.status === 200 && !!((json?.EnrolledOfferInfo as Record<string, unknown>)?.enrollmentId || json?.enrollmentId);
-                    } catch { return false; }
-                  }));
-                  for (const r of results) {
-                    if (r.status === "fulfilled" && r.value) added++;
-                    else failed++;
-                  }
-                  return { added, failed, useFallback: fallback };
-                },
-                args: [citiAccountId, chunk, false],
-              });
-
-              const chunkResult = results?.[0]?.result ?? { added: 0, failed: chunk.length };
-              totalAdded += chunkResult.added;
-              totalFailed += chunkResult.failed;
-              chrome.runtime.sendMessage({ type: "CITI_OFFERS_BATCH_PROGRESS", added: totalAdded, failed: totalFailed, total: citiOfferIds.length }).catch(() => {});
-            }
-
-            chrome.runtime.sendMessage({ type: "CITI_OFFERS_BATCH_RESULT", added: totalAdded, failed: totalFailed }).catch(() => {});
-          } catch (e) {
-            chrome.runtime.sendMessage({ type: "CITI_OFFERS_BATCH_RESULT", added: 0, failed: citiOfferIds.length }).catch(() => {});
-          }
-        })();
+      case "CITI_OFFERS_PROGRESS":
         sendResponse({ ok: true });
         return true;
-      }
 
-      case "CITI_OFFERS_PROGRESS":
       case "CITI_OFFERS_COMPLETE":
+        if (message.enrolledOffers && (message.enrolledOffers as unknown[]).length > 0) {
+          options.syncEnrolledOffers?.("citi", message);
+        }
         sendResponse({ ok: true });
         return true;
 

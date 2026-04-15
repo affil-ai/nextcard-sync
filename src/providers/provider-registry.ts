@@ -165,10 +165,10 @@ export const providerRegistry = {
     group: "Banks",
     iconPath: "src/icons/amex-36.png",
     syncStrategy: "amex",
-    syncUrl: "https://global.americanexpress.com/rewards",
+    syncUrl: "https://global.americanexpress.com/card-benefits/view-all",
     tabUrlPattern: "https://global.americanexpress.com/*",
-    accountUrlPattern: "https://global.americanexpress.com/rewards*",
-    accountUrl: "https://global.americanexpress.com/rewards",
+    accountUrlPattern: "https://global.americanexpress.com/*",
+    accountUrl: "https://global.americanexpress.com/card-benefits/view-all",
     allowedUrlPatterns: [
       "https://www.americanexpress.com/*",
       "https://americanexpress.com/*",

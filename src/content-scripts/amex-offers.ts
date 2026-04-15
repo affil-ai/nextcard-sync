@@ -22,6 +22,10 @@ interface AmexOffer {
   offerId: string;
   name: string;
   status: string;
+  shortDescription: string | null;
+  category: string | null;
+  expirationText: string | null;
+  merchantUrl: string | null;
 }
 
 // ── Helpers ────────────────────────────────────────────────
@@ -43,9 +47,50 @@ function amexApiFetch(url: string, options: { method: string; headers: Record<st
   });
 }
 
+/** Inject products.js into the Amex page's MAIN world and read digitalData.products from localStorage */
+function injectAndReadProducts(): Promise<AmexCard[]> {
+  return new Promise((resolve) => {
+    chrome.runtime.sendMessage({ type: "AMEX_OFFERS_READ_PRODUCTS" }, (resp) => {
+      if (chrome.runtime.lastError || !resp || !resp.products) resolve([]);
+      else {
+        const products = resp.products as Array<Record<string, unknown>>;
+        const cards: AmexCard[] = products
+          .filter((p) => {
+            const status = p.status as string[] | undefined;
+            const first = status?.length ? status[0] : null;
+            const lob = p.lineOfBusiness as string | undefined;
+            return first !== "Canceled" && (lob === "CONSUMER" || lob === "COMPANY_CARD");
+          })
+          .map((p) => ({
+            id: (p.id ?? "") as string,
+            name: (p.description ?? "Unknown Card") as string,
+            lastDigits: null,
+            accountKey: null,
+          }));
+        resolve(cards);
+      }
+    });
+  });
+}
+
 // ── Card Discovery ─────────────────────────────────────────
 
-async function discoverCards(): Promise<AmexCard[]> {
+/** Primary: read digitalData.products from the Amex page (injected via MAIN world) */
+async function discoverCardsFromProducts(): Promise<AmexCard[]> {
+  try {
+    const cards = await injectAndReadProducts();
+    if (cards.length > 0) {
+      console.log(`[NextCard Amex Offers] Found ${cards.length} cards via digitalData.products`);
+    }
+    return cards;
+  } catch (e) {
+    console.error("[NextCard Amex Offers] digitalData.products error:", e);
+    return [];
+  }
+}
+
+/** Fallback: parse the dashboard HTML for Transit-encoded productsList */
+async function discoverCardsFromDashboard(): Promise<AmexCard[]> {
   try {
     const resp = await fetch("https://global.americanexpress.com/dashboard", {
       credentials: "include",
@@ -96,12 +141,19 @@ async function discoverCards(): Promise<AmexCard[]> {
       cards.push({ id: accountToken, name, lastDigits, accountKey });
     }
 
-    console.log(`[NextCard Amex Offers] Found ${cards.length} cards`);
+    console.log(`[NextCard Amex Offers] Found ${cards.length} cards via dashboard`);
     return cards;
   } catch (e) {
-    console.error("[NextCard Amex Offers] discoverCards error:", e);
+    console.error("[NextCard Amex Offers] discoverCardsFromDashboard error:", e);
     return [];
   }
+}
+
+/** Try digitalData.products first, fall back to dashboard HTML parsing */
+async function discoverCards(): Promise<AmexCard[]> {
+  const cards = await discoverCardsFromProducts();
+  if (cards.length > 0) return cards;
+  return discoverCardsFromDashboard();
 }
 
 // ── Offer Listing ──────────────────────────────────────────
@@ -134,6 +186,10 @@ async function listOffers(cardId: string): Promise<AmexOffer[] | null> {
         offerId: (o.offerId ?? o.id ?? "") as string,
         name: (o.title ?? o.merchantName ?? "Unknown") as string,
         status: ((o.enrollmentDetails as Record<string, unknown>)?.status ?? "NOT_ENROLLED") as string,
+        shortDescription: (o.shortDescription ?? null) as string | null,
+        category: ((o.applicableCategories as Array<{ text: string }> | undefined)?.[0]?.text ?? null) as string | null,
+        expirationText: ((o.expiration as { text: string } | undefined)?.text ?? null) as string | null,
+        merchantUrl: ((o.longDescription as string)?.match(/(?:at|website)\s+(?:[\w.-]+\.(?:com|net|org|co|io|shop|store)\b)/i)?.[0]?.replace(/^(?:at|website)\s+/i, "") ?? null) as string | null,
       }));
   } catch (e) {
     console.error("[NextCard Amex Offers] listOffers error:", e);
@@ -145,18 +201,45 @@ async function listOffers(cardId: string): Promise<AmexOffer[] | null> {
 
 let cancelled = false;
 
+// Proactive rate limiting — match CardPointers' params
+const ENROLL_BASE_DELAY_MS = 150;
+const ENROLL_JITTER_MIN_MS = 50;
+const ENROLL_JITTER_MAX_MS = 150;
+const ENROLL_PAUSE_THRESHOLD = 100;
+const ENROLL_PAUSE_DELAY_MS = 3000;
+let enrollRequestsSincePause = 0;
+
+function enrollJitter(): number {
+  return Math.floor(Math.random() * (ENROLL_JITTER_MAX_MS - ENROLL_JITTER_MIN_MS + 1)) + ENROLL_JITTER_MIN_MS;
+}
+
 function sendProgress(data: Record<string, unknown>) {
   chrome.runtime.sendMessage({ type: "AMEX_OFFERS_PROGRESS", ...data }).catch(() => {});
 }
 
+/** Enroll a single offer via MAIN world executeScript */
+function enrollSingleOffer(cardId: string, offerId: string, locale: string): Promise<"added" | "skipped" | "failed"> {
+  return new Promise((resolve) => {
+    chrome.runtime.sendMessage(
+      { type: "AMEX_OFFERS_ENROLL_ONE", cardId, offerId, locale },
+      (resp) => {
+        if (chrome.runtime.lastError || !resp) resolve("failed");
+        else resolve(resp.result ?? "failed");
+      },
+    );
+  });
+}
+
 async function runEnrollment(cardId: string) {
   cancelled = false;
+  enrollRequestsSincePause = 0;
 
   let totalAdded = 0;
   let totalSkipped = 0;
   let totalFailed = 0;
   let round = 0;
   const MAX_ROUNDS = 5;
+  const enrolledOffers: AmexOffer[] = [];
 
   while (round < MAX_ROUNDS && !cancelled) {
     round++;
@@ -171,38 +254,31 @@ async function runEnrollment(cardId: string) {
 
     sendProgress({ status: "enrolling", round, added: totalAdded, total: eligible.length });
 
-    const offerIds = eligible.map((o) => o.offerId);
-    const prevAdded = totalAdded;
+    let roundAdded = 0;
 
-    // Batch enroll via service worker executeScript (chunks of 10)
-    chrome.runtime.sendMessage({ type: "AMEX_OFFERS_BATCH_ENROLL", cardId, offerIds, locale: "en-US" });
+    for (const offer of eligible) {
+      if (cancelled) break;
 
-    const batchResult = await new Promise<{ added: number; skipped: number; failed: number }>((resolve) => {
-      const timeout = setTimeout(() => {
-        chrome.runtime.onMessage.removeListener(listener);
-        resolve({ added: 0, skipped: 0, failed: offerIds.length });
-      }, 300000);
+      const result = await enrollSingleOffer(cardId, offer.offerId, "en-US");
+      if (result === "added") { totalAdded++; roundAdded++; enrolledOffers.push(offer); }
+      else if (result === "skipped") totalSkipped++;
+      else totalFailed++;
 
-      function listener(msg: Record<string, unknown>) {
-        if (msg.type === "AMEX_OFFERS_BATCH_PROGRESS") {
-          sendProgress({ added: prevAdded + ((msg.added as number) ?? 0), round, total: eligible.length });
-        }
-        if (msg.type === "AMEX_OFFERS_BATCH_RESULT") {
-          clearTimeout(timeout);
-          chrome.runtime.onMessage.removeListener(listener);
-          resolve(msg as unknown as { added: number; skipped: number; failed: number });
-        }
+      sendProgress({ added: totalAdded, skipped: totalSkipped, failed: totalFailed, round, total: eligible.length });
+
+      // Proactive rate limiting
+      enrollRequestsSincePause++;
+      if (enrollRequestsSincePause >= ENROLL_PAUSE_THRESHOLD) {
+        await delay(ENROLL_PAUSE_DELAY_MS + enrollJitter());
+        enrollRequestsSincePause = 0;
+      } else {
+        await delay(ENROLL_BASE_DELAY_MS + enrollJitter());
       }
-      chrome.runtime.onMessage.addListener(listener);
-    });
+    }
 
-    totalAdded += batchResult.added;
-    totalSkipped += batchResult.skipped;
-    totalFailed += batchResult.failed;
+    console.log(`[NextCard Amex Offers] Round ${round}: ${roundAdded} added`);
 
-    console.log(`[NextCard Amex Offers] Round ${round}: ${batchResult.added} added`);
-
-    if (batchResult.added === 0) break;
+    if (roundAdded === 0) break;
 
     if (round < MAX_ROUNDS && !cancelled) {
       sendProgress({ status: "checking_new", round, added: totalAdded });
@@ -216,10 +292,67 @@ async function runEnrollment(cardId: string) {
     skipped: totalSkipped,
     failed: totalFailed,
     rounds: round,
+    cardId,
+    cardName: selectedCardName,
+    cardLastDigits: selectedCardLastDigits,
+    enrolledOffers: enrolledOffers.map((o) => {
+      const desc = o.shortDescription ?? "";
+      // Parse structured reward from shortDescription
+      // Patterns: "earn 5,000 Membership Rewards® points", "earn $5 back", "Earn 15% back"
+      let rewardType: "percentage" | "flat_cash" | "points" | null = null;
+      let rewardAmount: number | null = null;
+      let rewardCurrency: string | null = null;
+      let maxReward: number | null = null;
+      let minSpend: number | null = null;
+
+      const pctMatch = desc.match(/(\d+(?:\.\d+)?)\s*%\s*back/i);
+      const cashMatch = desc.match(/earn\s+\$(\d+(?:,\d+)*(?:\.\d+)?)\s*back/i);
+      const ptsMatch = desc.match(/earn\s+([\d,]+)\s+(?:Membership Rewards|MR)/i);
+      const spendMatch = desc.match(/Spend\s+\$(\d+(?:,\d+)*(?:\.\d+)?)/i);
+      const maxMatch = desc.match(/up to (?:a total of )?\$(\d+(?:,\d+)*(?:\.\d+)?)/i);
+
+      if (ptsMatch) {
+        rewardType = "points";
+        rewardAmount = parseFloat(ptsMatch[1].replace(/,/g, ""));
+        rewardCurrency = "MR";
+      } else if (pctMatch) {
+        rewardType = "percentage";
+        rewardAmount = parseFloat(pctMatch[1]);
+        rewardCurrency = "cash";
+      } else if (cashMatch) {
+        rewardType = "flat_cash";
+        rewardAmount = parseFloat(cashMatch[1].replace(/,/g, ""));
+        rewardCurrency = "cash";
+      }
+
+      if (spendMatch) {
+        minSpend = parseFloat(spendMatch[1].replace(/,/g, ""));
+      }
+      if (maxMatch) {
+        maxReward = parseFloat(maxMatch[1].replace(/,/g, ""));
+      }
+
+      return {
+        issuerOfferId: o.offerId,
+        merchantName: o.name,
+        offerValue: o.shortDescription,
+        category: o.category,
+        expirationDate: o.expirationText,
+        rewardType,
+        rewardAmount,
+        rewardCurrency,
+        maxReward,
+        minSpend,
+        merchantUrl: o.merchantUrl,
+      };
+    }),
   }).catch(() => {});
 }
 
 // ── Message listener ───────────────────────────────────────
+
+let selectedCardName = "";
+let selectedCardLastDigits: string | null = null;
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (message.type === "AMEX_OFFERS_DISCOVER") {
@@ -236,6 +369,8 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   }
 
   if (message.type === "AMEX_OFFERS_RUN") {
+    selectedCardName = (message.cardName as string) ?? "";
+    selectedCardLastDigits = (message.cardLastDigits as string) ?? null;
     runEnrollment(message.cardId);
     sendResponse({ ok: true });
     return true;

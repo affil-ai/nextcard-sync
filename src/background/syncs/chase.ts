@@ -794,6 +794,16 @@ export function createChaseSync(options: ChaseSyncDeps) {
           `[NextCard SW] Chase: [${index + 1}/${cardIds.length}] scraping ${card.cardName} (...${card.lastFour})`,
         );
 
+        // Update overlay via content script
+        try {
+          await chrome.tabs.sendMessage(tabId, {
+            type: "UPDATE_OVERLAY_PROGRESS",
+            message: index === 0
+              ? `Syncing ${card.cardName}...`
+              : `Switching to ${card.cardName}...`,
+          });
+        } catch { /* content script may not be ready */ }
+
         const currentTab = await chrome.tabs.get(tabId);
         const currentUrl = currentTab.url ?? "";
         if (!currentUrl.includes("secure.chase.com/web/auth/dashboard")) {

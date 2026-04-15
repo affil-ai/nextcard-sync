@@ -366,7 +366,7 @@ async function runExtraction(attemptId: string) {
   }
 
   updateOverlay("extracting", "bilt");
-  updateOverlayProgress("Reading wallet and points...");
+  updateOverlayProgress("Reading Bilt wallet and points...");
   console.log("[NextCard Bilt] Waiting for page content...");
   const readySelector = url.includes("/wallet")
     ? '[data-testid="user-info-points-pill"]'

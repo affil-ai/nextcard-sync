@@ -1,6 +1,7 @@
 node_modules
 dist
 dist-dev
-extension.zip
+*.zip
 .env
 .DS_Store
+.playwright-mcp

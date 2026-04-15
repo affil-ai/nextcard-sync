@@ -24,17 +24,18 @@ interface ChaseOffer {
   recommendationIdentifier: string;
   offerImpressionTokenIdentifier: string;
   cardId: string;
+  offerHeaderText: string | null;
+  offerRewardTypeCode: string | null;
+  offerAmount: number | null;
+  maximumRewardAmount: number | null;
+  minimumSpendAmount: number | null;
+  category: string | null;
+  offerEndTimestamp: string | null;
+  shortMessageText: string | null;
+  merchantUrl: string | null;
 }
 
 // ── Helpers ────────────────────────────────────────────────
-
-function delay(ms: number): Promise<void> {
-  return new Promise((r) => setTimeout(r, ms));
-}
-
-function jitter(): number {
-  return Math.floor(Math.random() * 60) + 20;
-}
 
 function getHostname(): string {
   return location.hostname.replace(".chase.com", "");
@@ -134,6 +135,8 @@ async function listOffers(cardIds: string[], primaryCardId: string): Promise<Cha
         const display = o.offerDisplayDetails as Record<string, unknown> | undefined;
         const merchant = o.merchantDetails as Record<string, unknown> | undefined;
         const merchantName = (o.MerchantName ?? merchant?.merchantName ?? details?.merchantName ?? details?.offerTitle ?? display?.offerHeaderText ?? "Unknown") as string;
+        const options = (details?.offerOptions as Array<Record<string, unknown>> | undefined)?.[0];
+        const categories = o.offerCategories as Array<{ offerCategoryName: string }> | undefined;
         return {
           offerId: (o.offerIdentifier ?? "") as string,
           name: merchantName,
@@ -141,6 +144,15 @@ async function listOffers(cardIds: string[], primaryCardId: string): Promise<Cha
           recommendationIdentifier: (o.recommendationIdentifier ?? "") as string,
           offerImpressionTokenIdentifier: (o.offerImpressionTokenIdentifier ?? "") as string,
           cardId: primaryCardId,
+          offerHeaderText: (display?.offerHeaderText ?? null) as string | null,
+          offerRewardTypeCode: (options?.offerRewardTypeCode ?? null) as string | null,
+          offerAmount: (options?.offerAmount ?? null) as number | null,
+          maximumRewardAmount: (options?.maximumRewardOfferAmount ?? null) as number | null,
+          minimumSpendAmount: (options?.minimumSpendingAmount ?? null) as number | null,
+          category: (categories?.[0]?.offerCategoryName ?? null) as string | null,
+          offerEndTimestamp: (details?.offerEndTimestamp ?? null) as string | null,
+          shortMessageText: (display?.shortMessageText ?? null) as string | null,
+          merchantUrl: ((display?.links as Record<string, Record<string, unknown>> | undefined)?.displayLink?.linkText ?? null) as string | null,
         };
       });
   } catch (e) {
@@ -198,27 +210,49 @@ async function runEnrollment(cardId: string, allCardIds: string[]) {
     return;
   }
 
+  // Fire all enrollments in parallel — Chase enrollment is a fast cross-origin GET
+  const results = await Promise.allSettled(
+    offers.map((offer) => enrollOffer(offer, epi)),
+  );
+
   let added = 0;
   let failed = 0;
-
-  for (let i = 0; i < offers.length; i++) {
-    if (cancelled) break;
-
-    const ok = await enrollOffer(offers[i], epi);
-    if (ok) added++;
+  const enrolledOffers: ChaseOffer[] = [];
+  for (let i = 0; i < results.length; i++) {
+    const r = results[i];
+    if (r.status === "fulfilled" && r.value) { added++; enrolledOffers.push(offers[i]); }
     else failed++;
-
-    sendProgress({ added, failed, total: offers.length });
-
-    // Throttle — Chase enrollment is fast (GET, no preflight)
-    await delay(30 + jitter());
   }
 
+  sendProgress({ added, failed, total: offers.length });
   console.log(`[NextCard Chase Offers] Done: ${added} added, ${failed} failed`);
-  chrome.runtime.sendMessage({ type: "CHASE_OFFERS_COMPLETE", added, failed }).catch(() => {});
+  chrome.runtime.sendMessage({
+    type: "CHASE_OFFERS_COMPLETE",
+    added,
+    failed,
+    cardId,
+    cardName: selectedCardName,
+    cardLastDigits: selectedCardLastDigits,
+    enrolledOffers: enrolledOffers.map((o) => ({
+      issuerOfferId: o.offerId,
+      merchantName: o.name,
+      offerValue: o.offerHeaderText,
+      category: o.category,
+      expirationDate: o.offerEndTimestamp,
+      rewardType: o.offerRewardTypeCode === "PERCENTAGE" ? "percentage" : o.offerRewardTypeCode === "FLAT_AMOUNT" ? "flat_cash" : null,
+      rewardAmount: o.offerAmount,
+      rewardCurrency: "cash",
+      maxReward: o.maximumRewardAmount === 0 ? null : o.maximumRewardAmount,
+      minSpend: o.minimumSpendAmount === 0 ? null : o.minimumSpendAmount,
+      merchantUrl: o.merchantUrl,
+    })),
+  }).catch(() => {});
 }
 
 // ── Message listener ───────────────────────────────────────
+
+let selectedCardName = "";
+let selectedCardLastDigits: string | null = null;
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (message.type === "CHASE_OFFERS_DISCOVER") {
@@ -234,6 +268,8 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   }
 
   if (message.type === "CHASE_OFFERS_RUN") {
+    selectedCardName = (message.cardName as string) ?? "";
+    selectedCardLastDigits = (message.cardLastDigits as string) ?? null;
     runEnrollment(message.cardId, message.allCardIds ?? [message.cardId]);
     sendResponse({ ok: true });
     return true;

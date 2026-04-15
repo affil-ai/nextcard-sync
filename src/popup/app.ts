@@ -155,7 +155,8 @@ function initAmexOffers() {
     showState("Running");
     if (progressBar) progressBar.style.width = "0%";
     if (progressDetail) progressDetail.textContent = "";
-    chrome.tabs.sendMessage(amexTabId, { type: "AMEX_OFFERS_RUN", cardId: selectedCardId, locale: selectedLocale, accountKey: selectedAccountKey });
+    const amexSelectedCard = amexCards.find((c) => c.id === selectedCardId);
+    chrome.tabs.sendMessage(amexTabId, { type: "AMEX_OFFERS_RUN", cardId: selectedCardId, locale: selectedLocale, accountKey: selectedAccountKey, cardName: amexSelectedCard?.name ?? "", cardLastDigits: amexSelectedCard?.lastDigits ?? null });
   });
 
   stopBtn?.addEventListener("click", () => {
@@ -177,13 +178,13 @@ function initAmexOffers() {
 
   // Listen for progress + completion messages from the content script
   chrome.runtime.onMessage.addListener((msg) => {
-    if (msg.type === "AMEX_OFFERS_PROGRESS" || msg.type === "AMEX_OFFERS_BATCH_PROGRESS") {
+    if (msg.type === "AMEX_OFFERS_PROGRESS") {
       const added = msg.added ?? 0;
-      const skippd = msg.skipped ?? 0;
+      const skipped = msg.skipped ?? 0;
       const failed = msg.failed ?? 0;
       const total = msg.total ?? 0;
       const round = msg.round ?? 1;
-      const done = added + skippd + failed;
+      const done = added + skipped + failed;
       const pct = total > 0 ? Math.min(100, Math.round((done / total) * 100)) : 0;
 
       if (msg.status === "fetching") {
@@ -194,10 +195,10 @@ function initAmexOffers() {
         if (progressDetail) progressDetail.textContent = `${added} added so far — checking for new offers...`;
       } else {
         if (progressBar) progressBar.style.width = `${pct}%`;
-        if (progressDetail) progressDetail.textContent = round > 1 ? `Round ${round}: ${added} added` : `${added} added`;
+        if (progressDetail) progressDetail.textContent = `${added} of ${total} added`;
       }
     }
-    if (msg.type === "AMEX_OFFERS_COMPLETE" || msg.type === "AMEX_OFFERS_BATCH_RESULT") {
+    if (msg.type === "AMEX_OFFERS_COMPLETE") {
       const parts: string[] = [];
       if (msg.added > 0) parts.push(`${msg.added} offer${msg.added === 1 ? "" : "s"} added`);
       if (msg.added === 0) parts.push("No new offers to add");
@@ -318,7 +319,8 @@ function initChaseOffers() {
     if (progressBar) progressBar.style.width = "0%";
     if (progressDetail) progressDetail.textContent = "";
     const allCardIds = chaseCards.map((c) => c.id);
-    chrome.tabs.sendMessage(chaseTabId, { type: "CHASE_OFFERS_RUN", cardId: selectedCardId, allCardIds });
+    const chaseSelectedCard = chaseCards.find((c) => c.id === selectedCardId);
+    chrome.tabs.sendMessage(chaseTabId, { type: "CHASE_OFFERS_RUN", cardId: selectedCardId, allCardIds, cardName: chaseSelectedCard?.name ?? "", cardLastDigits: chaseSelectedCard?.lastDigits ?? null });
   });
 
   document.getElementById("chaseOffersStopBtn")?.addEventListener("click", () => {
@@ -439,7 +441,8 @@ function initCitiOffers() {
     if (!citiTabId) return;
     showState("Running");
     if (progressBar) progressBar.style.width = "0%";
-    chrome.tabs.sendMessage(citiTabId, { type: "CITI_OFFERS_RUN", accountId: selectedAccountId });
+    const citiSelectedCard = citiCards.find((c) => c.id === selectedAccountId);
+    chrome.tabs.sendMessage(citiTabId, { type: "CITI_OFFERS_RUN", accountId: selectedAccountId, cardName: citiSelectedCard?.name ?? "", cardLastDigits: citiSelectedCard?.lastDigits ?? null });
   });
 
   document.getElementById("citiOffersStopBtn")?.addEventListener("click", () => {
@@ -456,14 +459,14 @@ function initCitiOffers() {
   document.getElementById("citiOffersRetryBtn")?.addEventListener("click", () => showState("Initial"));
 
   chrome.runtime.onMessage.addListener((msg) => {
-    if (msg.type === "CITI_OFFERS_PROGRESS" || msg.type === "CITI_OFFERS_BATCH_PROGRESS") {
+    if (msg.type === "CITI_OFFERS_PROGRESS") {
       const added = msg.added ?? 0;
       const total = msg.total ?? 0;
       const pct = total > 0 ? Math.min(100, Math.round((added / total) * 100)) : 0;
       if (progressBar) progressBar.style.width = `${pct}%`;
       if (progressDetail) progressDetail.textContent = `${added} added`;
     }
-    if (msg.type === "CITI_OFFERS_COMPLETE" || msg.type === "CITI_OFFERS_BATCH_RESULT") {
+    if (msg.type === "CITI_OFFERS_COMPLETE") {
       const parts: string[] = [];
       if (msg.added > 0) parts.push(`${msg.added} offer${msg.added === 1 ? "" : "s"} added`);
       if (msg.added === 0) parts.push("No new offers to add");

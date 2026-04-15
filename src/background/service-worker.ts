@@ -6,6 +6,8 @@ import {
   pushToNextCard,
   validateProviderData,
 } from "../lib/sync-to-nextcard";
+import { syncOffersToNextCard, retryPendingOfferSyncs } from "../lib/sync-offers-to-nextcard";
+import type { OfferSyncPayload } from "../lib/sync-offers-to-nextcard";
 import { providerRegistry } from "../providers/provider-registry";
 import { createMessageRouter, createExternalMessageRouter } from "./core/message-router";
 import { createRuntimeStateStore } from "./core/runtime-state";
@@ -268,6 +270,35 @@ chrome.runtime.onMessage.addListener(
     recordConsent,
     pushToNextCard: pushScrapedData,
     deleteFromNextCard,
+    syncEnrolledOffers: (issuer, message) => {
+      const enrolledOffers = message.enrolledOffers as Array<{
+        issuerOfferId: string;
+        merchantName: string;
+        offerValue: string | null;
+        category: string | null;
+        expirationDate: string | null;
+        rewardType: "percentage" | "flat_cash" | "points" | null;
+        rewardAmount: number | null;
+        rewardCurrency: string | null;
+        maxReward: number | null;
+        minSpend: number | null;
+        merchantUrl: string | null;
+      }>;
+
+      const payload: OfferSyncPayload = {
+        issuer,
+        issuerCardId: String(message.cardId ?? message.accountId ?? ""),
+        issuerCardName: String(message.cardName ?? ""),
+        issuerCardLastDigits: (message.cardLastDigits as string) ?? null,
+        offers: enrolledOffers.map((o) => ({
+          ...o,
+          enrolledAt: new Date().toISOString(),
+        })),
+      };
+
+      // Fire-and-forget — don't block the COMPLETE response
+      void syncOffersToNextCard(payload);
+    },
   }),
 );
 
@@ -285,6 +316,7 @@ void getAuth().then((auth) => {
     void hydrateFromNextCard().catch((error) => {
       console.warn("[NextCard SW] Startup hydrate failed:", error);
     });
+    void retryPendingOfferSyncs();
   }
 });
 

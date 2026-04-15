@@ -141,15 +141,22 @@ async function runExtraction(attemptId: string) {
   }
 
   updateOverlay("extracting", "chase");
-  updateOverlayProgress("Reading card details and points...");
+  updateOverlayProgress("Finding your Chase cards...");
   console.log("[NextCard Chase] Waiting for dashboard content...");
   const found = await waitForSelector(".card-details, .points-balance");
   console.log("[NextCard Chase] Selector found:", !!found);
+  const chaseCardEl = document.querySelector(".card-details .mds-body-large-heavier");
+  if (chaseCardEl) {
+    updateOverlayProgress(`Syncing ${chaseCardEl.textContent?.trim().replace(/®/g, "")}...`);
+  } else {
+    updateOverlayProgress("Reading points and rewards...");
+  }
 
   // Extra settle time — Chase renders points asynchronously after the container appears
   await runControl.sleep(4000, attemptId);
 
   runControl.throwIfCancelled(attemptId);
+  updateOverlayProgress("Finishing up...");
   const data = scrapeDashboard();
   await runControl.sendMessage(attemptId, { type: "CHASE_DASHBOARD_DONE", data });
 }
@@ -167,6 +174,11 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     runControl.beginAttempt(message.attemptId);
     runExtraction(message.attemptId);
     sendResponse({ ok: true });
+  }
+  if (message.type === "UPDATE_OVERLAY_PROGRESS") {
+    updateOverlayProgress(message.message);
+    sendResponse({ ok: true });
+    return true;
   }
   if (message.type === "GET_LOGIN_STATE") {
     sendResponse({ state: detectLoginState() });

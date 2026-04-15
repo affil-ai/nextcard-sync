@@ -149,10 +149,12 @@ async function runExtraction(attemptId: string) {
   }
 
   updateOverlay("extracting", "citi");
-  updateOverlayProgress("Reading card accounts...");
+  updateOverlayProgress("Finding your Citi cards...");
   console.log("[NextCard Citi] Waiting for dashboard content...");
   await waitForSelector("dashboard-account-selector-tile, #dashboardWelcomeHeader", 20000);
   await runControl.sleep(3000, attemptId);
+  const citiCardName = document.querySelector("dashboard-account-selector-tile h3.account-name");
+  if (citiCardName) updateOverlayProgress(`Syncing ${citiCardName.textContent?.trim()}...`);
 
   runControl.throwIfCancelled(attemptId);
   const data = scrapeDashboard();

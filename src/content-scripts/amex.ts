@@ -23,7 +23,7 @@ const runControl = createContentScriptRunControl("amex");
 function detectLoginState(): LoginState {
   const url = window.location.href.toLowerCase();
 
-  if (url.includes("global.americanexpress.com/rewards") || url.includes("global.americanexpress.com/dashboard")) {
+  if (url.includes("global.americanexpress.com/rewards") || url.includes("global.americanexpress.com/dashboard") || url.includes("global.americanexpress.com/card-benefits")) {
     return "logged_in";
   }
 
@@ -92,7 +92,7 @@ async function getCardOptions(): Promise<CardOption[]> {
   const wasOpen = combobox.getAttribute("aria-expanded") === "true";
   if (!wasOpen) {
     combobox.click();
-    await new Promise((r) => setTimeout(r, 800));
+    await new Promise((r) => setTimeout(r, 400));
   }
 
   const listbox = document.querySelector("#simple-switcher-listbox");
@@ -131,7 +131,7 @@ async function openSwitcherAndClickCard(cardIndex: number, attemptId: string): P
   }
 
   trigger.click();
-  await runControl.sleep(800, attemptId);
+  await runControl.sleep(400, attemptId);
 
   // cardIndex refers to position within CARD_PRODUCT options only (same as getCardOptions)
   const options = document.querySelectorAll('#simple-switcher-listbox [role="option"][data-testid*="product_option_CARD_PRODUCT"]');
@@ -144,13 +144,13 @@ async function openSwitcherAndClickCard(cardIndex: number, attemptId: string): P
   console.log(`[NextCard Amex] Clicking card option: ${targetOption.textContent?.trim().substring(0, 60)}`);
   targetOption.click();
 
-  await runControl.sleep(5000, attemptId);
+  await runControl.sleep(2500, attemptId);
   return true;
 }
 
-// ── Scrape rewards dashboard page ────────────────────────────
+// ── Scrape page — works on both /rewards and /card-benefits/view-all ──
 
-function scrapeRewardsDashboard() {
+function scrapeAmexPage() {
   const data = {
     cardName: null as string | null,
     availablePoints: null as number | null,
@@ -158,6 +158,7 @@ function scrapeRewardsDashboard() {
     benefits: [] as { name: string; amountUsed: number | null; totalAmount: number | null; remaining: number | null; period: string | null }[],
   };
 
+  // ── Card name ───────────────────────────────────────────
   const cardNameEl = document.querySelector('[data-testid="simple_switcher_display_name"]');
   const cardNumberEl = document.querySelector('[data-testid="simple_switcher_display_number_val"]');
   if (cardNameEl) {
@@ -166,6 +167,9 @@ function scrapeRewardsDashboard() {
     data.cardName = number ? `${name} (${number})` : name;
   }
 
+  // ── Points ──────────────────────────────────────────────
+  // On /rewards: inside #overview-vitals
+  // On /card-benefits: in the header nav as an h4
   const vitals = document.getElementById("overview-vitals");
   if (vitals) {
     const desktopTiles = vitals.querySelectorAll('[data-testid="desktop-tile"]');
@@ -173,126 +177,205 @@ function scrapeRewardsDashboard() {
       const label = tile.querySelector('[id^="available-header"]');
       if (label) {
         const valueEl = tile.querySelector(".heading-sans-medium-bold");
-        if (valueEl) {
-          data.availablePoints = parseIntSafe(textOf(valueEl));
-        }
+        if (valueEl) data.availablePoints = parseIntSafe(textOf(valueEl));
         break;
       }
     }
-
-    // Fallback: small-tile (mobile layout)
     if (data.availablePoints == null) {
       const smallTile = vitals.querySelector('[data-testid="small-tile"]');
-      if (smallTile) {
-        const label = smallTile.querySelector('[id^="available-header"]');
-        if (label) {
-          const valueEl = smallTile.querySelector(".heading-sans-medium-bold");
-          if (valueEl) {
-            data.availablePoints = parseIntSafe(textOf(valueEl));
-          }
+      const label = smallTile?.querySelector('[id^="available-header"]');
+      if (label) {
+        const valueEl = smallTile?.querySelector(".heading-sans-medium-bold");
+        if (valueEl) data.availablePoints = parseIntSafe(textOf(valueEl));
+      }
+    }
+  }
+  // Fallback: points in the nav header (card-benefits page)
+  // The h4 contains the number, and a nearby h3 mentions "Points", "Miles", or "Rewards"
+  if (data.availablePoints == null) {
+    const allH4 = document.querySelectorAll("h4");
+    for (const h4 of allH4) {
+      const text = textOf(h4).replace(/,/g, "");
+      const num = parseInt(text, 10);
+      if (!isNaN(num) && num >= 0) {
+        const sibling = h4.previousElementSibling;
+        const siblingText = sibling ? textOf(sibling).toLowerCase() : "";
+        if (siblingText.includes("points") || siblingText.includes("miles") || siblingText.includes("rewards")) {
+          data.availablePoints = num;
+          break;
         }
       }
     }
   }
 
-  // ── Benefit credit trackers ──────────────────────────────
-  const seenNames = new Set<string>();
-  const trackerComponents = document.querySelectorAll('[data-testid="tracker-component"]');
+  // ── Benefit credit trackers ─────────────────────────────
+  // We support two DOM structures:
+  //   /rewards page: data-testid="tracker-component" with <progress> elements
+  //   /card-benefits page: group elements with [role="progressbar"] and text like "$59 earned"
+  // Deduplicates by name, preferring versions with progress data.
 
+  const benefitMap = new Map<string, { amountUsed: number | null; totalAmount: number | null; remaining: number | null; period: string | null }>();
+
+  // Strategy A: tracker-component with <progress> (rewards page)
+  const trackerComponents = document.querySelectorAll('[data-testid="tracker-component"]');
   for (const comp of trackerComponents) {
     const heading = comp.querySelector("h3");
     if (!heading) continue;
-
     const name = textOf(heading);
-    if (!name || seenNames.has(name)) continue;
-    seenNames.add(name);
+    if (!name) continue;
 
     const progress = comp.querySelector("progress");
-    let amountUsed = progress ? parseFloat(progress.getAttribute("value") ?? "") : null;
-    let totalAmount = progress ? parseFloat(progress.getAttribute("max") ?? "") : null;
+    if (progress) {
+      const amountUsed = parseFloat(progress.getAttribute("value") ?? "");
+      const totalAmount = parseFloat(progress.getAttribute("max") ?? "");
+      if (!isNaN(totalAmount)) {
+        const remaining = !isNaN(amountUsed) ? Math.round((totalAmount - amountUsed) * 100) / 100 : null;
+        benefitMap.set(name, { amountUsed: !isNaN(amountUsed) ? amountUsed : null, totalAmount, remaining, period: null });
+      }
+    } else {
+      // No progress bar — could be congratulations/completed, or "Earned this Year" with no bar
+      if (benefitMap.has(name)) continue;
+      const compText = textOf(comp);
+      const compTextLower = compText.toLowerCase();
 
-    // Handle completed benefits with no progress element (e.g. "Congratulations, you've earned...")
-    // Body text contains the actual period amount; the h3 heading may contain the annual total.
-    if (!progress) {
-      const compTextLower = textOf(comp).toLowerCase();
-      if (compTextLower.includes("congratulations") || compTextLower.includes("you've earned") || compTextLower.includes("fully used")) {
-        // Get body text (everything outside the heading) for the period-specific amount
-        const bodyParts: string[] = [];
-        for (const child of comp.children) {
-          if (child.tagName !== "H3") bodyParts.push(textOf(child));
-        }
-        const bodyText = bodyParts.join(" ");
-        const dollarMatch = bodyText.match(/\$([\d,]+(?:\.\d{2})?)/);
+      // Extract annual total from heading
+      const nameDollarMatch = name.match(/\$([\d,]+)/);
+      let totalAmount = nameDollarMatch ? parseFloat(nameDollarMatch[1].replace(/,/g, "")) : null;
+      let amountUsed: number | null = null;
 
-        if (dollarMatch) {
-          totalAmount = parseFloat(dollarMatch[1].replace(/,/g, ""));
-        } else {
-          const nameDollarMatch = name.match(/\$([\d,]+)/);
-          if (nameDollarMatch) totalAmount = parseFloat(nameDollarMatch[1].replace(/,/g, ""));
+      // Try info-pill badge (e.g. "Earned this Year: $16.49")
+      const earnedBadge = comp.querySelector('[data-testid*="info-pill"]');
+      if (earnedBadge) {
+        const badgeMatch = textOf(earnedBadge).match(/\$([\d,]+(?:\.\d{2})?)/);
+        if (badgeMatch) amountUsed = parseFloat(badgeMatch[1].replace(/,/g, ""));
+      }
+      // Try "Earned this Year: $X" anywhere in the text
+      if (amountUsed == null) {
+        const yearMatch = compText.match(/Earned this Year:\s*\$([\d,]+(?:\.\d{2})?)/i);
+        if (yearMatch) amountUsed = parseFloat(yearMatch[1].replace(/,/g, ""));
+      }
+      // Try description testid
+      if (amountUsed == null) {
+        const descEl = comp.querySelector('[data-testid*="description"]');
+        if (descEl) {
+          const descMatch = textOf(descEl).match(/\$([\d,]+(?:\.\d{2})?)/);
+          if (descMatch) amountUsed = parseFloat(descMatch[1].replace(/,/g, ""));
         }
-        amountUsed = totalAmount;
+      }
+      // Try "you've received $X" / "you've earned $X" in body text (after heading)
+      if (amountUsed == null && (compTextLower.includes("congratulations") || compTextLower.includes("you've earned") || compTextLower.includes("you've received") || compTextLower.includes("fully used"))) {
+        const receivedMatch = compText.match(/(?:received|earned|used)\s+\$([\d,]+(?:\.\d{2})?)/i);
+        if (receivedMatch) amountUsed = parseFloat(receivedMatch[1].replace(/,/g, ""));
+      }
+
+      // If we found any data, add it
+      if (totalAmount != null || amountUsed != null) {
+        if (amountUsed == null && (compTextLower.includes("congratulations") || compTextLower.includes("fully used"))) {
+          amountUsed = totalAmount; // fully used
+        }
+        const remaining = amountUsed != null && totalAmount != null && !isNaN(amountUsed) && !isNaN(totalAmount)
+          ? Math.round((totalAmount - amountUsed) * 100) / 100 : null;
+        benefitMap.set(name, {
+          amountUsed: amountUsed != null && !isNaN(amountUsed) ? amountUsed : null,
+          totalAmount: totalAmount != null && !isNaN(totalAmount) ? totalAmount : null,
+          remaining, period: null,
+        });
       }
     }
+  }
 
-    const remaining = amountUsed != null && totalAmount != null && !isNaN(amountUsed) && !isNaN(totalAmount)
-      ? Math.round((totalAmount - amountUsed) * 100) / 100
-      : null;
+  // Strategy B: group elements with [role="progressbar"] (card-benefits page)
+  // These are inside the "Benefits Activity" section
+  const groupTrackers = document.querySelectorAll('[data-testid="tracker-component-section"] group, [role="group"]');
+  for (const group of groupTrackers) {
+    const heading = group.querySelector("h3");
+    if (!heading) continue;
+    const name = textOf(heading);
+    if (!name || benefitMap.has(name)) continue;
 
-    data.benefits.push({
-      name,
-      amountUsed: amountUsed != null && !isNaN(amountUsed) ? amountUsed : null,
-      totalAmount: totalAmount != null && !isNaN(totalAmount) ? totalAmount : null,
-      remaining,
-      period: null,
-    });
+    // Look for progressbar ARIA role
+    const progressbar = group.querySelector('[role="progressbar"]');
+    if (progressbar) {
+      const ariaLabel = progressbar.getAttribute("aria-label") ?? "";
+      // aria-label like "Progress bar from 0 to 200"
+      const rangeMatch = ariaLabel.match(/from\s+([\d.]+)\s+to\s+([\d,.]+)/i);
+      let totalAmount: number | null = null;
+      let amountUsed: number | null = null;
+
+      if (rangeMatch) {
+        totalAmount = parseFloat(rangeMatch[2].replace(/,/g, ""));
+      }
+
+      // Parse the text labels like "$59 earned" / "$141 to go"
+      const labels = group.querySelectorAll('[role="progressbar"] ~ div div, [role="progressbar"] + div div');
+      for (const label of Array.from(labels)) {
+        const t = textOf(label).toLowerCase();
+        const dollarMatch = t.match(/\$([\d,]+(?:\.\d{2})?)/);
+        if (dollarMatch && (t.includes("earned") || t.includes("spent"))) {
+          amountUsed = parseFloat(dollarMatch[1].replace(/,/g, ""));
+        }
+      }
+
+      // Broader fallback: look for any "$X earned/spent" text in the group
+      if (amountUsed == null) {
+        const groupText = textOf(group);
+        const earnedMatch = groupText.match(/\$([\d,]+(?:\.\d{2})?)\s*(?:earned|spent)/i);
+        if (earnedMatch) amountUsed = parseFloat(earnedMatch[1].replace(/,/g, ""));
+      }
+
+      // Also check "Earned this Year: $X" badge text
+      if (amountUsed == null) {
+        const groupText = textOf(group);
+        const yearMatch = groupText.match(/Earned this (?:Year|year):\s*\$([\d,]+(?:\.\d{2})?)/i);
+        if (yearMatch) amountUsed = parseFloat(yearMatch[1].replace(/,/g, ""));
+      }
+
+      if (totalAmount != null) {
+        const remaining = amountUsed != null ? Math.round((totalAmount - amountUsed) * 100) / 100 : null;
+        benefitMap.set(name, {
+          amountUsed: amountUsed ?? 0,
+          totalAmount,
+          remaining,
+          period: null,
+        });
+      }
+      continue;
+    }
+
+    // No progressbar — might be a congratulations/completed or locked benefit
+    const groupText = textOf(group).toLowerCase();
+    if (groupText.includes("congratulations") || groupText.includes("you've earned") || groupText.includes("you've received") || groupText.includes("fully used")) {
+      const nameDollarMatch = name.match(/\$([\d,]+)/);
+      let totalAmount = nameDollarMatch ? parseFloat(nameDollarMatch[1].replace(/,/g, "")) : null;
+      let amountUsed: number | null = null;
+      const yearMatch = textOf(group).match(/Earned this (?:Year|year):\s*\$([\d,]+(?:\.\d{2})?)/i);
+      if (yearMatch) amountUsed = parseFloat(yearMatch[1].replace(/,/g, ""));
+      if (amountUsed == null) amountUsed = totalAmount;
+      const remaining = amountUsed != null && totalAmount != null
+        ? Math.round((totalAmount - amountUsed) * 100) / 100 : null;
+      benefitMap.set(name, {
+        amountUsed: amountUsed != null && !isNaN(amountUsed) ? amountUsed : null,
+        totalAmount: totalAmount != null && !isNaN(totalAmount) ? totalAmount : null,
+        remaining, period: null,
+      });
+    }
+  }
+
+  for (const [name, benefit] of benefitMap) {
+    data.benefits.push({ name, ...benefit });
   }
 
   // ── Enrollment-only benefits (no dollar tracker) ─────────
   const benefitsPreview = document.getElementById("axp-benefits-preview");
   if (benefitsPreview) {
-    const benefitTiles = benefitsPreview.querySelectorAll('[data-testid="desktop-tile"]');
-    for (const tile of benefitTiles) {
+    for (const tile of benefitsPreview.querySelectorAll('[data-testid="desktop-tile"], [data-testid="mobile-tile"]')) {
       const headingEl = tile.querySelector("h3");
       if (!headingEl) continue;
-
       const name = textOf(headingEl);
-      if (!name || seenNames.has(name)) continue;
-      seenNames.add(name);
-
+      if (!name || benefitMap.has(name)) continue;
+      benefitMap.set(name, { amountUsed: null, totalAmount: null, remaining: null, period: null });
       const statusEl = tile.querySelector('[data-testid="enroll-status"] [data-status] p');
-      const enrollmentStatus = statusEl ? textOf(statusEl) : null;
-
-      data.benefits.push({
-        name,
-        amountUsed: null,
-        totalAmount: null,
-        remaining: null,
-        period: enrollmentStatus,
-      });
-    }
-
-    // Fallback: mobile tiles
-    if (data.benefits.length === 0) {
-      const mobileTiles = benefitsPreview.querySelectorAll('[data-testid="mobile-tile"]');
-      for (const tile of mobileTiles) {
-        const headingEl = tile.querySelector("h3");
-        if (!headingEl) continue;
-
-        const name = textOf(headingEl);
-        if (!name || seenNames.has(name)) continue;
-        seenNames.add(name);
-
-        const statusEl = tile.querySelector('[data-testid="enroll-status"] [data-status] p');
-        const enrollmentStatus = statusEl ? textOf(statusEl) : null;
-
-        data.benefits.push({
-          name,
-          amountUsed: null,
-          totalAmount: null,
-          remaining: null,
-          period: enrollmentStatus,
-        });
-      }
+      data.benefits.push({ name, amountUsed: null, totalAmount: null, remaining: null, period: statusEl ? textOf(statusEl) : null });
     }
   }
 
@@ -303,17 +386,17 @@ function scrapeRewardsDashboard() {
 // ── Orchestration ────────────────────────────────────────────
 
 async function waitForContentAndExpand(attemptId: string) {
-  await waitForSelector("#overview-vitals, [data-testid='tracker-grid-component']");
   runControl.throwIfCancelled(attemptId);
 
-  // Click "Show All" to expand all trackers if the button exists
-  const showAllBtn = Array.from(document.querySelectorAll("button")).find((b) => b.textContent?.trim() === "Show All");
+  // Click "Show All" / "Show all available trackers" to expand all trackers
+  const showAllBtn = Array.from(document.querySelectorAll("button")).find((b) => {
+    const text = b.textContent?.trim().toLowerCase() ?? "";
+    return text === "show all" || text.includes("show all available trackers");
+  });
   if (showAllBtn) {
     console.log("[NextCard Amex] Clicking Show All to expand trackers...");
     showAllBtn.click();
-    await runControl.sleep(3000, attemptId);
-  } else {
-    await runControl.sleep(4000, attemptId);
+    await runControl.sleep(1500, attemptId);
   }
 }
 
@@ -334,27 +417,38 @@ async function runExtraction(attemptId: string, cardIndex?: number) {
   }
 
   updateOverlay("extracting", "amex");
-  updateOverlayProgress("Reading rewards and benefits...");
+  updateOverlayProgress("Finding your Amex cards...");
   console.log("[NextCard Amex] Checking page state...");
 
-  // Wait for either the rewards content OR a non-eligible/unavailable state to appear.
-  // Non-MR cards show "isn't eligible" instead of #overview-vitals.
-  // Cancelled cards show "Page Unavailable" instead of #overview-vitals.
-  await waitForSelector('#overview-vitals, [data-testid="simple_switcher_display_status"]', 8000);
-  await runControl.sleep(1500, attemptId);
+  // Wait for page content — supports both /rewards and /card-benefits/view-all.
+  // First wait for the card switcher (fast), then wait for benefit trackers to load.
+  await waitForSelector('[data-testid="simple_switcher_display_name"]', 10000);
+  runControl.throwIfCancelled(attemptId);
 
-  const statusEl = document.querySelector('[data-testid="simple_switcher_display_status"]');
-  const currentStatus = statusEl ? textOf(statusEl).toLowerCase() : "";
-  const isCurrentCancelled = currentStatus.includes("cancel") || currentStatus.includes("closed");
-  const bodyText = document.body.innerText;
-  const isNotEligible = bodyText.includes("isn't eligible") || bodyText.includes("not eligible");
-  const pageUnavailable = !document.getElementById("overview-vitals") &&
-    (bodyText.includes("Page Unavailable") || bodyText.includes("has been cancelled") || isNotEligible);
+  // Show which card we're syncing
+  const currentCardName = document.querySelector('[data-testid="simple_switcher_display_name"]');
+  const currentCardNum = document.querySelector('[data-testid="simple_switcher_display_number_val"]');
+  if (currentCardName) {
+    const label = textOf(currentCardName).replace(/®/g, "");
+    const num = currentCardNum ? textOf(currentCardNum) : "";
+    updateOverlayProgress(`Syncing ${label}${num ? ` ${num}` : ""}...`);
+  }
 
-  console.log(`[NextCard Amex] Page state: cancelled=${isCurrentCancelled}, notEligible=${isNotEligible}, unavailable=${pageUnavailable}`);
+  // Wait for tracker content or timeout (some cards have no trackers)
+  await waitForSelector('[data-testid="tracker-component"], [data-testid="tracker-component-section"], [role="progressbar"]', 3000);
+  await runControl.sleep(500, attemptId);
 
-  if ((isCurrentCancelled || pageUnavailable) && cardIndex == null) {
-    // First card is cancelled — find an active card and switch to it
+  // Check if the current card is cancelled or page is unavailable
+  function isCardUnavailable(): boolean {
+    const statusEl = document.querySelector('[data-testid="simple_switcher_display_status"]');
+    const currentStatus = statusEl ? textOf(statusEl).toLowerCase() : "";
+    if (currentStatus.includes("cancel") || currentStatus.includes("closed")) return true;
+    const bodyText = document.body.innerText;
+    return bodyText.includes("Page Unavailable") || bodyText.includes("has been cancelled")
+      || bodyText.includes("isn't eligible") || bodyText.includes("not eligible");
+  }
+
+  if (isCardUnavailable() && cardIndex == null) {
     console.log("[NextCard Amex] Current card is cancelled/unavailable, finding active card...");
     const allOptions = await getCardOptions();
     const firstActive = allOptions.find((c) => !c.isCancelled);
@@ -367,27 +461,11 @@ async function runExtraction(attemptId: string, cardIndex?: number) {
     }
   } else {
     await waitForContentAndExpand(attemptId);
-
-    // Fallback: if content didn't load, recheck for cancelled state
-    if (!document.getElementById("overview-vitals") && cardIndex == null) {
-      const recheckStatus = document.querySelector('[data-testid="simple_switcher_display_status"]');
-      const recheckText = recheckStatus ? textOf(recheckStatus).toLowerCase() : "";
-      const recheckBody = document.body.innerText;
-      const recheckUnavailable = recheckBody.includes("Page Unavailable") || recheckBody.includes("has been cancelled") || recheckBody.includes("isn't eligible") || recheckBody.includes("not eligible");
-      if (recheckText.includes("cancel") || recheckText.includes("closed") || recheckUnavailable) {
-        console.log("[NextCard Amex] Content failed to load — card appears cancelled, finding active card...");
-        const fallbackOptions = await getCardOptions();
-        const fallbackActive = fallbackOptions.find((c) => !c.isCancelled);
-        if (fallbackActive) {
-          await openSwitcherAndClickCard(fallbackActive.index, attemptId);
-          await waitForContentAndExpand(attemptId);
-        }
-      }
-    }
   }
 
   if (cardIndex != null) {
     console.log(`[NextCard Amex] Switching to card index ${cardIndex}...`);
+    updateOverlayProgress("Switching card...");
     const switched = await openSwitcherAndClickCard(cardIndex, attemptId);
     if (!switched) {
       await runControl.sendMessage(attemptId, {
@@ -399,17 +477,22 @@ async function runExtraction(attemptId: string, cardIndex?: number) {
       return;
     }
 
-    // Check if this card is eligible for Membership Rewards before waiting for content
-    await waitForSelector('#overview-vitals, [data-testid="simple_switcher_display_status"]', 8000);
-    await runControl.sleep(1500, attemptId);
-    const switchedBodyText = document.body.innerText;
-    const switchedNotEligible = switchedBodyText.includes("isn't eligible") || switchedBodyText.includes("not eligible");
-    const switchedPageUnavailable = switchedBodyText.includes("Page Unavailable") || switchedBodyText.includes("has been cancelled");
+    // Show which card we switched to
+    const switchedCardName = document.querySelector('[data-testid="simple_switcher_display_name"]');
+    const switchedCardNum = document.querySelector('[data-testid="simple_switcher_display_number_val"]');
+    if (switchedCardName) {
+      const label = textOf(switchedCardName).replace(/®/g, "");
+      const num = switchedCardNum ? textOf(switchedCardNum) : "";
+      updateOverlayProgress(`Syncing ${label}${num ? ` ${num}` : ""}...`);
+    }
 
-    if (switchedNotEligible || switchedPageUnavailable) {
+    await waitForSelector('[data-testid="tracker-component"], [data-testid="tracker-component-section"], [role="progressbar"]', 3000);
+    await runControl.sleep(500, attemptId);
+
+    if (isCardUnavailable()) {
       const cardNameEl = document.querySelector('[data-testid="simple_switcher_display_name"]');
       const cardLabel = cardNameEl ? textOf(cardNameEl) : `card index ${cardIndex}`;
-      console.log(`[NextCard Amex] Card "${cardLabel}" is not eligible for Membership Rewards, skipping`);
+      console.log(`[NextCard Amex] Card "${cardLabel}" is not eligible, skipping`);
       await runControl.sendMessage(attemptId, {
         type: "AMEX_CARD_DONE",
         cardIndex,
@@ -423,7 +506,7 @@ async function runExtraction(attemptId: string, cardIndex?: number) {
   }
 
   runControl.throwIfCancelled(attemptId);
-  const scraped = scrapeRewardsDashboard();
+  const scraped = scrapeAmexPage();
 
   const cardOptions = await getCardOptions();
   const activeCards = cardOptions.filter((c) => !c.isCancelled);
@@ -468,6 +551,11 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       sendResponse({ options: options.filter((c) => !c.isCancelled) });
     });
     return true; // keep channel open for async response
+  }
+  if (message.type === "UPDATE_OVERLAY_PROGRESS") {
+    updateOverlayProgress(message.message);
+    sendResponse({ ok: true });
+    return true;
   }
   if (message.type === "AMEX_ALL_DONE") {
     hideOverlay();
