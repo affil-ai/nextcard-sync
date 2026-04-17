@@ -505,23 +505,33 @@ export function createChaseSync(options: ChaseSyncDeps) {
           let available: number | null = null;
           let pending: number | null = null;
 
-          for (const element of document.querySelectorAll(".points-balance .points")) {
-            const numberElement = element.querySelector(".mds-title-large span");
-            if (!numberElement) {
-              continue;
-            }
-            const rawValue = (numberElement.textContent ?? "")
-              .trim()
-              .replace(/[,\s]/g, "");
-            if (!/^-?\d+$/.test(rawValue)) {
-              continue;
-            }
-            const parsedValue = parseInt(rawValue, 10);
-            const context = (element.textContent ?? "").toLowerCase();
-            if (context.includes("available") && available == null) {
-              available = parsedValue;
-            } else if (context.includes("pending") && pending == null) {
-              pending = parsedValue;
+          // UR portal pages expose balance as a data attribute on the nav header
+          const balanceAttr = document.querySelector("[data-displayed-balance]")
+            ?.getAttribute("data-displayed-balance");
+          if (balanceAttr) {
+            const parsed = parseInt(balanceAttr.replace(/,/g, ""), 10);
+            if (!Number.isNaN(parsed)) available = parsed;
+          }
+
+          if (available == null) {
+            for (const element of document.querySelectorAll(".points-balance .points")) {
+              const numberElement = element.querySelector(".mds-title-large span");
+              if (!numberElement) {
+                continue;
+              }
+              const rawValue = (numberElement.textContent ?? "")
+                .trim()
+                .replace(/[,\s]/g, "");
+              if (!/^-?\d+$/.test(rawValue)) {
+                continue;
+              }
+              const parsedValue = parseInt(rawValue, 10);
+              const context = (element.textContent ?? "").toLowerCase();
+              if (context.includes("available") && available == null) {
+                available = parsedValue;
+              } else if (context.includes("pending") && pending == null) {
+                pending = parsedValue;
+              }
             }
           }
 
@@ -616,7 +626,23 @@ export function createChaseSync(options: ChaseSyncDeps) {
         args: [hubHash],
       });
 
-      const route = await waitForChaseCardRoute(attemptId, tabId, accountId);
+      let route = await waitForChaseCardRoute(attemptId, tabId, accountId);
+
+      // Chase sometimes briefly lands on benefits/hub before redirecting to the UR portal.
+      // Wait a moment and re-check to avoid starting a 120s extraction on a page that's about to leave.
+      if (route.kind === "benefits_hub") {
+        await new Promise((r) => setTimeout(r, 2000));
+        const recheckTab = await chrome.tabs.get(tabId).catch(() => null);
+        const recheckUrl = recheckTab?.url ?? "";
+        if (recheckUrl.includes("ultimaterewardspoints.chase.com")) {
+          route = { kind: "ur_portal", url: recheckUrl };
+        } else if (recheckUrl.includes("chaseloyalty.chase.com")) {
+          route = { kind: "loyalty_portal", url: recheckUrl };
+        } else if (recheckUrl.includes("logoff") || recheckUrl.includes("logon")) {
+          route = { kind: "session_expired", url: recheckUrl };
+        }
+      }
+
       if (route.kind === "benefits_hub") {
         const hasHub = route.url.includes("benefits/hub");
         if (hasHub) {
