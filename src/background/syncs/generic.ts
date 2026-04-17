@@ -250,18 +250,18 @@ export function createGenericSyncHandlers(options: GenericSyncDeps) {
             url.includes("/atmosrewards/") && !url.includes("/login");
 
           if (isAccountPage) {
-            setTimeout(() => {
-              void triggerExtraction({
-                providerId: "atmos",
-                attemptId,
-                tabId,
-                assertRunActive: options.stateStore.assertRunActive,
-              }).catch(() => {
-                console.warn(
-                  "[NextCard SW] Failed to trigger Atmos extraction after login",
-                );
-              });
-            }, 2000);
+            void triggerExtraction({
+              providerId: "atmos",
+              attemptId,
+              tabId,
+              assertRunActive: options.stateStore.assertRunActive,
+              retries: 6,
+              retryDelayMs: 5000,
+            }).catch(() => {
+              console.warn(
+                "[NextCard SW] Failed to trigger Atmos extraction after login",
+              );
+            });
             options.stateStore.updateProvider("atmos", { status: "extracting" });
           }
         }
@@ -294,6 +294,14 @@ export function createGenericSyncHandlers(options: GenericSyncDeps) {
             && message.state === "logged_in"
           ) {
             options.stateStore.updateProvider("atmos", { status: "extracting" });
+            void triggerExtraction({
+              providerId: "atmos",
+              attemptId,
+              tabId,
+              assertRunActive: options.stateStore.assertRunActive,
+              retries: 6,
+              retryDelayMs: 5000,
+            }).catch(() => {});
           }
         }
 
@@ -353,41 +361,14 @@ export function createGenericSyncHandlers(options: GenericSyncDeps) {
           });
         }
       } else {
-        try {
-          await triggerExtraction({
-            providerId: "atmos",
-            attemptId,
-            tabId,
-            assertRunActive: options.stateStore.assertRunActive,
-          });
-        } catch {
-          overview.cancel();
-          const recovery = await recoverFromStall({
-            providerId: "atmos",
-            attemptId,
-            tabId,
-            isFirstPhase: true,
-            assertRunActive: options.stateStore.assertRunActive,
-            triggerExtraction: () =>
-              triggerExtraction({
-                providerId: "atmos",
-                attemptId,
-                tabId,
-                assertRunActive: options.stateStore.assertRunActive,
-              }),
-          });
-          if (recovery === "login_needed") {
-            options.stateStore.updateProvider("atmos", { status: "waiting_for_login" });
-            await waitForAtmosLoginAndExtract(attemptId, tabId);
-          }
-          overview = waitForAtmosMessage(attemptId, "ATMOS_OVERVIEW_DONE");
-          await triggerExtraction({
-            providerId: "atmos",
-            attemptId,
-            tabId,
-            assertRunActive: options.stateStore.assertRunActive,
-          });
-        }
+        await triggerExtraction({
+          providerId: "atmos",
+          attemptId,
+          tabId,
+          assertRunActive: options.stateStore.assertRunActive,
+          retries: 6,
+          retryDelayMs: 5000,
+        });
       }
 
       let overviewResult: Record<string, unknown>;
@@ -737,8 +718,26 @@ export function createGenericSyncHandlers(options: GenericSyncDeps) {
       await waitForTabLoad(tabId, 30000);
       options.stateStore.recordRunTab(providerId, attemptId, tabId, { owned: true });
 
-      const currentTab = await chrome.tabs.get(tabId);
-      const landingUrl = currentTab.url ?? "";
+      let currentTab = await chrome.tabs.get(tabId);
+      let landingUrl = currentTab.url ?? "";
+
+      // If syncUrl was a sign-in page but we landed elsewhere (user already logged in),
+      // navigate to the account page so the content script can extract data.
+      if (
+        definition.accountUrl
+        && definition.syncUrl.match(/sign.?in|login/i)
+        && !landingUrl.match(/sign.?in|login/i)
+        && !landingUrl.includes("send-otp-challenge")
+        && !landingUrl.includes("otp-challenge")
+      ) {
+        const accountPattern = new RegExp(definition.accountUrlPattern.replace(/\*/g, ".*"));
+        if (!accountPattern.test(landingUrl)) {
+          await navigateAndWait(tabId, definition.accountUrl, options.extensionNavigatingTabs);
+          currentTab = await chrome.tabs.get(tabId);
+          landingUrl = currentTab.url ?? "";
+        }
+      }
+
       if (
         landingUrl.includes("send-otp-challenge")
         || landingUrl.includes("otp-challenge")
@@ -786,6 +785,16 @@ export function createGenericSyncHandlers(options: GenericSyncDeps) {
           });
         }
         return;
+      }
+
+      // If we opened the sign-in page but landed elsewhere (user already logged in),
+      // go directly to the account page.
+      const isOnSignIn = landingUrl.match(/sign.?in|login/i);
+      const accountPattern = new RegExp(definition.accountUrlPattern.replace(/\*/g, ".*"));
+      const isOnAccount = accountPattern.test(landingUrl);
+
+      if (!isOnSignIn && !isOnAccount && definition.accountUrl) {
+        await navigateAndWait(tabId, definition.accountUrl, options.extensionNavigatingTabs);
       }
 
       options.stateStore.updateProvider(providerId, { status: "detecting_login" });

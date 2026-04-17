@@ -30,7 +30,7 @@ export async function setAuth(auth: NextCardAuth): Promise<void> {
 }
 
 export async function clearAuth(): Promise<void> {
-  await chrome.storage.local.remove(STORAGE_KEY);
+  await chrome.storage.local.clear();
 }
 
 /**

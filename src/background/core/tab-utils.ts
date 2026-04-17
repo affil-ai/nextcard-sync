@@ -173,8 +173,10 @@ export async function triggerExtraction(options: {
   assertRunActive: (providerId: ProviderId, attemptId: string) => void;
   message?: Record<string, unknown>;
   retries?: number;
+  retryDelayMs?: number;
 }) {
   const retries = options.retries ?? 3;
+  const retryDelayMs = options.retryDelayMs ?? 2000;
   const message = options.message ?? { type: "START_EXTRACTION" };
 
   for (let attempt = 0; attempt < retries; attempt += 1) {
@@ -192,7 +194,7 @@ export async function triggerExtraction(options: {
       if (attempt === retries - 1) {
         throw new Error("Content script not reachable");
       }
-      await new Promise((resolve) => setTimeout(resolve, 2000));
+      await new Promise((resolve) => setTimeout(resolve, retryDelayMs));
     }
   }
 }
