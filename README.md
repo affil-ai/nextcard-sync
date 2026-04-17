@@ -1,3 +1,6 @@
+<img width="1920" height="926" alt="Screenshot 2026-04-16 at 6 19 57 PM" src="https://github.com/user-attachments/assets/c4104cfe-e222-440e-b93f-ce2b63675a88" />
+
+
 # nextcard sync
 
 Chrome extension that syncs your loyalty program balances, elite status, and credit card benefits to your [nextcard](https://nextcard.com) wallet.
