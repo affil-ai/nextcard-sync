@@ -119,7 +119,9 @@ async function updateOfferUrlCache(payload: OfferSyncPayload): Promise<void> {
   }
 }
 
-async function postOfferSync(payload: OfferSyncPayload): Promise<{ ok: boolean; error?: string }> {
+async function postOfferSync(
+  payload: OfferSyncPayload,
+): Promise<{ ok: boolean; error?: string; offerMap?: OfferUrlCache }> {
   const auth = await getAuth();
   if (!auth) {
     return { ok: false, error: "Not signed in to NextCard" };
@@ -142,7 +144,8 @@ async function postOfferSync(payload: OfferSyncPayload): Promise<{ ok: boolean; 
     return { ok: false, error: (result as Record<string, string>).error ?? `HTTP ${response.status}` };
   }
 
-  return { ok: true };
+  const body = await response.json().catch(() => ({}));
+  return { ok: true, offerMap: (body as Record<string, unknown>).offerMap as OfferUrlCache | undefined };
 }
 
 async function persistForRetry(payload: OfferSyncPayload): Promise<void> {
@@ -188,7 +191,11 @@ export async function syncOffersToNextCard(payload: OfferSyncPayload): Promise<v
     try {
       const result = await postOfferSync(payload);
       if (result.ok) {
-        await updateOfferUrlCache(payload);
+        if (result.offerMap) {
+          await chrome.storage.local.set({ [OFFER_URL_CACHE_KEY]: result.offerMap });
+        } else {
+          await updateOfferUrlCache(payload);
+        }
         return;
       }
 
@@ -227,6 +234,8 @@ export async function retryPendingOfferSyncs(): Promise<void> {
       const result = await postOfferSync(payload);
       if (!result.ok) {
         remaining.push(payload);
+      } else if (result.offerMap) {
+        await chrome.storage.local.set({ [OFFER_URL_CACHE_KEY]: result.offerMap });
       } else {
         await updateOfferUrlCache(payload);
       }
@@ -257,7 +266,7 @@ export async function pullOfferUrlCache(): Promise<void> {
     const data = await response.json();
     const offers: Array<{
       merchantName: string;
-      merchantUrl: string;
+      merchantUrl: string | null;
       offerValue: string | null;
       issuer: string;
       cardName: string;
@@ -271,6 +280,7 @@ export async function pullOfferUrlCache(): Promise<void> {
 
     const cache: OfferUrlCache = {};
     for (const offer of offers) {
+      if (!offer.merchantUrl) continue;
       const host = normalizeHostname(offer.merchantUrl);
       if (!host) continue;
 

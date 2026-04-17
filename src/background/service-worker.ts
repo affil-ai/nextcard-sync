@@ -6,7 +6,7 @@ import {
   pushToNextCard,
   validateProviderData,
 } from "../lib/sync-to-nextcard";
-import { syncOffersToNextCard, retryPendingOfferSyncs } from "../lib/sync-offers-to-nextcard";
+import { syncOffersToNextCard, retryPendingOfferSyncs, pullOfferUrlCache } from "../lib/sync-offers-to-nextcard";
 import type { OfferSyncPayload } from "../lib/sync-offers-to-nextcard";
 import { providerRegistry } from "../providers/provider-registry";
 import { createMessageRouter, createExternalMessageRouter } from "./core/message-router";
@@ -307,11 +307,17 @@ chrome.runtime.onMessageExternal.addListener(
   }),
 );
 
+chrome.alarms.create("pullOfferUrlCache", { periodInMinutes: 30 });
+chrome.alarms.onAlarm.addListener((alarm) => {
+  if (alarm.name === "pullOfferUrlCache") void pullOfferUrlCache();
+});
+
 void getAuth().then((auth) => {
   if (auth) {
     void hydrateFromNextCard().catch((error) => {
       console.warn("[NextCard SW] Startup hydrate failed:", error);
     });
     void retryPendingOfferSyncs();
+    void pullOfferUrlCache();
   }
 });
