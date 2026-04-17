@@ -24,6 +24,7 @@ import { createGenericSyncHandlers } from "./syncs/generic";
 import { createHyattSync } from "./syncs/hyatt";
 
 const VERIFY_INTERVAL_MS = 5 * 60 * 1000;
+type EnrolledOfferSyncMessage = Omit<OfferSyncPayload["offers"][number], "enrolledAt">;
 
 let lastVerifyAt = 0;
 let lastVerifyResult: NextCardAuth | null = null;
@@ -267,19 +268,8 @@ chrome.runtime.onMessage.addListener(
     pushToNextCard: pushScrapedData,
     deleteFromNextCard,
     syncEnrolledOffers: (issuer, message) => {
-      const enrolledOffers = message.enrolledOffers as Array<{
-        issuerOfferId: string;
-        merchantName: string;
-        offerValue: string | null;
-        category: string | null;
-        expirationDate: string | null;
-        rewardType: "percentage" | "flat_cash" | "points" | null;
-        rewardAmount: number | null;
-        rewardCurrency: string | null;
-        maxReward: number | null;
-        minSpend: number | null;
-        merchantUrl: string | null;
-      }>;
+      // Reuse the sync payload shape so message handlers stay aligned with backend expectations.
+      const enrolledOffers = message.enrolledOffers as EnrolledOfferSyncMessage[];
 
       const payload: OfferSyncPayload = {
         issuer,
