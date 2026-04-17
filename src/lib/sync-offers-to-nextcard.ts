@@ -10,6 +10,11 @@
 
 import { getAuth } from "./auth";
 
+function maskId(value: string | null | undefined): string {
+  if (!value || value.length <= 4) return value ?? "";
+  return "*".repeat(value.length - 4) + value.slice(-4);
+}
+
 export interface OfferSyncPayload {
   issuer: string;
   issuerCardId: string;
@@ -126,7 +131,10 @@ async function postOfferSync(payload: OfferSyncPayload): Promise<{ ok: boolean; 
       "Content-Type": "application/json",
       Authorization: `Bearer ${auth.token}`,
     },
-    body: JSON.stringify(payload),
+    body: JSON.stringify({
+      ...payload,
+      issuerCardId: maskId(payload.issuerCardId),
+    }),
   });
 
   if (!response.ok) {

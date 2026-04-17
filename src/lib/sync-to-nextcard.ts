@@ -31,6 +31,29 @@ import {
 import type { StandardizedLoyaltyData, StandardizedIssuerData, QualifyingMetric, Stat } from "../contracts/loyalty-provider-data";
 import { getAuth } from "./auth";
 
+function maskId(value: string | null | undefined): string | null {
+  if (!value || value.length <= 4) return value ?? null;
+  return "*".repeat(value.length - 4) + value.slice(-4);
+}
+
+const SENSITIVE_KEYS = new Set(["memberNumber", "memberName"]);
+
+function maskSensitiveFields<T>(obj: T): T {
+  if (obj === null || obj === undefined || typeof obj !== "object") return obj;
+  if (Array.isArray(obj)) return obj.map(maskSensitiveFields) as T;
+  const result: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(obj as Record<string, unknown>)) {
+    if (SENSITIVE_KEYS.has(key) && typeof value === "string") {
+      result[key] = maskId(value);
+    } else if (typeof value === "object" && value !== null) {
+      result[key] = maskSensitiveFields(value);
+    } else {
+      result[key] = value;
+    }
+  }
+  return result as T;
+}
+
 /** Maps extension provider IDs to Convex loyaltyPrograms slugs */
 const PROVIDER_TO_SLUG: Record<ProviderId, string> = {
   marriott: "marriott-bonvoy",
@@ -651,13 +674,13 @@ export async function pushToNextCard(
 
   const standardized = toStandardizedProviderData(provider, validatedProviderData.data);
   const common = extractCommonFields(provider, validatedProviderData.data);
-  const body = {
+  const body = maskSensitiveFields({
     provider,
     loyaltyProgramSlug: PROVIDER_TO_SLUG[provider],
     ...common,
     providerData: standardized,
     rawProviderData: data,
-  };
+  });
 
   try {
     const response = await fetch(`${__CONVEX_SITE_URL__}/extension/sync`, {
