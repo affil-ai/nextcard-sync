@@ -16,6 +16,7 @@
 import type { LoginState } from "../lib/types";
 import { createContentScriptRunControl } from "../lib/content-script-run-control";
 import { showOverlay, updateOverlay, updateOverlayProgress, hideOverlay } from "../lib/overlay";
+import { createLoginStateMonitor } from "../lib/login-state-monitor";
 
 const runControl = createContentScriptRunControl("amex");
 // ── Login detection ──────────────────────────────────────────
@@ -141,7 +142,6 @@ async function openSwitcherAndClickCard(cardIndex: number, attemptId: string): P
   }
 
   const targetOption = options[cardIndex] as HTMLElement;
-  console.log(`[NextCard Amex] Clicking card option: ${targetOption.textContent?.trim().substring(0, 60)}`);
   targetOption.click();
 
   await runControl.sleep(2500, attemptId);
@@ -379,7 +379,6 @@ function scrapeAmexPage() {
     }
   }
 
-  console.log("[NextCard Amex] Scraped data:", data);
   return data;
 }
 
@@ -394,7 +393,6 @@ async function waitForContentAndExpand(attemptId: string) {
     return text === "show all" || text.includes("show all available trackers");
   });
   if (showAllBtn) {
-    console.log("[NextCard Amex] Clicking Show All to expand trackers...");
     showAllBtn.click();
     await runControl.sleep(1500, attemptId);
   }
@@ -402,10 +400,9 @@ async function waitForContentAndExpand(attemptId: string) {
 
 async function runExtraction(attemptId: string, cardIndex?: number) {
   const loginState = detectLoginState();
-  console.log("[NextCard Amex] Login state:", loginState);
   await runControl.sendMessage(attemptId, { type: "LOGIN_STATE", state: loginState });
 
-  if (loginState !== "logged_in") {
+  if (loginState === "logged_out" || loginState === "mfa_challenge") {
     showOverlay("waiting_for_login", "amex");
     await runControl.sendMessage(attemptId, {
       type: "STATUS_UPDATE",
@@ -418,7 +415,6 @@ async function runExtraction(attemptId: string, cardIndex?: number) {
 
   updateOverlay("extracting", "amex");
   updateOverlayProgress("Finding your Amex cards...");
-  console.log("[NextCard Amex] Checking page state...");
 
   // Wait for page content — supports both /rewards and /card-benefits/view-all.
   // First wait for the card switcher (fast), then wait for benefit trackers to load.
@@ -449,11 +445,9 @@ async function runExtraction(attemptId: string, cardIndex?: number) {
   }
 
   if (isCardUnavailable() && cardIndex == null) {
-    console.log("[NextCard Amex] Current card is cancelled/unavailable, finding active card...");
     const allOptions = await getCardOptions();
     const firstActive = allOptions.find((c) => !c.isCancelled);
     if (firstActive) {
-      console.log(`[NextCard Amex] Switching to first active card: ${firstActive.name}`);
       const switched = await openSwitcherAndClickCard(firstActive.index, attemptId);
       if (switched) {
         await waitForContentAndExpand(attemptId);
@@ -464,7 +458,6 @@ async function runExtraction(attemptId: string, cardIndex?: number) {
   }
 
   if (cardIndex != null) {
-    console.log(`[NextCard Amex] Switching to card index ${cardIndex}...`);
     updateOverlayProgress("Switching card...");
     const switched = await openSwitcherAndClickCard(cardIndex, attemptId);
     if (!switched) {
@@ -492,7 +485,6 @@ async function runExtraction(attemptId: string, cardIndex?: number) {
     if (isCardUnavailable()) {
       const cardNameEl = document.querySelector('[data-testid="simple_switcher_display_name"]');
       const cardLabel = cardNameEl ? textOf(cardNameEl) : `card index ${cardIndex}`;
-      console.log(`[NextCard Amex] Card "${cardLabel}" is not eligible, skipping`);
       await runControl.sendMessage(attemptId, {
         type: "AMEX_CARD_DONE",
         cardIndex,
@@ -544,7 +536,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     sendResponse({ ok: true });
   }
   if (message.type === "GET_LOGIN_STATE") {
-    sendResponse({ state: detectLoginState() });
+    sendResponse({ state: monitor.getState() });
   }
   if (message.type === "GET_CARD_OPTIONS") {
     getCardOptions().then((options) => {
@@ -564,14 +556,30 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   return true;
 });
 
-const initialState = detectLoginState();
+let syncActive = false;
+const monitor = createLoginStateMonitor({
+  provider: "amex",
+  detectLoginState,
+  onStateChange(newState) {
+    if (!syncActive) return;
+    if (newState === "logged_in") {
+      updateOverlay("extracting", "amex");
+    } else if (newState === "mfa_challenge") {
+      updateOverlay("mfa_challenge", "amex");
+    } else {
+      updateOverlay("waiting_for_login", "amex");
+    }
+  },
+});
+monitor.start();
+const initialState = monitor.getState();
 chrome.runtime.sendMessage({ type: "GET_PROVIDER_STATUS", provider: "amex" }, (r) => {
   const s = r?.status;
   if (s === "extracting" || (s === "detecting_login" && initialState === "logged_in")) {
+    syncActive = true;
     showOverlay("extracting", "amex");
   } else if ((s === "waiting_for_login" || s === "detecting_login") && initialState !== "logged_in") {
+    syncActive = true;
     showOverlay("waiting_for_login", "amex");
   }
 });
-chrome.runtime.sendMessage({ type: "LOGIN_STATE", provider: "amex", state: initialState }).catch(() => {});
-console.log("[NextCard Amex] Content script loaded. Login state:", initialState);

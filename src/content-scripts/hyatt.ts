@@ -10,6 +10,7 @@
 import type { HyattLoyaltyData, LoginState } from "../lib/types";
 import { createContentScriptRunControl } from "../lib/content-script-run-control";
 import { showOverlay, updateOverlay, updateOverlayProgress } from "../lib/overlay";
+import { createLoginStateMonitor } from "../lib/login-state-monitor";
 
 const runControl = createContentScriptRunControl("hyatt");
 
@@ -203,7 +204,6 @@ function scrapeAccountPage(): HyattLoyaltyData {
     }
   } catch (e) { console.warn("[NextCard Hyatt] milestoneChoices:", e); }
 
-  console.log("[NextCard Hyatt] Scraped overview data:", data);
   return data;
 }
 
@@ -240,7 +240,6 @@ function scrapeAwardsPage(): Award[] {
     }
   } catch (e) { console.warn("[NextCard Hyatt] awards scrape:", e); }
 
-  console.log(`[NextCard Hyatt] Scraped ${awards.length} awards`);
   return awards;
 }
 
@@ -248,10 +247,9 @@ function scrapeAwardsPage(): Award[] {
 
 async function runExtraction(attemptId: string) {
   const loginState = detectLoginState();
-  console.log("[NextCard Hyatt] Login state:", loginState);
   await runControl.sendMessage(attemptId, { type: "LOGIN_STATE", state: loginState });
 
-  if (loginState !== "logged_in") {
+  if (loginState === "logged_out" || loginState === "mfa_challenge") {
     showOverlay("waiting_for_login", "hyatt");
     await runControl.sendMessage(attemptId, {
       type: "STATUS_UPDATE",
@@ -264,7 +262,6 @@ async function runExtraction(attemptId: string) {
 
   updateOverlay("extracting", "hyatt");
   updateOverlayProgress("Reading points and tier progress...");
-  console.log("[NextCard Hyatt] Waiting for account content...");
   await waitForSelector('[data-locator="points-balance"], [data-locator="type"]', 20000);
   await runControl.sleep(3000, attemptId);
 
@@ -274,13 +271,11 @@ async function runExtraction(attemptId: string) {
 }
 
 async function runAwardsScrape(attemptId: string) {
-  console.log("[NextCard Hyatt] Scraping awards page...");
 
   // Wait briefly for the page to render, then check if awards exist.
   // Some members (e.g. basic Member tier) may have no awards at all.
   const el = await waitForSelector('[data-locator="awardList"]', 8000);
   if (!el) {
-    console.log("[NextCard Hyatt] No awards found on page");
     await runControl.sendMessage(attemptId, { type: "AWARDS_SCRAPED", awards: [] });
     return;
   }
@@ -318,19 +313,35 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     sendResponse({ ok: true });
   }
   if (message.type === "GET_LOGIN_STATE") {
-    sendResponse({ state: detectLoginState() });
+    sendResponse({ state: monitor.getState() });
   }
   return true;
 });
 
-const initialState = detectLoginState();
+let syncActive = false;
+const monitor = createLoginStateMonitor({
+  provider: "hyatt",
+  detectLoginState,
+  onStateChange(newState) {
+    if (!syncActive) return;
+    if (newState === "logged_in") {
+      updateOverlay("extracting", "hyatt");
+    } else if (newState === "mfa_challenge") {
+      updateOverlay("mfa_challenge", "hyatt");
+    } else {
+      updateOverlay("waiting_for_login", "hyatt");
+    }
+  },
+});
+monitor.start();
+const initialState = monitor.getState();
 chrome.runtime.sendMessage({ type: "GET_PROVIDER_STATUS", provider: "hyatt" }, (r) => {
   const s = r?.status;
   if (s === "extracting" || (s === "detecting_login" && initialState === "logged_in")) {
+    syncActive = true;
     showOverlay("extracting", "hyatt");
   } else if ((s === "waiting_for_login" || s === "detecting_login") && initialState !== "logged_in") {
+    syncActive = true;
     showOverlay("waiting_for_login", "hyatt");
   }
 });
-chrome.runtime.sendMessage({ type: "LOGIN_STATE", provider: "hyatt", state: initialState }).catch(() => {});
-console.log("[NextCard Hyatt] Content script loaded. Login state:", initialState);

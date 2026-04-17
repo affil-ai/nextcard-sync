@@ -33,6 +33,8 @@ interface ChaseOffer {
   offerEndTimestamp: string | null;
   shortMessageText: string | null;
   merchantUrl: string | null;
+  merchantLogoUrl: string | null;
+  redemptionChannel: "online" | "in_store" | "both" | null;
 }
 
 // ── Helpers ────────────────────────────────────────────────
@@ -153,6 +155,15 @@ async function listOffers(cardIds: string[], primaryCardId: string): Promise<Cha
           offerEndTimestamp: (details?.offerEndTimestamp ?? null) as string | null,
           shortMessageText: (display?.shortMessageText ?? null) as string | null,
           merchantUrl: ((display?.links as Record<string, Record<string, unknown>> | undefined)?.displayLink?.linkText ?? null) as string | null,
+          merchantLogoUrl: ((display?.images as Record<string, Record<string, unknown>> | undefined)?.logo?.imageLinkUrlText ?? null) as string | null,
+          redemptionChannel: (() => {
+            const locs = (display?.locationRestrictions as Array<{ locationName: string }> | undefined) ?? [];
+            const names = locs.map((l) => l.locationName);
+            if (names.includes("ONLINE") && names.some((n) => n.includes("LOCATION") || n.includes("STORE"))) return "both" as const;
+            if (names.includes("ONLINE")) return "online" as const;
+            if (names.length > 0) return "in_store" as const;
+            return null;
+          })(),
         };
       });
   } catch (e) {
@@ -197,7 +208,6 @@ async function runEnrollment(cardId: string, allCardIds: string[]) {
 
   sendProgress({ status: "fetching" });
   const offers = await listOffers(allCardIds, cardId);
-  console.log(`[NextCard Chase Offers] Found ${offers.length} eligible offers`);
 
   if (offers.length === 0) {
     chrome.runtime.sendMessage({ type: "CHASE_OFFERS_COMPLETE", added: 0 }).catch(() => {});
@@ -225,7 +235,6 @@ async function runEnrollment(cardId: string, allCardIds: string[]) {
   }
 
   sendProgress({ added, failed, total: offers.length });
-  console.log(`[NextCard Chase Offers] Done: ${added} added, ${failed} failed`);
   chrome.runtime.sendMessage({
     type: "CHASE_OFFERS_COMPLETE",
     added,
@@ -245,6 +254,8 @@ async function runEnrollment(cardId: string, allCardIds: string[]) {
       maxReward: o.maximumRewardAmount === 0 ? null : o.maximumRewardAmount,
       minSpend: o.minimumSpendAmount === 0 ? null : o.minimumSpendAmount,
       merchantUrl: o.merchantUrl,
+      merchantLogoUrl: o.merchantLogoUrl,
+      redemptionChannel: o.redemptionChannel,
     })),
   }).catch(() => {});
 }
@@ -258,10 +269,21 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (message.type === "CHASE_OFFERS_DISCOVER") {
     (async () => {
       const cards = await discoverCards();
+      if (cards.length === 0) {
+        sendResponse({ type: "CHASE_OFFERS_READY", cards: [], offerCounts: {}, error: "no_cards" });
+        return;
+      }
+      const allCardIds = cards.map((c) => c.id);
+      const probes = await Promise.all(cards.map((c) => listOffers(allCardIds, c.id)));
+      const offerCounts: Record<string, number> = {};
+      for (let i = 0; i < cards.length; i++) {
+        offerCounts[cards[i].id] = probes[i].length;
+      }
       sendResponse({
         type: "CHASE_OFFERS_READY",
         cards: cards.map((c) => ({ id: c.id, name: c.name, lastDigits: c.lastDigits })),
-        error: cards.length === 0 ? "no_cards" : undefined,
+        offerCounts,
+        error: undefined,
       });
     })();
     return true;
@@ -282,4 +304,3 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   }
 });
 
-console.log("[NextCard Chase Offers] Content script loaded");

@@ -27,9 +27,26 @@ export interface OfferSyncPayload {
     maxReward: number | null;
     minSpend: number | null;
     merchantUrl: string | null;
+    merchantLogoUrl: string | null;
+    redemptionChannel: "online" | "in_store" | "both" | null;
     enrolledAt: string;
   }>;
 }
+
+export interface CachedOffer {
+  merchantName: string;
+  offerValue: string | null;
+  cardName: string;
+  cardLastDigits: string | null;
+  expirationDate: string | null;
+  issuer: string;
+  rewardType: "percentage" | "flat_cash" | "points" | null;
+  rewardAmount: number | null;
+}
+
+export type OfferUrlCache = Record<string, CachedOffer[]>;
+
+export const OFFER_URL_CACHE_KEY = "offerUrlCache";
 
 const MAX_RETRIES = 2;
 const RETRY_DELAY_MS = 2000;
@@ -37,6 +54,64 @@ const STORAGE_KEY = "pendingOfferSyncs";
 
 function delay(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
+}
+
+export function normalizeHostname(urlOrHostname: string): string | null {
+  try {
+    let hostname: string;
+    if (urlOrHostname.includes("://")) {
+      hostname = new URL(urlOrHostname).hostname;
+    } else {
+      hostname = urlOrHostname;
+    }
+    return hostname.replace(/^www\./, "").toLowerCase();
+  } catch {
+    return null;
+  }
+}
+
+async function updateOfferUrlCache(payload: OfferSyncPayload): Promise<void> {
+  try {
+    const stored = await chrome.storage.local.get(OFFER_URL_CACHE_KEY);
+    const cache: OfferUrlCache = stored[OFFER_URL_CACHE_KEY] ?? {};
+
+    for (const offer of payload.offers) {
+      if (!offer.merchantUrl) continue;
+
+      const hostname = normalizeHostname(offer.merchantUrl);
+      if (!hostname) continue;
+
+      const entry: CachedOffer = {
+        merchantName: offer.merchantName,
+        offerValue: offer.offerValue,
+        cardName: payload.issuerCardName,
+        cardLastDigits: payload.issuerCardLastDigits,
+        expirationDate: offer.expirationDate,
+        issuer: payload.issuer,
+        rewardType: offer.rewardType,
+        rewardAmount: offer.rewardAmount,
+      };
+
+      if (!cache[hostname]) {
+        cache[hostname] = [entry];
+      } else {
+        // Dedupe by issuer + card + merchant
+        const isDupe = cache[hostname].some(
+          (e) =>
+            e.issuer === entry.issuer &&
+            e.cardLastDigits === entry.cardLastDigits &&
+            e.merchantName === entry.merchantName,
+        );
+        if (!isDupe) {
+          cache[hostname].push(entry);
+        }
+      }
+    }
+
+    await chrome.storage.local.set({ [OFFER_URL_CACHE_KEY]: cache });
+  } catch (e) {
+    console.error("[NextCard Offers] Failed to update offer URL cache:", e);
+  }
 }
 
 async function postOfferSync(payload: OfferSyncPayload): Promise<{ ok: boolean; error?: string }> {
@@ -68,20 +143,44 @@ async function persistForRetry(payload: OfferSyncPayload): Promise<void> {
     const pending: OfferSyncPayload[] = stored[STORAGE_KEY] ?? [];
     pending.push(payload);
     await chrome.storage.local.set({ [STORAGE_KEY]: pending });
-    console.log(`[NextCard Offers Sync] Persisted payload for retry (${pending.length} pending)`);
   } catch (e) {
     console.error("[NextCard Offers Sync] Failed to persist for retry:", e);
   }
 }
 
+/** Backfill fields that may be missing from stale persisted payloads. */
+function normalizeOffers(payload: OfferSyncPayload): OfferSyncPayload {
+  return {
+    ...payload,
+    offers: payload.offers.map((o) => ({
+      issuerOfferId: o.issuerOfferId,
+      merchantName: o.merchantName,
+      offerValue: o.offerValue ?? null,
+      category: o.category ?? null,
+      expirationDate: o.expirationDate ?? null,
+      rewardType: o.rewardType ?? null,
+      rewardAmount: o.rewardAmount ?? null,
+      rewardCurrency: o.rewardCurrency ?? null,
+      maxReward: o.maxReward ?? null,
+      minSpend: o.minSpend ?? null,
+      merchantUrl: o.merchantUrl ?? null,
+      merchantLogoUrl: o.merchantLogoUrl ?? null,
+      redemptionChannel: o.redemptionChannel ?? null,
+      enrolledAt: o.enrolledAt,
+    })),
+  };
+}
+
 export async function syncOffersToNextCard(payload: OfferSyncPayload): Promise<void> {
   if (payload.offers.length === 0) return;
+
+  payload = normalizeOffers(payload);
 
   for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
     try {
       const result = await postOfferSync(payload);
       if (result.ok) {
-        console.log(`[NextCard Offers Sync] Synced ${payload.offers.length} ${payload.issuer} offers`);
+        await updateOfferUrlCache(payload);
         return;
       }
 
@@ -113,15 +212,15 @@ export async function retryPendingOfferSyncs(): Promise<void> {
     const pending: OfferSyncPayload[] = stored[STORAGE_KEY] ?? [];
     if (pending.length === 0) return;
 
-    console.log(`[NextCard Offers Sync] Retrying ${pending.length} pending syncs`);
 
     const remaining: OfferSyncPayload[] = [];
-    for (const payload of pending) {
+    for (const raw of pending) {
+      const payload = normalizeOffers(raw);
       const result = await postOfferSync(payload);
       if (!result.ok) {
         remaining.push(payload);
       } else {
-        console.log(`[NextCard Offers Sync] Retried ${payload.offers.length} ${payload.issuer} offers`);
+        await updateOfferUrlCache(payload);
       }
     }
 
@@ -131,5 +230,62 @@ export async function retryPendingOfferSyncs(): Promise<void> {
     }
   } catch (e) {
     console.error("[NextCard Offers Sync] retryPendingOfferSyncs error:", e);
+  }
+}
+
+/** Pull enrolled offers from backend and rebuild the URL cache. Call on startup/re-auth. */
+export async function pullOfferUrlCache(): Promise<void> {
+  try {
+    const auth = await getAuth();
+    if (!auth) return;
+
+    const response = await fetch(`${__CONVEX_SITE_URL__}/extension/offers-pull`, {
+      method: "GET",
+      headers: { Authorization: `Bearer ${auth.token}` },
+    });
+
+    if (!response.ok) return;
+
+    const data = await response.json();
+    const offers: Array<{
+      merchantName: string;
+      merchantUrl: string;
+      offerValue: string | null;
+      issuer: string;
+      cardName: string;
+      cardLastDigits: string | null;
+      expirationDate: string | null;
+      rewardType: "percentage" | "flat_cash" | "points" | null;
+      rewardAmount: number | null;
+    }> = data.offers ?? [];
+
+    if (offers.length === 0) return;
+
+    const cache: OfferUrlCache = {};
+    for (const offer of offers) {
+      const host = normalizeHostname(offer.merchantUrl);
+      if (!host) continue;
+
+      const entry: CachedOffer = {
+        merchantName: offer.merchantName,
+        offerValue: offer.offerValue,
+        cardName: offer.cardName,
+        cardLastDigits: offer.cardLastDigits,
+        expirationDate: offer.expirationDate,
+        issuer: offer.issuer,
+        rewardType: offer.rewardType,
+        rewardAmount: offer.rewardAmount,
+      };
+
+      if (!cache[host]) {
+        cache[host] = [entry];
+      } else {
+        cache[host].push(entry);
+      }
+    }
+
+    await chrome.storage.local.set({ [OFFER_URL_CACHE_KEY]: cache });
+  } catch (e) {
+    console.error("[NextCard Offers] pullOfferUrlCache error:", e);
   }
 }

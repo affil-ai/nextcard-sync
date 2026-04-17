@@ -9,6 +9,7 @@
 import type { AtmosLoyaltyData, AtmosRewardCard, AtmosDiscount, LoginState } from "../lib/types";
 import { createContentScriptRunControl } from "../lib/content-script-run-control";
 import { showOverlay, updateOverlay, updateOverlayProgress } from "../lib/overlay";
+import { createLoginStateMonitor } from "../lib/login-state-monitor";
 
 const runControl = createContentScriptRunControl("atmos");
 
@@ -17,7 +18,7 @@ const runControl = createContentScriptRunControl("atmos");
 function detectLoginState(): LoginState {
   const url = window.location.href.toLowerCase();
 
-  if (url.includes("/login") || url.includes("/signin")) {
+  if (url.includes("/login") || url.includes("/signin") || url.includes("auth0.alaskaair.com")) {
     return "logged_out";
   }
 
@@ -144,7 +145,6 @@ function scrapeOverviewPage(): Partial<AtmosLoyaltyData> {
     }
   }
 
-  console.log("[NextCard Atmos] Overview data:", data);
   return data;
 }
 
@@ -170,7 +170,6 @@ function scrapeRewardsPage(): AtmosRewardCard[] {
     });
   }
 
-  console.log("[NextCard Atmos] Rewards data:", rewards);
   return rewards;
 }
 
@@ -221,11 +220,9 @@ async function scrapeDiscountsPage(attemptId: string): Promise<AtmosDiscount[]> 
       runControl.throwIfCancelled(attemptId);
       const shadowBtn = nameEl.shadowRoot?.querySelector("a, button, [role='button']") as HTMLElement | null;
       (shadowBtn ?? nameEl).click();
-      console.log("[NextCard Atmos] Clicked discount hyperlink:", name, "shadow:", !!shadowBtn);
 
       // Wait for auro-dialog to open, then wait for its content to load
       const dialog = await waitForOpenDialog(5000);
-      console.log("[NextCard Atmos] Dialog found:", !!dialog);
       if (dialog) {
         // Dialog opens before content loads — poll until we get substantial text
         let content = "";
@@ -251,7 +248,6 @@ async function scrapeDiscountsPage(attemptId: string): Promise<AtmosDiscount[]> 
     discounts.push({ name, code, expiration, details });
   }
 
-  console.log("[NextCard Atmos] Discounts data:", discounts);
   return discounts;
 }
 
@@ -280,7 +276,6 @@ function waitForOpenDialog(maxWaitMs: number): Promise<Element | null> {
 
     const timeout = setTimeout(() => {
       observer.disconnect();
-      console.log("[NextCard Atmos] Dialog wait timed out");
       resolve(null);
     }, maxWaitMs);
 
@@ -319,11 +314,12 @@ function closeDialog(dialog: Element) {
 // ── Orchestration ────────────────────────────────────────────
 
 async function runOverviewExtraction(attemptId: string) {
-  const loginState = detectLoginState();
-  console.log("[NextCard Atmos] Login state:", loginState);
+  let loginState = monitor.getState();
+  // Monitor may not have evaluated yet — fall back to direct check
+  if (loginState === "unknown") loginState = detectLoginState();
   await runControl.sendMessage(attemptId, { type: "LOGIN_STATE", state: loginState });
 
-  if (loginState !== "logged_in") {
+  if (loginState === "logged_out" || loginState === "mfa_challenge") {
     showOverlay("waiting_for_login", "atmos");
     await runControl.sendMessage(attemptId, {
       type: "STATUS_UPDATE",
@@ -336,7 +332,6 @@ async function runOverviewExtraction(attemptId: string) {
 
   updateOverlay("extracting", "atmos");
   updateOverlayProgress("Reading miles and status...");
-  console.log("[NextCard Atmos] Waiting for overview content...");
   await waitForSelector(".member-info .display-md");
   await runControl.sleep(2000, attemptId);
 
@@ -346,7 +341,6 @@ async function runOverviewExtraction(attemptId: string) {
 }
 
 async function runRewardsExtraction(attemptId: string) {
-  console.log("[NextCard Atmos] Waiting for rewards content...");
   await waitForSelector(".rewards-card");
   await runControl.sleep(3000, attemptId);
 
@@ -356,7 +350,6 @@ async function runRewardsExtraction(attemptId: string) {
 }
 
 async function runDiscountsExtraction(attemptId: string) {
-  console.log("[NextCard Atmos] Waiting for discounts content...");
   await waitForSelector("table.auro_table");
   await runControl.sleep(3000, attemptId);
 
@@ -388,19 +381,35 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     sendResponse({ ok: true });
   }
   if (message.type === "GET_LOGIN_STATE") {
-    sendResponse({ state: detectLoginState() });
+    sendResponse({ state: monitor.getState() });
   }
   return true;
 });
 
-const initialState = detectLoginState();
+let syncActive = false;
+const monitor = createLoginStateMonitor({
+  provider: "atmos",
+  detectLoginState,
+  onStateChange(newState) {
+    if (!syncActive) return;
+    if (newState === "logged_in") {
+      updateOverlay("extracting", "atmos");
+    } else if (newState === "mfa_challenge") {
+      updateOverlay("mfa_challenge", "atmos");
+    } else {
+      updateOverlay("waiting_for_login", "atmos");
+    }
+  },
+});
+monitor.start();
+const initialState = monitor.getState();
 chrome.runtime.sendMessage({ type: "GET_PROVIDER_STATUS", provider: "atmos" }, (r) => {
   const s = r?.status;
   if (s === "extracting" || (s === "detecting_login" && initialState === "logged_in")) {
+    syncActive = true;
     showOverlay("extracting", "atmos");
   } else if ((s === "waiting_for_login" || s === "detecting_login") && initialState !== "logged_in") {
+    syncActive = true;
     showOverlay("waiting_for_login", "atmos");
   }
 });
-chrome.runtime.sendMessage({ type: "LOGIN_STATE", provider: "atmos", state: initialState }).catch(() => {});
-console.log("[NextCard Atmos] Content script loaded. Login state:", initialState);

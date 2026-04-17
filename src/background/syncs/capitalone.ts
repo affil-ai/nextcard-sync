@@ -279,14 +279,10 @@ export function createCapitalOneSync(options: CapitalOneSyncDeps) {
       error: null,
       lastSyncedAt: new Date().toISOString(),
     });
-    console.log(
-      `[NextCard SW] CapitalOne sync complete: ${allCards.length} card(s), ${totalRewards} ${rewardsLabel.toLowerCase()}, ${benefits.length} benefits`,
-    );
 
     options.stateStore.assertRunActive("capitalone", attemptId);
     void options.pushToNextCard("capitalone", multiCardData).then((pushResult) => {
       if (pushResult.ok) {
-        console.log("[NextCard SW] CapitalOne pushed to NextCard");
       } else {
         console.warn("[NextCard SW] CapitalOne push failed:", pushResult.error);
       }
@@ -316,7 +312,6 @@ export function createCapitalOneSync(options: CapitalOneSyncDeps) {
 
       const currentTab = await chrome.tabs.get(tabId);
       const landingUrl = currentTab.url ?? "";
-      console.log("[NextCard SW] CapitalOne: landed on:", landingUrl);
 
       const isLoggedIn =
         landingUrl.includes("myaccounts.capitalone.com/accountSummary")
@@ -354,7 +349,6 @@ export function createCapitalOneSync(options: CapitalOneSyncDeps) {
         options.stateStore.updateProvider("capitalone", {
           status: "waiting_for_login",
         });
-        console.log("[NextCard SW] CapitalOne: waiting for login...");
         summaryResult = await options.waitForGenericLoginAndExtract(
           "capitalone",
           attemptId,
@@ -364,7 +358,6 @@ export function createCapitalOneSync(options: CapitalOneSyncDeps) {
         options.stateStore.updateProvider("capitalone", {
           status: "waiting_for_login",
         });
-        console.log("[NextCard SW] CapitalOne: unknown page, waiting for login...");
         summaryResult = await options.waitForGenericLoginAndExtract(
           "capitalone",
           attemptId,
@@ -374,9 +367,7 @@ export function createCapitalOneSync(options: CapitalOneSyncDeps) {
 
       let travelCredit: TravelCreditData | null = null;
       try {
-        console.log("[NextCard SW] CapitalOne: scraping travel credits...");
         travelCredit = await scrapeCapitalOneTravelCredits(tabId);
-        console.log("[NextCard SW] CapitalOne: travel credit data:", travelCredit);
       } catch (error) {
         console.warn(
           "[NextCard SW] CapitalOne: failed to scrape travel credits:",
@@ -387,7 +378,6 @@ export function createCapitalOneSync(options: CapitalOneSyncDeps) {
       await capitalOneFinalize(attemptId, summaryResult, travelCredit);
     } catch (error) {
       if (options.stateStore.wasRunCancelled("capitalone", attemptId, error)) {
-        console.log("[NextCard SW] CapitalOne sync cancelled");
         return;
       }
 

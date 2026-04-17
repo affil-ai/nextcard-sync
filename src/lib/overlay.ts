@@ -12,7 +12,7 @@
  *   hideOverlay();                      // done — auto-fades after brief "Done"
  */
 
-type OverlayStatus = "waiting_for_login" | "extracting" | "done" | "cancelled" | "error";
+type OverlayStatus = "waiting_for_login" | "mfa_challenge" | "extracting" | "done" | "cancelled" | "error";
 
 const HOST_ID = "nextcard-sync-overlay";
 const ICON_URL = chrome.runtime.getURL("src/icons/icon128.png");
@@ -33,6 +33,17 @@ function getStatusConfig(status: OverlayStatus) {
         steps: [
           "Sign in to your account as you normally would",
           "Once logged in, we'll read your data automatically",
+          "<strong>Don't close or navigate away from this tab</strong>",
+        ],
+        dotClass: "dot-waiting",
+        showShield: true,
+        showProgressMessage: false,
+      };
+    case "mfa_challenge":
+      return {
+        heading: "Complete the security verification",
+        steps: [
+          "We'll continue automatically once you're verified",
           "<strong>Don't close or navigate away from this tab</strong>",
         ],
         dotClass: "dot-waiting",
@@ -421,7 +432,7 @@ function startPollIfNeeded() {
       // Keep long-running multi-page flows visually in sync as the worker advances.
       if (s === "extracting" && currentStatus !== "extracting") {
         updateOverlay("extracting");
-      } else if (s === "waiting_for_login" && currentStatus !== "waiting_for_login") {
+      } else if (s === "waiting_for_login" && currentStatus !== "waiting_for_login" && currentStatus !== "mfa_challenge") {
         updateOverlay("waiting_for_login");
       } else if (s === "done") {
         hideOverlay("done");
@@ -446,7 +457,7 @@ export function showOverlay(status: OverlayStatus, provider?: string): void {
 
   hostEl = document.createElement("div");
   hostEl.id = HOST_ID;
-  if (status === "waiting_for_login") hostEl.classList.add("nc-login");
+  if (status === "waiting_for_login" || status === "mfa_challenge") hostEl.classList.add("nc-login");
   shadowRoot = hostEl.attachShadow({ mode: "closed" });
   shadowRoot.innerHTML = buildBanner(status);
   currentStatus = status;
@@ -476,7 +487,7 @@ export function updateOverlay(status: OverlayStatus, provider?: string): void {
     banner.style.transition = "opacity 0.25s ease";
     banner.style.opacity = "0";
     setTimeout(() => {
-      if (status === "waiting_for_login") {
+      if (status === "waiting_for_login" || status === "mfa_challenge") {
         hostEl!.classList.add("nc-login");
       } else {
         hostEl!.classList.remove("nc-login");
@@ -491,7 +502,7 @@ export function updateOverlay(status: OverlayStatus, provider?: string): void {
       }
     }, 250);
   } else {
-    if (status === "waiting_for_login") {
+    if (status === "waiting_for_login" || status === "mfa_challenge") {
       hostEl.classList.add("nc-login");
     } else {
       hostEl.classList.remove("nc-login");

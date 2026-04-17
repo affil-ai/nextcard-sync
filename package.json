@@ -1,6 +1,6 @@
 {
-  "name": "nextcard-ext",
-  "version": "0.4.8",
+  "name": "nextcard-sync",
+  "version": "0.5.2",
   "private": true,
   "type": "module",
   "packageManager": "pnpm@9.15.4",
@@ -8,9 +8,7 @@
     "dev": "vite build --watch --mode development",
     "build": "vite build",
     "clean": "rm -rf dist dist-dev extension.zip",
-    "typecheck": "tsc --noEmit",
-    "test": "vitest",
-    "test:run": "vitest run"
+    "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "immutable": "^5.1.5",
@@ -23,8 +21,7 @@
     "@types/chrome": "^0.0.287",
     "@types/node": "^22.15.19",
     "typescript": "^5.7.3",
-    "vite": "^5.4.0",
-    "vitest": "^3.2.4"
+    "vite": "^5.4.0"
   },
   "engines": {
     "node": ">=18"

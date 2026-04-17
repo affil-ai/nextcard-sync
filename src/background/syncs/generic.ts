@@ -85,7 +85,6 @@ export function createGenericSyncHandlers(options: GenericSyncDeps) {
             options.stateStore.updateProvider(providerId, {
               status: "waiting_for_login",
             });
-            console.log("[NextCard SW] Marriott: 2FA challenge detected, waiting...");
             return;
           }
 
@@ -343,7 +342,6 @@ export function createGenericSyncHandlers(options: GenericSyncDeps) {
       if (await checkIfLoginPage(tabId)) {
         overview.cancel();
         options.stateStore.updateProvider("atmos", { status: "waiting_for_login" });
-        console.log("[NextCard SW] Atmos: on login page, waiting...");
         const loginResult = await waitForAtmosLoginAndExtract(attemptId, tabId);
         overview = waitForAtmosMessage(attemptId, "ATMOS_OVERVIEW_DONE");
         if (loginResult.type !== "ATMOS_OVERVIEW_DONE") {
@@ -425,14 +423,12 @@ export function createGenericSyncHandlers(options: GenericSyncDeps) {
         && overviewResult.status === "waiting_for_login"
       ) {
         options.stateStore.updateProvider("atmos", { status: "waiting_for_login" });
-        console.log("[NextCard SW] Atmos: waiting for login...");
         const loginResult = await waitForAtmosLoginAndExtract(attemptId, tabId);
         Object.assign(overviewResult, loginResult);
       }
 
       options.stateStore.assertRunActive("atmos", attemptId);
       const overviewData = (overviewResult.data ?? {}) as Partial<AtmosLoyaltyData>;
-      console.log("[NextCard SW] Atmos overview done:", overviewData);
 
       await navigateAndWait(
         tabId,
@@ -452,7 +448,6 @@ export function createGenericSyncHandlers(options: GenericSyncDeps) {
         rewardsResult = await rewardsMessage.promise;
       } catch {
         rewardsMessage.cancel();
-        console.log("[NextCard SW] Atmos rewards timed out, retrying...");
         await triggerExtraction({
           providerId: "atmos",
           attemptId,
@@ -465,7 +460,6 @@ export function createGenericSyncHandlers(options: GenericSyncDeps) {
 
       options.stateStore.assertRunActive("atmos", attemptId);
       const rewards = (rewardsResult.rewards ?? []) as AtmosLoyaltyData["rewards"];
-      console.log("[NextCard SW] Atmos rewards done:", rewards);
 
       options.stateStore.assertRunActive("atmos", attemptId);
       await chrome.scripting.executeScript({
@@ -494,7 +488,6 @@ export function createGenericSyncHandlers(options: GenericSyncDeps) {
         discountsResult = await discountsMessage.promise;
       } catch {
         discountsMessage.cancel();
-        console.log("[NextCard SW] Atmos discounts timed out, retrying...");
         await triggerExtraction({
           providerId: "atmos",
           attemptId,
@@ -512,7 +505,6 @@ export function createGenericSyncHandlers(options: GenericSyncDeps) {
       options.stateStore.assertRunActive("atmos", attemptId);
       const discounts =
         (discountsResult.discounts ?? []) as AtmosLoyaltyData["discounts"];
-      console.log("[NextCard SW] Atmos discounts done:", discounts);
 
       options.stateStore.assertRunActive("atmos", attemptId);
       chrome.tabs.update(tabId, { url: options.providerRegistry.atmos.syncUrl });
@@ -534,12 +526,10 @@ export function createGenericSyncHandlers(options: GenericSyncDeps) {
         error: null,
         lastSyncedAt: new Date().toISOString(),
       });
-      console.log("[NextCard SW] Atmos sync complete:", fullData);
 
       options.stateStore.assertRunActive("atmos", attemptId);
       void options.pushToNextCard("atmos", fullData).then((result) => {
         if (result.ok) {
-          console.log("[NextCard SW] Atmos pushed to NextCard");
         } else {
           console.warn("[NextCard SW] Atmos push failed:", result.error);
         }
@@ -547,7 +537,6 @@ export function createGenericSyncHandlers(options: GenericSyncDeps) {
       options.stateStore.finishSyncRun("atmos", attemptId);
     } catch (error) {
       if (options.stateStore.wasRunCancelled("atmos", attemptId, error)) {
-        console.log("[NextCard SW] Atmos sync cancelled");
         return;
       }
       const errorMessage =
@@ -593,9 +582,6 @@ export function createGenericSyncHandlers(options: GenericSyncDeps) {
             owned: arrivalTabId === tabId,
           });
           options.stateStore.updateProvider(providerId, { status: "extracting" });
-          console.log(
-            `[NextCard SW] ${definition.name}: arrived at account page (tab ${arrivalTabId})`,
-          );
           setTimeout(() => {
             void triggerExtraction({
               providerId,
@@ -660,10 +646,6 @@ export function createGenericSyncHandlers(options: GenericSyncDeps) {
           ) {
             if (definition.magicLinkLogin || updatedTabId === tabId) {
               redirectPending = true;
-              console.log(
-                `[NextCard SW] ${definition.name}: logged in but on wrong page, redirecting to account in 3s:`,
-                url,
-              );
               redirectTimeout = setTimeout(() => {
                 try {
                   options.stateStore.assertRunActive(providerId, attemptId);
@@ -764,7 +746,6 @@ export function createGenericSyncHandlers(options: GenericSyncDeps) {
         options.stateStore.updateProvider(providerId, {
           status: "waiting_for_login",
         });
-        console.log(`[NextCard SW] ${definition.name}: 2FA challenge detected, waiting...`);
 
         const result = providerId === "marriott"
           ? await waitForMarriottLoginAndExtract(attemptId, tabId)
@@ -790,7 +771,6 @@ export function createGenericSyncHandlers(options: GenericSyncDeps) {
           options.stateStore.assertRunActive(providerId, attemptId);
           void options.pushToNextCard(providerId, data).then((result) => {
             if (result.ok) {
-              console.log(`[NextCard SW] ${definition.name} pushed to NextCard`);
             } else {
               console.warn(
                 `[NextCard SW] ${definition.name} push failed:`,
@@ -863,7 +843,6 @@ export function createGenericSyncHandlers(options: GenericSyncDeps) {
         options.stateStore.updateProvider(providerId, {
           status: "waiting_for_login",
         });
-        console.log(`[NextCard SW] Waiting for ${definition.name} login...`);
         result = providerId === "marriott"
           ? await waitForMarriottLoginAndExtract(attemptId, tabId)
           : await waitForGenericLoginAndExtract(providerId, attemptId, tabId);
@@ -888,7 +867,6 @@ export function createGenericSyncHandlers(options: GenericSyncDeps) {
           options.stateStore.updateProvider(providerId, {
             status: "waiting_for_login",
           });
-          console.log(`[NextCard SW] ${definition.name}: on login page, waiting...`);
           result = providerId === "marriott"
             ? await waitForMarriottLoginAndExtract(attemptId, tabId)
             : await waitForGenericLoginAndExtract(providerId, attemptId, tabId);
@@ -949,12 +927,10 @@ export function createGenericSyncHandlers(options: GenericSyncDeps) {
           error: null,
           lastSyncedAt: new Date().toISOString(),
         });
-        console.log(`[NextCard SW] ${definition.name} sync complete:`, data);
 
         options.stateStore.assertRunActive(providerId, attemptId);
         void options.pushToNextCard(providerId, data).then((pushResult) => {
           if (pushResult.ok) {
-            console.log(`[NextCard SW] ${definition.name} pushed to NextCard`);
           } else {
             console.warn(
               `[NextCard SW] ${definition.name} push failed:`,
@@ -971,7 +947,6 @@ export function createGenericSyncHandlers(options: GenericSyncDeps) {
       }
     } catch (error) {
       if (options.stateStore.wasRunCancelled(providerId, attemptId, error)) {
-        console.log(`[NextCard SW] ${definition.name} sync cancelled`);
         return;
       }
       const errorMessage =

@@ -14,6 +14,7 @@
 import type { MarriottLoyaltyData, LoginState, MarriottCertificate } from "../lib/types";
 import { createContentScriptRunControl } from "../lib/content-script-run-control";
 import { showOverlay, updateOverlay, updateOverlayProgress } from "../lib/overlay";
+import { createLoginStateMonitor } from "../lib/login-state-monitor";
 
 const runControl = createContentScriptRunControl("marriott");
 
@@ -95,7 +96,6 @@ function waitForAccountContent(maxWaitMs = 30000): Promise<void> {
 
     const timeout = setTimeout(() => {
       observer.disconnect();
-      console.log("[NextCard] Timed out waiting for account content after 30s");
       resolve();
     }, maxWaitMs);
 
@@ -283,25 +283,21 @@ async function scrapeNightsDetail(attemptId: string): Promise<Partial<MarriottLo
   // Click "Nights Detail" link
   const link = document.querySelector('a[aria-label="Nights Detail"]') as HTMLElement | null;
   if (!link) {
-    console.log("[NextCard] Could not find Nights Detail link");
     return data;
   }
 
-  console.log("[NextCard] Clicking Nights Detail...");
   runControl.throwIfCancelled(attemptId);
   link.click();
 
   // Wait for the styled-components modal to appear
   const modal = await waitForElement(".modal__container", 8000);
   if (!modal) {
-    console.log("[NextCard] Nights Detail modal did not appear");
     return data;
   }
 
   // Extra delay for modal content to render
   await runControl.sleep(1500, attemptId);
 
-  console.log("[NextCard] Scraping Nights Detail modal...");
 
   // H6 label/value pairs inside the modal
   const flexRows = modal.querySelectorAll(".d-flex.justify-content-between");
@@ -381,7 +377,6 @@ async function scrapeNightsDetail(attemptId: string): Promise<Partial<MarriottLo
     data.nextTierTarget = `${targetMatch[1]} more nights to ${targetMatch[3].trim()}`;
   }
 
-  console.log("[NextCard] Nights Detail data:", data);
 
   // Close the modal
   closeNightsModal();
@@ -423,13 +418,11 @@ function closeNightsModal() {
   const closeBtn = document.querySelector('.popup-close[role="button"]') as HTMLElement | null;
   if (closeBtn) {
     closeBtn.click();
-    console.log("[NextCard] Closed modal via popup-close");
     return;
   }
 
   // Fallback: Escape key
   document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
-  console.log("[NextCard] Closed modal via Escape");
 }
 
 function parseIntSafe(str: string, max = 100000): number | null {
@@ -530,11 +523,9 @@ function scrapeEarnedRewards(): MarriottCertificate[] {
 
 async function runExtraction(attemptId: string) {
   const loginState = detectLoginState();
-  console.log("[NextCard] Login state:", loginState);
   await runControl.sendMessage(attemptId, { type: "LOGIN_STATE", state: loginState });
 
-  if (loginState !== "logged_in") {
-    console.log("[NextCard] User not logged in. Signaling service worker to wait.");
+  if (loginState === "logged_out" || loginState === "mfa_challenge") {
     showOverlay("waiting_for_login", "marriott");
     await runControl.sendMessage(attemptId, {
       type: "STATUS_UPDATE",
@@ -547,21 +538,17 @@ async function runExtraction(attemptId: string) {
 
   updateOverlay("extracting", "marriott");
   updateOverlayProgress("Reading account details...");
-  console.log("[NextCard] User is logged in, waiting for account content to render...");
   await waitForAccountContent();
 
   // 1. Scrape the main activity page (points, status, nights, name)
   runControl.throwIfCancelled(attemptId);
   const accountData = scrapeActivityPage();
-  console.log("[NextCard] Account data:", accountData);
 
   // 2. Scrape certificates from the earned rewards section
   const certs = scrapeEarnedRewards();
-  console.log("[NextCard] Certificates:", certs);
 
   // 3. Click "Nights Detail" to open modal, scrape lifetime data, then close
   const nightsData = await scrapeNightsDetail(attemptId);
-  console.log("[NextCard] Nights Detail data:", nightsData);
 
   // Merge everything
   const finalData: MarriottLoyaltyData = {
@@ -583,7 +570,6 @@ async function runExtraction(attemptId: string) {
   };
 
   await runControl.sendMessage(attemptId, { type: "EXTRACTION_DONE", data: finalData });
-  console.log("[NextCard] Extraction complete:", finalData);
 }
 
 // ── Message listener ─────────────────────────────────────────
@@ -603,22 +589,35 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     sendResponse({ ok: true });
   }
   if (message.type === "GET_LOGIN_STATE") {
-    sendResponse({ state: detectLoginState() });
+    sendResponse({ state: monitor.getState() });
   }
   return true;
 });
 
-// Report initial login state on load
-const initialState = detectLoginState();
+let syncActive = false;
+const monitor = createLoginStateMonitor({
+  provider: "marriott",
+  detectLoginState,
+  onStateChange(newState) {
+    if (!syncActive) return;
+    if (newState === "logged_in") {
+      updateOverlay("extracting", "marriott");
+    } else if (newState === "mfa_challenge") {
+      updateOverlay("mfa_challenge", "marriott");
+    } else {
+      updateOverlay("waiting_for_login", "marriott");
+    }
+  },
+});
+monitor.start();
+const initialState = monitor.getState();
 chrome.runtime.sendMessage({ type: "GET_PROVIDER_STATUS", provider: "marriott" }, (r) => {
   const s = r?.status;
   if (s === "extracting" || (s === "detecting_login" && initialState === "logged_in")) {
+    syncActive = true;
     showOverlay("extracting", "marriott");
   } else if ((s === "waiting_for_login" || s === "detecting_login") && initialState !== "logged_in") {
+    syncActive = true;
     showOverlay("waiting_for_login", "marriott");
   }
 });
-chrome.runtime.sendMessage({ type: "LOGIN_STATE", provider: "marriott", state: initialState }).catch(() => {
-  // Service worker might not be ready yet
-});
-console.log("[NextCard] Content script loaded. Login state:", initialState);

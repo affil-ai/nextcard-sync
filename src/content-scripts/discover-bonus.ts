@@ -69,7 +69,6 @@ async function activateBonus(): Promise<{ success: boolean; alreadyActive: boole
 
   // Check if already activated
   if (isAlreadyActivated()) {
-    console.log("[NextCard Discover Bonus] Already activated");
     updateOverlayProgress("Already activated!");
     await delay(1000);
     hideOverlay("done");
@@ -92,7 +91,6 @@ async function activateBonus(): Promise<{ success: boolean; alreadyActive: boole
   }
 
   updateOverlayProgress("Activating 5% bonus...");
-  console.log("[NextCard Discover Bonus] Clicking Activate Now");
   btn.click();
 
   await delay(3000);
@@ -107,7 +105,6 @@ async function activateBonus(): Promise<{ success: boolean; alreadyActive: boole
   // Try clicking a confirmation button if one appeared
   const confirmBtn = findActivateButton();
   if (confirmBtn && confirmBtn !== btn) {
-    console.log("[NextCard Discover Bonus] Clicking confirmation");
     confirmBtn.click();
     await delay(2000);
   }
@@ -130,4 +127,3 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   }
 });
 
-console.log("[NextCard Discover Bonus] Content script loaded");

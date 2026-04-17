@@ -13,6 +13,7 @@
 import type { BiltLoyaltyData, LoginState } from "../lib/types";
 import { createContentScriptRunControl } from "../lib/content-script-run-control";
 import { showOverlay, updateOverlay, updateOverlayProgress } from "../lib/overlay";
+import { createLoginStateMonitor } from "../lib/login-state-monitor";
 
 const runControl = createContentScriptRunControl("bilt");
 
@@ -227,7 +228,6 @@ async function scrapeWalletPage() {
     linkedCards,
   };
 
-  console.log("[NextCard Bilt] Scraped wallet data:", data);
   return data;
 }
 
@@ -289,7 +289,6 @@ function scrapeNeighborhoodAccountPage(): BiltLoyaltyData {
     }
   }
 
-  console.log("[NextCard Bilt] Scraped neighborhood account data:", data);
   return data;
 }
 
@@ -342,7 +341,6 @@ function scrapeStatusTracker(): BiltProgress {
     progress.spendTarget = spendMatch[2];
   }
 
-  console.log("[NextCard Bilt] Scraped status tracker:", progress);
   return progress;
 }
 
@@ -351,10 +349,9 @@ function scrapeStatusTracker(): BiltProgress {
 async function runExtraction(attemptId: string) {
   const loginState = detectLoginState();
   const url = window.location.href.toLowerCase();
-  console.log("[NextCard Bilt] Login state:", loginState);
   await runControl.sendMessage(attemptId, { type: "LOGIN_STATE", state: loginState });
 
-  if (loginState !== "logged_in") {
+  if (loginState === "logged_out" || loginState === "mfa_challenge") {
     showOverlay("waiting_for_login", "bilt");
     await runControl.sendMessage(attemptId, {
       type: "STATUS_UPDATE",
@@ -367,7 +364,6 @@ async function runExtraction(attemptId: string) {
 
   updateOverlay("extracting", "bilt");
   updateOverlayProgress("Reading Bilt wallet and points...");
-  console.log("[NextCard Bilt] Waiting for page content...");
   const readySelector = url.includes("/wallet")
     ? '[data-testid="user-info-points-pill"]'
     : "div";
@@ -399,7 +395,6 @@ async function runExtraction(attemptId: string) {
 }
 
 async function runProgressScrape(attemptId: string) {
-  console.log("[NextCard Bilt] Scraping status tracker...");
   await waitForSelector('[data-testid="user-info-points-pill"]', 10000);
   await runControl.sleep(3000, attemptId);
 
@@ -434,19 +429,35 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     sendResponse({ ok: true });
   }
   if (message.type === "GET_LOGIN_STATE") {
-    sendResponse({ state: detectLoginState() });
+    sendResponse({ state: monitor.getState() });
   }
   return true;
 });
 
-const initialState = detectLoginState();
+let syncActive = false;
+const monitor = createLoginStateMonitor({
+  provider: "bilt",
+  detectLoginState,
+  onStateChange(newState) {
+    if (!syncActive) return;
+    if (newState === "logged_in") {
+      updateOverlay("extracting", "bilt");
+    } else if (newState === "mfa_challenge") {
+      updateOverlay("mfa_challenge", "bilt");
+    } else {
+      updateOverlay("waiting_for_login", "bilt");
+    }
+  },
+});
+monitor.start();
+const initialState = monitor.getState();
 chrome.runtime.sendMessage({ type: "GET_PROVIDER_STATUS", provider: "bilt" }, (r) => {
   const s = r?.status;
   if (s === "extracting" || (s === "detecting_login" && initialState === "logged_in")) {
+    syncActive = true;
     showOverlay("extracting", "bilt");
   } else if ((s === "waiting_for_login" || s === "detecting_login") && initialState !== "logged_in") {
+    syncActive = true;
     showOverlay("waiting_for_login", "bilt");
   }
 });
-chrome.runtime.sendMessage({ type: "LOGIN_STATE", provider: "bilt", state: initialState }).catch(() => {});
-console.log("[NextCard Bilt] Content script loaded. Login state:", initialState);

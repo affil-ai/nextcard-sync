@@ -12,7 +12,7 @@
 
 import type { ChaseBenefit } from "../lib/types";
 import { createContentScriptRunControl } from "../lib/content-script-run-control";
-import { showOverlay } from "../lib/overlay";
+import { showOverlay, updateOverlay, updateOverlayProgress } from "../lib/overlay";
 
 const runControl = createContentScriptRunControl("chase");
 function textOf(el: Element | null): string {
@@ -52,7 +52,8 @@ function waitForSelector(selector: string, maxWaitMs = 15000): Promise<Element |
 }
 
 function isBenefitsPage(): boolean {
-  return window.location.href.toLowerCase().includes("benefits");
+  const url = window.location.href.toLowerCase();
+  return url.includes("secure.chase.com") && url.includes("benefits");
 }
 
 function isHubPage(): boolean {
@@ -219,15 +220,12 @@ function navigateToHub(): void {
 
 async function runBenefitsExtraction(attemptId: string) {
   if (!isBenefitsPage()) {
-    console.log("[NextCard Chase Benefits] Not on benefits page, sending empty");
     await runControl.sendMessage(attemptId, { type: "CHASE_BENEFITS_DONE", benefits: [] });
     return;
   }
 
-  console.log("[NextCard Chase Benefits] Starting extraction...");
 
   if (!isHubPage()) {
-    console.log("[NextCard Chase Benefits] Not on hub, current URL:", window.location.href);
     if (isDetailPage()) {
       runControl.throwIfCancelled(attemptId);
       navigateToHub();
@@ -242,8 +240,6 @@ async function runBenefitsExtraction(attemptId: string) {
 
   const cards = getClickableBenefitCards();
   const membershipPerks = getMembershipPerks();
-  console.log(`[NextCard Chase Benefits] Found ${cards.length} credit benefits:`, cards.map((c) => c.name));
-  console.log(`[NextCard Chase Benefits] Found ${membershipPerks.length} membership perks:`, membershipPerks.map((p) => p.name));
 
   const benefits: ChaseBenefit[] = membershipPerks.map((perk) => ({
     name: perk.name,
@@ -256,7 +252,6 @@ async function runBenefitsExtraction(attemptId: string) {
 
   for (let i = 0; i < cards.length; i++) {
     const card = cards[i];
-    console.log(`[NextCard Chase Benefits] [${i + 1}/${cards.length}] Clicking: ${card.name}`);
 
     const li = document.querySelector<HTMLElement>(`li[data-testid="${card.testId}"]`);
     if (!li) {
@@ -287,9 +282,7 @@ async function runBenefitsExtraction(attemptId: string) {
         period: detail.period,
         activationStatus: null,
       });
-      console.log(`[NextCard Chase Benefits] Scraped: ${card.name}`, detail);
     } else {
-      console.log(`[NextCard Chase Benefits] No progress data for: ${card.name}`);
     }
 
     runControl.throwIfCancelled(attemptId);
@@ -315,12 +308,17 @@ async function runBenefitsExtraction(attemptId: string) {
     }
   }
 
-  console.log("[NextCard Chase Benefits] All benefits scraped:", benefits);
   await runControl.sendMessage(attemptId, { type: "CHASE_BENEFITS_DONE", benefits });
 }
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (runControl.handleAbort(message)) {
+    sendResponse({ ok: true });
+    return true;
+  }
+  if (message.type === "UPDATE_OVERLAY_PROGRESS") {
+    updateOverlay("extracting", "chase");
+    updateOverlayProgress(message.message);
     sendResponse({ ok: true });
     return true;
   }
@@ -344,7 +342,6 @@ chrome.runtime.sendMessage({ type: "GET_PROVIDER_STATUS", provider: "chase" }, (
   if (status === "waiting_for_login" || status === "detecting_login") {
     showOverlay("waiting_for_login", "chase");
   } else if (status === "extracting") {
-    console.log("[NextCard Chase Benefits] Resuming active Chase sync overlay");
     showOverlay("extracting", "chase");
   }
 });

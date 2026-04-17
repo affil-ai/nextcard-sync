@@ -9,6 +9,7 @@
 import type { LoginState } from "../lib/types";
 import { createContentScriptRunControl } from "../lib/content-script-run-control";
 import { showOverlay, updateOverlay, updateOverlayProgress } from "../lib/overlay";
+import { createLoginStateMonitor } from "../lib/login-state-monitor";
 
 const runControl = createContentScriptRunControl("chase");
 
@@ -111,16 +112,14 @@ function scrapeDashboard() {
     }
   }
 
-  console.log("[NextCard Chase] Dashboard data:", data);
   return data;
 }
 
 async function runExtraction(attemptId: string) {
   const loginState = detectLoginState();
-  console.log("[NextCard Chase] Login state:", loginState);
   await runControl.sendMessage(attemptId, { type: "LOGIN_STATE", state: loginState });
 
-  if (loginState !== "logged_in") {
+  if (loginState === "logged_out" || loginState === "mfa_challenge") {
     showOverlay("waiting_for_login", "chase");
     await runControl.sendMessage(attemptId, {
       type: "STATUS_UPDATE",
@@ -135,16 +134,13 @@ async function runExtraction(attemptId: string) {
 
   // Service worker handles multi-card iteration via getChaseAccountLinks + chaseMultiCardFlow
   if (url.includes("/account-selector")) {
-    console.log("[NextCard Chase] On account selector page, service worker will handle card iteration.");
     await runControl.sendMessage(attemptId, { type: "LOGIN_STATE", state: "logged_in" });
     return;
   }
 
   updateOverlay("extracting", "chase");
   updateOverlayProgress("Finding your Chase cards...");
-  console.log("[NextCard Chase] Waiting for dashboard content...");
   const found = await waitForSelector(".card-details, .points-balance");
-  console.log("[NextCard Chase] Selector found:", !!found);
   const chaseCardEl = document.querySelector(".card-details .mds-body-large-heavier");
   if (chaseCardEl) {
     updateOverlayProgress(`Syncing ${chaseCardEl.textContent?.trim().replace(/®/g, "")}...`);
@@ -176,24 +172,45 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     sendResponse({ ok: true });
   }
   if (message.type === "UPDATE_OVERLAY_PROGRESS") {
+    updateOverlay("extracting", "chase");
     updateOverlayProgress(message.message);
     sendResponse({ ok: true });
     return true;
   }
   if (message.type === "GET_LOGIN_STATE") {
-    sendResponse({ state: detectLoginState() });
+    sendResponse({ state: monitor.getState() });
   }
   return true;
 });
 
-const initialState = detectLoginState();
+let syncActive = false;
+const monitor = createLoginStateMonitor({
+  provider: "chase",
+  detectLoginState,
+  onStateChange(newState) {
+    if (!syncActive) return;
+    if (newState === "logged_in") {
+      updateOverlay("extracting", "chase");
+    } else if (newState === "mfa_challenge") {
+      updateOverlay("mfa_challenge", "chase");
+    } else {
+      updateOverlay("waiting_for_login", "chase");
+    }
+  },
+});
+monitor.start();
+const initialState = monitor.getState();
 chrome.runtime.sendMessage({ type: "GET_PROVIDER_STATUS", provider: "chase" }, (r) => {
   const s = r?.status;
   if (s === "extracting" || (s === "detecting_login" && initialState === "logged_in")) {
+    syncActive = true;
     showOverlay("extracting", "chase");
+    const cardNameEl = document.querySelector(".card-details .mds-body-large-heavier");
+    if (cardNameEl) {
+      updateOverlayProgress(`Syncing ${cardNameEl.textContent?.trim().replace(/®/g, "")}...`);
+    }
   } else if ((s === "waiting_for_login" || s === "detecting_login") && initialState !== "logged_in") {
+    syncActive = true;
     showOverlay("waiting_for_login", "chase");
   }
 });
-chrome.runtime.sendMessage({ type: "LOGIN_STATE", provider: "chase", state: initialState }).catch(() => {});
-console.log("[NextCard Chase] Content script loaded. Login state:", initialState);

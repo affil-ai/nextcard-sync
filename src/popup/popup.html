@@ -136,216 +136,175 @@
       <div class="provider-list" id="providerList"></div>
       <div class="version-footer" id="versionFooter"></div>
       </div><!-- /syncTabPanel -->
-      <div id="toolsTabPanel" style="display:none; padding-bottom: 24px;">
-        <div class="provider-card" id="amexOffersCard" style="flex-direction: column; align-items: stretch; gap: 12px; cursor: default;">
-          <div style="display: flex; align-items: center; gap: 12px;">
-            <div class="provider-icon"><img src="" id="amexOffersIcon" alt="Amex" /></div>
-            <div>
-              <div class="provider-name">Amex Offers</div>
-              <div class="provider-desc">Add all eligible offers to your card</div>
-            </div>
-          </div>
+      <div id="toolsTabPanel" style="display:none;">
+        <div class="home-section-label" style="margin-top:16px">Offers</div>
 
-          <!-- Initial state -->
-          <div id="amexOffersInitial">
-            <button class="sync-btn" id="amexOffersDiscoverBtn" style="margin: 0;">Add All Amex Offers</button>
-          </div>
-
-          <!-- Loading state -->
-          <div id="amexOffersLoading" style="display: none;">
-            <div style="font-size: 12px; color: #8c7a6e; text-align: center; padding: 8px 0;">
-              Opening Amex &mdash; sign in if prompted...
-            </div>
-          </div>
-
-          <!-- Ready state -->
-          <div id="amexOffersReady" style="display: none;">
-            <div id="amexOffersCardSelectWrap" style="display: none;">
-              <select id="amexOffersCardSelect" style="width: 100%; padding: 8px 12px; border: 1px solid #f0ece8; border-radius: 10px; font-family: inherit; font-size: 12.5px; color: #342019; background: #fff; margin-bottom: 8px; outline: none;"></select>
-            </div>
-            <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px;">
-              <span style="font-size: 13px; font-weight: 600; color: #342019;" id="amexOffersOfferCount"></span>
-            </div>
-            <button class="sync-btn" id="amexOffersRunBtn" style="margin: 0;">Start</button>
-          </div>
-
-          <!-- Running state -->
-          <div id="amexOffersRunning" style="display: none;">
-            <div style="font-size: 12.5px; font-weight: 600; color: #342019; margin-bottom: 6px;" id="amexOffersProgressText">Adding offers...</div>
-            <div class="offers-progress-bar">
-              <div id="amexOffersProgressBar" class="offers-progress-bar-fill"></div>
-            </div>
-            <div style="display: flex; justify-content: space-between; align-items: center;">
-              <span style="font-size: 11px; color: #8c7a6e;" id="amexOffersProgressDetail">0 / 0</span>
-              <button style="font-size: 11px; color: #b0a49a; background: none; border: none; cursor: pointer; font-family: inherit; text-decoration: underline;" id="amexOffersStopBtn">Cancel</button>
-            </div>
-          </div>
-
-          <!-- Done state -->
-          <div id="amexOffersDone" style="display: none;">
-            <div style="font-size: 13px; font-weight: 700; color: #34c759; margin-bottom: 4px;">Done!</div>
-            <div style="font-size: 12px; color: #8c7a6e;" id="amexOffersSummary"></div>
-            <button class="sync-btn" id="amexOffersRunAgainBtn" style="margin: 8px 0 0;">Run Again</button>
-          </div>
-
-          <!-- Error state -->
-          <div id="amexOffersError" style="display: none;">
-            <div class="error-box" id="amexOffersErrorMsg"></div>
-            <button class="sync-btn" id="amexOffersRetryBtn" style="margin: 8px 0 0;">Try Again</button>
-          </div>
-        </div>
-        <!-- Chase Offers Card -->
-        <div class="provider-card" id="chaseOffersCard" style="flex-direction: column; align-items: stretch; gap: 12px; cursor: default; margin-top: 10px;">
-          <div style="display: flex; align-items: center; gap: 12px;">
-            <div class="provider-icon"><img src="" id="chaseOffersIcon" alt="Chase" /></div>
-            <div>
-              <div class="provider-name">Chase Offers</div>
-              <div class="provider-desc">Add all eligible offers to your card</div>
-            </div>
-          </div>
-
-          <div id="chaseOffersInitial">
-            <button class="sync-btn" id="chaseOffersDiscoverBtn" style="margin: 0;">Add All Chase Offers</button>
-          </div>
-
-          <div id="chaseOffersLoading" style="display: none;">
-            <div style="font-size: 12px; color: #8c7a6e; text-align: center; padding: 8px 0;">
-              Opening Chase &mdash; sign in if prompted...
-            </div>
-          </div>
-
-          <div id="chaseOffersReady" style="display: none;">
-            <div id="chaseOffersCardSelectWrap" style="display: none;">
-              <select id="chaseOffersCardSelect" style="width: 100%; padding: 8px 12px; border: 1px solid #f0ece8; border-radius: 10px; font-family: inherit; font-size: 12.5px; color: #342019; background: #fff; margin-bottom: 8px; outline: none;"></select>
-            </div>
-            <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px;">
-              <span style="font-size: 13px; font-weight: 600; color: #342019;" id="chaseOffersOfferCount"></span>
-            </div>
-            <button class="sync-btn" id="chaseOffersRunBtn" style="margin: 0;">Start</button>
-          </div>
-
-          <div id="chaseOffersRunning" style="display: none;">
-            <div style="font-size: 12.5px; font-weight: 600; color: #342019; margin-bottom: 6px;">Adding offers...</div>
-            <div class="offers-progress-bar">
-              <div id="chaseOffersProgressBar" class="offers-progress-bar-fill"></div>
-            </div>
-            <div style="display: flex; justify-content: space-between; align-items: center;">
-              <span style="font-size: 11px; color: #8c7a6e;" id="chaseOffersProgressDetail">0 added</span>
-              <button style="font-size: 11px; color: #b0a49a; background: none; border: none; cursor: pointer; font-family: inherit; text-decoration: underline;" id="chaseOffersStopBtn">Cancel</button>
-            </div>
-          </div>
-
-          <div id="chaseOffersDone" style="display: none;">
-            <div style="font-size: 13px; font-weight: 700; color: #34c759; margin-bottom: 4px;">Done!</div>
-            <div style="font-size: 12px; color: #8c7a6e;" id="chaseOffersSummary"></div>
-            <button class="sync-btn" id="chaseOffersRunAgainBtn" style="margin: 8px 0 0;">Run Again</button>
-          </div>
-
-          <div id="chaseOffersError" style="display: none;">
-            <div class="error-box" id="chaseOffersErrorMsg"></div>
-            <button class="sync-btn" id="chaseOffersRetryBtn" style="margin: 8px 0 0;">Try Again</button>
-          </div>
-        </div>
-
-        <!-- Citi Offers Card -->
-        <div class="provider-card" id="citiOffersCard" style="flex-direction: column; align-items: stretch; gap: 12px; cursor: default; margin-top: 10px;">
-          <div style="display: flex; align-items: center; gap: 12px;">
-            <div class="provider-icon"><img src="" id="citiOffersIcon" alt="Citi" /></div>
-            <div>
-              <div class="provider-name">Citi Offers</div>
-              <div class="provider-desc">Add all eligible offers to your card</div>
-            </div>
-          </div>
-          <div id="citiOffersInitial"><button class="sync-btn" id="citiOffersDiscoverBtn" style="margin: 0;">Add All Citi Offers</button></div>
-          <div id="citiOffersLoading" style="display: none;"><div style="font-size: 12px; color: #8c7a6e; text-align: center; padding: 8px 0;">Opening Citi &mdash; sign in if prompted...</div></div>
-          <div id="citiOffersReady" style="display: none;">
-            <div id="citiOffersCardSelectWrap" style="display: none;"><select id="citiOffersCardSelect" style="width: 100%; padding: 8px 12px; border: 1px solid #f0ece8; border-radius: 10px; font-family: inherit; font-size: 12.5px; color: #342019; background: #fff; margin-bottom: 8px; outline: none;"></select></div>
-            <div style="margin-bottom: 8px;"><span style="font-size: 13px; font-weight: 600; color: #342019;" id="citiOffersOfferCount"></span></div>
-            <button class="sync-btn" id="citiOffersRunBtn" style="margin: 0;">Start</button>
-          </div>
-          <div id="citiOffersRunning" style="display: none;">
-            <div style="font-size: 12.5px; font-weight: 600; color: #342019; margin-bottom: 6px;">Adding offers...</div>
-            <div class="offers-progress-bar"><div id="citiOffersProgressBar" class="offers-progress-bar-fill"></div></div>
-            <div style="display: flex; justify-content: space-between; align-items: center;">
-              <span style="font-size: 11px; color: #8c7a6e;" id="citiOffersProgressDetail">0 added</span>
-              <button style="font-size: 11px; color: #b0a49a; background: none; border: none; cursor: pointer; font-family: inherit; text-decoration: underline;" id="citiOffersStopBtn">Cancel</button>
-            </div>
-          </div>
-          <div id="citiOffersDone" style="display: none;">
-            <div style="font-size: 13px; font-weight: 700; color: #34c759; margin-bottom: 4px;">Done!</div>
-            <div style="font-size: 12px; color: #8c7a6e;" id="citiOffersSummary"></div>
-            <button class="sync-btn" id="citiOffersRunAgainBtn" style="margin: 8px 0 0;">Run Again</button>
-          </div>
-          <div id="citiOffersError" style="display: none;">
-            <div class="error-box" id="citiOffersErrorMsg"></div>
-            <button class="sync-btn" id="citiOffersRetryBtn" style="margin: 8px 0 0;">Try Again</button>
-          </div>
-        </div>
-
-        <!-- Discover 5% Bonus Card -->
-        <div class="provider-card" id="discoverBonusCard" style="flex-direction: column; align-items: stretch; gap: 12px; cursor: default; margin-top: 10px;">
-          <div style="display: flex; align-items: center; gap: 12px;">
-            <div class="provider-icon"><img src="" id="discoverBonusIcon" alt="Discover" /></div>
-            <div>
-              <div class="provider-name">Discover 5% Bonus</div>
-              <div class="provider-desc">Activate your quarterly 5% cashback category</div>
-            </div>
-          </div>
-          <div id="discoverBonusInitial"><button class="sync-btn" id="discoverBonusBtn" style="margin: 0;">Activate 5% Bonus</button></div>
-          <div id="discoverBonusLoading" style="display: none;"><div style="font-size: 12px; color: #8c7a6e; text-align: center; padding: 8px 0;">Opening Discover &mdash; sign in if prompted...</div></div>
-          <div id="discoverBonusDone" style="display: none;">
-            <div style="font-size: 13px; font-weight: 700; color: #34c759; margin-bottom: 4px;" id="discoverBonusResult"></div>
-            <button class="sync-btn" id="discoverBonusAgainBtn" style="margin: 8px 0 0;">Run Again</button>
-          </div>
-          <div id="discoverBonusError" style="display: none;">
-            <div class="error-box" id="discoverBonusErrorMsg"></div>
-            <button class="sync-btn" id="discoverBonusRetryBtn" style="margin: 8px 0 0;">Try Again</button>
-          </div>
-        </div>
-
-        <!-- Chase Bonus Registration Card -->
-        <div class="provider-card" id="chaseBonusCard" style="flex-direction: column; align-items: stretch; gap: 12px; cursor: default; margin-top: 10px; margin-bottom: 20px;">
-          <div style="display: flex; align-items: center; gap: 12px;">
-            <div class="provider-icon"><img src="" id="chaseBonusIcon" alt="Chase" /></div>
-            <div>
-              <div class="provider-name">Chase Bonus Registration</div>
-              <div class="provider-desc">Register your Chase cards for current bonus offers</div>
-            </div>
-          </div>
-
-          <!-- Need sync first -->
-          <div id="chaseBonusNeedSync" style="display: none;">
-            <div style="font-size: 12px; color: #8c7a6e; padding: 8px 0;">Sync your Chase cards first to use this tool.</div>
-          </div>
-
-          <!-- Initial: collect last name + zip -->
-          <div id="chaseBonusInitial">
-            <input id="chaseBonusLastName" type="text" placeholder="Last name on card" style="width: 100%; padding: 8px 12px; border: 1px solid #f0ece8; border-radius: 10px; font-family: inherit; font-size: 12.5px; color: #342019; background: #fff; margin-bottom: 6px; outline: none;" />
-            <input id="chaseBonusZip" type="text" placeholder="Zip code" maxlength="5" style="width: 100%; padding: 8px 12px; border: 1px solid #f0ece8; border-radius: 10px; font-family: inherit; font-size: 12.5px; color: #342019; background: #fff; margin-bottom: 8px; outline: none;" />
-            <button class="sync-btn" id="chaseBonusRegisterBtn" style="margin: 0;">Register</button>
-          </div>
-
-          <!-- Running -->
-          <div id="chaseBonusRunning" style="display: none;">
-            <div style="font-size: 12.5px; font-weight: 600; color: #342019; margin-bottom: 6px;">Registering...</div>
+        <div class="provider-card tool-card" id="chaseOffersCard" style="cursor:pointer">
+          <div class="provider-icon"><img src="" id="chaseOffersIcon" alt="Chase" /></div>
+          <div class="provider-info"><div class="provider-name">Chase Offers</div><div class="provider-desc">Add all eligible offers to your cards</div></div>
+          <div id="chaseOffersInitial"><div class="provider-arrow" id="chaseOffersDiscoverBtn">&rsaquo;</div></div>
+          <div id="chaseOffersLoading" class="tool-expand" style="display:none;">
+            <div class="tool-status" id="chaseOffersLoadingText">Looking for your Chase cards...</div>
             <div class="offers-progress-bar"><div class="offers-progress-bar-fill"></div></div>
-            <div style="font-size: 11px; color: #8c7a6e;">This may take a moment</div>
+            <button class="tool-link-btn" id="chaseOffersLoadingCancel">Cancel</button>
           </div>
-
-          <!-- Done -->
-          <div id="chaseBonusDone" style="display: none;">
-            <div style="font-size: 12px; color: #8c7a6e; line-height: 1.5;" id="chaseBonusResult">You'll be registered for any current Chase bonuses you're eligible for. Check your nextcard account to see results. Not all bonuses apply to all cards.</div>
-            <button class="sync-btn" id="chaseBonusAgainBtn" style="margin: 8px 0 0;">Register Again</button>
+          <div id="chaseOffersReady" class="tool-expand" style="display:none;">
+            <div id="chaseOffersCardSelectWrap" style="display:none;"><select id="chaseOffersCardSelect" class="tool-select"></select></div>
+            <div style="display:flex;justify-content:space-between;align-items:center;"><div class="tool-status" style="font-weight:600;color:#342019;" id="chaseOffersOfferCount"></div><button class="tool-link-btn" id="chaseOffersRefreshBtn">Refresh</button></div>
+            <button class="sync-btn" id="chaseOffersRunBtn" style="margin:0;">Start</button>
           </div>
+          <div id="chaseOffersRunning" class="tool-expand" style="display:none;">
+            <div class="tool-status" style="font-weight:600;color:#342019;">Adding offers...</div>
+            <div class="offers-progress-bar"><div id="chaseOffersProgressBar" class="offers-progress-bar-fill"></div></div>
+            <div style="display:flex;justify-content:space-between;align-items:center;">
+              <span class="tool-status" id="chaseOffersProgressDetail">0 added</span>
+              <button class="tool-link-btn" id="chaseOffersStopBtn">Cancel</button>
+            </div>
+          </div>
+          <div id="chaseOffersDone" class="tool-expand" style="display:none;">
+            <div style="font-size:13px;font-weight:700;color:#34c759;margin-bottom:4px;">Done!</div>
+            <div class="tool-status" id="chaseOffersSummary"></div>
+            <a href="https://www.nextcard.com/dashboard/offers" target="_blank" class="tool-dashboard-link">View your offers on nextcard &rarr;</a>
+            <button class="sync-btn sync-btn--secondary" id="chaseOffersRunAgainBtn" style="margin:8px 0 0;">Run Again</button>
+          </div>
+          <div id="chaseOffersError" class="tool-expand" style="display:none;">
+            <div class="error-box" id="chaseOffersErrorMsg"></div>
+            <button class="sync-btn" id="chaseOffersRetryBtn" style="margin:8px 0 0;">Try Again</button>
+          </div>
+        </div>
 
-          <!-- Error -->
-          <div id="chaseBonusError" style="display: none;">
+        <div class="provider-card tool-card" id="amexOffersCard" style="cursor:pointer">
+          <div class="provider-icon"><img src="" id="amexOffersIcon" alt="Amex" /></div>
+          <div class="provider-info"><div class="provider-name">Amex Offers</div><div class="provider-desc">Add all eligible offers to your cards</div></div>
+          <div id="amexOffersInitial"><div class="provider-arrow" id="amexOffersDiscoverBtn">&rsaquo;</div></div>
+          <div id="amexOffersLoading" class="tool-expand" style="display:none;">
+            <div class="tool-status" id="amexOffersLoadingText">Looking for your Amex cards...</div>
+            <div class="offers-progress-bar"><div class="offers-progress-bar-fill"></div></div>
+            <button class="tool-link-btn" id="amexOffersLoadingCancel">Cancel</button>
+          </div>
+          <div id="amexOffersReady" class="tool-expand" style="display:none;">
+            <div id="amexOffersCardSelectWrap" style="display:none;"><select id="amexOffersCardSelect" class="tool-select"></select></div>
+            <div style="display:flex;justify-content:space-between;align-items:center;"><div class="tool-status" style="font-weight:600;color:#342019;" id="amexOffersOfferCount"></div><button class="tool-link-btn" id="amexOffersRefreshBtn">Refresh</button></div>
+            <button class="sync-btn" id="amexOffersRunBtn" style="margin:0;">Start</button>
+          </div>
+          <div id="amexOffersRunning" class="tool-expand" style="display:none;">
+            <div class="tool-status" style="font-weight:600;color:#342019;" id="amexOffersProgressText">Adding offers...</div>
+            <div class="offers-progress-bar"><div id="amexOffersProgressBar" class="offers-progress-bar-fill"></div></div>
+            <div style="display:flex;justify-content:space-between;align-items:center;">
+              <span class="tool-status" id="amexOffersProgressDetail">0 / 0</span>
+              <button class="tool-link-btn" id="amexOffersStopBtn">Cancel</button>
+            </div>
+          </div>
+          <div id="amexOffersDone" class="tool-expand" style="display:none;">
+            <div style="font-size:13px;font-weight:700;color:#34c759;margin-bottom:4px;">Done!</div>
+            <div class="tool-status" id="amexOffersSummary"></div>
+            <a href="https://www.nextcard.com/dashboard/offers" target="_blank" class="tool-dashboard-link">View your offers on nextcard &rarr;</a>
+            <button class="sync-btn sync-btn--secondary" id="amexOffersRunAgainBtn" style="margin:8px 0 0;">Run Again</button>
+          </div>
+          <div id="amexOffersError" class="tool-expand" style="display:none;">
+            <div class="error-box" id="amexOffersErrorMsg"></div>
+            <button class="sync-btn" id="amexOffersRetryBtn" style="margin:8px 0 0;">Try Again</button>
+          </div>
+        </div>
+
+        <div class="provider-card tool-card" id="citiOffersCard" style="cursor:pointer">
+          <div class="provider-icon"><img src="" id="citiOffersIcon" alt="Citi" /></div>
+          <div class="provider-info"><div class="provider-name">Citi Offers</div><div class="provider-desc">Add all eligible offers to your cards</div></div>
+          <div id="citiOffersInitial"><div class="provider-arrow" id="citiOffersDiscoverBtn">&rsaquo;</div></div>
+          <div id="citiOffersLoading" class="tool-expand" style="display:none;">
+            <div class="tool-status" id="citiOffersLoadingText">Looking for your Citi cards...</div>
+            <div class="offers-progress-bar"><div class="offers-progress-bar-fill"></div></div>
+            <button class="tool-link-btn" id="citiOffersLoadingCancel">Cancel</button>
+          </div>
+          <div id="citiOffersReady" class="tool-expand" style="display:none;">
+            <div id="citiOffersCardSelectWrap" style="display:none;"><select id="citiOffersCardSelect" class="tool-select"></select></div>
+            <div style="display:flex;justify-content:space-between;align-items:center;"><div class="tool-status" style="font-weight:600;color:#342019;" id="citiOffersOfferCount"></div><button class="tool-link-btn" id="citiOffersRefreshBtn">Refresh</button></div>
+            <button class="sync-btn" id="citiOffersRunBtn" style="margin:0;">Start</button>
+          </div>
+          <div id="citiOffersRunning" class="tool-expand" style="display:none;">
+            <div class="tool-status" style="font-weight:600;color:#342019;">Adding offers...</div>
+            <div class="offers-progress-bar"><div id="citiOffersProgressBar" class="offers-progress-bar-fill"></div></div>
+            <div style="display:flex;justify-content:space-between;align-items:center;">
+              <span class="tool-status" id="citiOffersProgressDetail">0 added</span>
+              <button class="tool-link-btn" id="citiOffersStopBtn">Cancel</button>
+            </div>
+          </div>
+          <div id="citiOffersDone" class="tool-expand" style="display:none;">
+            <div style="font-size:13px;font-weight:700;color:#34c759;margin-bottom:4px;">Done!</div>
+            <div class="tool-status" id="citiOffersSummary"></div>
+            <a href="https://www.nextcard.com/dashboard/offers" target="_blank" class="tool-dashboard-link">View your offers on nextcard &rarr;</a>
+            <button class="sync-btn sync-btn--secondary" id="citiOffersRunAgainBtn" style="margin:8px 0 0;">Run Again</button>
+          </div>
+          <div id="citiOffersError" class="tool-expand" style="display:none;">
+            <div class="error-box" id="citiOffersErrorMsg"></div>
+            <button class="sync-btn" id="citiOffersRetryBtn" style="margin:8px 0 0;">Try Again</button>
+          </div>
+        </div>
+
+        <div class="home-section-label" style="margin-top:16px">Bonuses</div>
+
+        <div class="provider-card tool-card" id="discoverBonusCard" style="cursor:pointer">
+          <div class="provider-icon"><img src="" id="discoverBonusIcon" alt="Discover" /></div>
+          <div class="provider-info"><div class="provider-name">Discover 5% Bonus</div><div class="provider-desc">Activate your quarterly 5% cashback category</div></div>
+          <div id="discoverBonusInitial"><div class="provider-arrow" id="discoverBonusBtn">&rsaquo;</div></div>
+          <div id="discoverBonusLoading" class="tool-expand" style="display:none;">
+            <div class="tool-status">Opening Discover &mdash; sign in if prompted...</div>
+          </div>
+          <div id="discoverBonusDone" class="tool-expand" style="display:none;">
+            <div style="font-size:13px;font-weight:700;color:#34c759;margin-bottom:4px;" id="discoverBonusResult"></div>
+            <button class="sync-btn sync-btn--secondary" id="discoverBonusAgainBtn" style="margin:8px 0 0;">Run Again</button>
+          </div>
+          <div id="discoverBonusError" class="tool-expand" style="display:none;">
+            <div class="error-box" id="discoverBonusErrorMsg"></div>
+            <button class="sync-btn" id="discoverBonusRetryBtn" style="margin:8px 0 0;">Try Again</button>
+          </div>
+        </div>
+
+        <div class="provider-card tool-card" id="chaseBonusCard">
+          <div class="provider-icon"><img src="" id="chaseBonusIcon" alt="Chase" /></div>
+          <div class="provider-info"><div class="provider-name">Chase Bonus Registration</div><div class="provider-desc">Register your Chase cards for current bonus offers</div></div>
+          <div class="provider-arrow">&rsaquo;</div>
+          <div id="chaseBonusNeedSync" class="tool-expand" style="display:none;">
+            <div class="tool-status">Sync your Chase cards first to use this tool.</div>
+          </div>
+          <div id="chaseBonusInitial" class="tool-expand">
+            <input id="chaseBonusLastName" type="text" placeholder="Last name on card" class="tool-input" />
+            <input id="chaseBonusZip" type="text" placeholder="Zip code" maxlength="5" class="tool-input" />
+            <button class="sync-btn" id="chaseBonusRegisterBtn" style="margin:0;">Register</button>
+          </div>
+          <div id="chaseBonusRunning" class="tool-expand" style="display:none;">
+            <div class="tool-status" style="font-weight:600;color:#342019;">Registering...</div>
+            <div class="offers-progress-bar"><div class="offers-progress-bar-fill"></div></div>
+            <div class="tool-status">This may take a moment</div>
+          </div>
+          <div id="chaseBonusDone" class="tool-expand" style="display:none;">
+            <div class="tool-status" style="line-height:1.5;" id="chaseBonusResult">Registered for eligible Chase bonuses. Check your nextcard account for results.</div>
+            <button class="sync-btn sync-btn--secondary" id="chaseBonusAgainBtn" style="margin:8px 0 0;">Register Again</button>
+          </div>
+          <div id="chaseBonusError" class="tool-expand" style="display:none;">
             <div class="error-box" id="chaseBonusErrorMsg"></div>
-            <button class="sync-btn" id="chaseBonusRetryBtn" style="margin: 8px 0 0;">Try Again</button>
+            <button class="sync-btn" id="chaseBonusRetryBtn" style="margin:8px 0 0;">Try Again</button>
           </div>
         </div>
       </div>
       <div class="changelog" id="changelog">
+        <h4>v0.5.2</h4>
+        <ul>
+          <li>Faster, more reliable login detection across all providers</li>
+          <li>2FA and verification pages now handled automatically</li>
+          <li>Fixed Alaska and Hyatt sync flows</li>
+          <li>Tools tab redesigned</li>
+        </ul>
+        <h4>v0.5.0</h4>
+        <ul>
+          <li>Offer alerts — get notified when you visit a site where you have an active card offer</li>
+        </ul>
+        <h4>v0.5.1</h4>
+        <ul>
+          <li>Chase sync stability fixes and co-brand card support</li>
+          <li>Marriott Bonvoy points now tracked on Chase Boundless</li>
+          <li>Better sync progress — shows which card is being synced</li>
+        </ul>
         <h4>v0.4.8</h4>
         <ul>
           <li>Fixed Amex benefit credit tracking (Platinum, Gold, all cards)</li>

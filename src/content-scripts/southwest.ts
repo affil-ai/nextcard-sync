@@ -6,6 +6,7 @@
 import type { SouthwestLoyaltyData, LoginState } from "../lib/types";
 import { createContentScriptRunControl } from "../lib/content-script-run-control";
 import { showOverlay, updateOverlay, updateOverlayProgress, stopOverlayPoll } from "../lib/overlay";
+import { createLoginStateMonitor } from "../lib/login-state-monitor";
 
 const runControl = createContentScriptRunControl("southwest");
 
@@ -261,7 +262,6 @@ function scrapeAccountPage(): SouthwestLoyaltyData {
     console.warn("[NextCard Southwest] Failed to read flight credits:", error);
   }
 
-  console.log("[NextCard Southwest] Scraped data:", data);
   return data;
 }
 
@@ -274,10 +274,9 @@ async function runExtraction(attemptId: string) {
   // on the service worker's generic login flow (which expects URL changes).
 
   let loginState = detectLoginState();
-  console.log("[NextCard Southwest] Login state:", loginState);
   await runControl.sendMessage(attemptId, { type: "LOGIN_STATE", state: loginState });
 
-  if (loginState !== "logged_in") {
+  if (loginState === "logged_out" || loginState === "mfa_challenge") {
     showOverlay("waiting_for_login", "southwest");
     await runControl.sendMessage(attemptId, {
       type: "STATUS_UPDATE",
@@ -294,7 +293,6 @@ async function runExtraction(attemptId: string) {
     }
 
     if (loginState !== "logged_in") return;
-    console.log("[NextCard Southwest] Login detected, proceeding to extraction");
     // Stop the overlay poll — we're driving the overlay from here
     stopOverlayPoll();
     await runControl.sendMessage(attemptId, { type: "LOGIN_STATE", state: "logged_in" });
@@ -339,19 +337,35 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     sendResponse({ ok: true });
   }
   if (message.type === "GET_LOGIN_STATE") {
-    sendResponse({ state: detectLoginState() });
+    sendResponse({ state: monitor.getState() });
   }
   return true;
 });
 
-const initialState = detectLoginState();
+let syncActive = false;
+const monitor = createLoginStateMonitor({
+  provider: "southwest",
+  detectLoginState,
+  onStateChange(newState) {
+    if (!syncActive) return;
+    if (newState === "logged_in") {
+      updateOverlay("extracting", "southwest");
+    } else if (newState === "mfa_challenge") {
+      updateOverlay("mfa_challenge", "southwest");
+    } else {
+      updateOverlay("waiting_for_login", "southwest");
+    }
+  },
+});
+monitor.start();
+const initialState = monitor.getState();
 chrome.runtime.sendMessage({ type: "GET_PROVIDER_STATUS", provider: "southwest" }, (response) => {
   const status = response?.status;
   if (status === "extracting" || (status === "detecting_login" && initialState === "logged_in")) {
+    syncActive = true;
     showOverlay("extracting", "southwest");
   } else if ((status === "waiting_for_login" || status === "detecting_login") && initialState !== "logged_in") {
+    syncActive = true;
     showOverlay("waiting_for_login", "southwest");
   }
 });
-chrome.runtime.sendMessage({ type: "LOGIN_STATE", provider: "southwest", state: initialState }).catch(() => {});
-console.log("[NextCard Southwest] Content script loaded. Login state:", initialState);

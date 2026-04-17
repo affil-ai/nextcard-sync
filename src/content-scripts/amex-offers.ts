@@ -26,6 +26,8 @@ interface AmexOffer {
   category: string | null;
   expirationText: string | null;
   merchantUrl: string | null;
+  merchantLogoUrl: string | null;
+  redemptionChannel: "online" | "in_store" | "both" | null;
 }
 
 // ── Helpers ────────────────────────────────────────────────
@@ -79,9 +81,6 @@ function injectAndReadProducts(): Promise<AmexCard[]> {
 async function discoverCardsFromProducts(): Promise<AmexCard[]> {
   try {
     const cards = await injectAndReadProducts();
-    if (cards.length > 0) {
-      console.log(`[NextCard Amex Offers] Found ${cards.length} cards via digitalData.products`);
-    }
     return cards;
   } catch (e) {
     console.error("[NextCard Amex Offers] digitalData.products error:", e);
@@ -141,7 +140,6 @@ async function discoverCardsFromDashboard(): Promise<AmexCard[]> {
       cards.push({ id: accountToken, name, lastDigits, accountKey });
     }
 
-    console.log(`[NextCard Amex Offers] Found ${cards.length} cards via dashboard`);
     return cards;
   } catch (e) {
     console.error("[NextCard Amex Offers] discoverCardsFromDashboard error:", e);
@@ -190,6 +188,17 @@ async function listOffers(cardId: string): Promise<AmexOffer[] | null> {
         category: ((o.applicableCategories as Array<{ text: string }> | undefined)?.[0]?.text ?? null) as string | null,
         expirationText: ((o.expiration as { text: string } | undefined)?.text ?? null) as string | null,
         merchantUrl: ((o.longDescription as string)?.match(/(?:at|website)\s+(?:[\w.-]+\.(?:com|net|org|co|io|shop|store)\b)/i)?.[0]?.replace(/^(?:at|website)\s+/i, "") ?? null) as string | null,
+        merchantLogoUrl: (o.image ?? null) as string | null,
+        redemptionChannel: (() => {
+          const filters = (o.applicableFilters as Array<{ optionType: string }> | undefined) ?? [];
+          const types = filters.map((f) => f.optionType);
+          const hasOnline = types.includes("ONLINE");
+          const hasInStore = types.includes("IN_STORE");
+          if (hasOnline && hasInStore) return "both" as const;
+          if (hasOnline) return "online" as const;
+          if (hasInStore) return "in_store" as const;
+          return null;
+        })(),
       }));
   } catch (e) {
     console.error("[NextCard Amex Offers] listOffers error:", e);
@@ -237,6 +246,7 @@ async function runEnrollment(cardId: string) {
   let totalAdded = 0;
   let totalSkipped = 0;
   let totalFailed = 0;
+  let totalEligible = 0;
   let round = 0;
   const MAX_ROUNDS = 5;
   const enrolledOffers: AmexOffer[] = [];
@@ -249,10 +259,10 @@ async function runEnrollment(cardId: string) {
     if (!offers || offers.length === 0) break;
 
     const eligible = offers.filter((o) => o.status !== "ENROLLED" && o.status !== "ADDED");
-    console.log(`[NextCard Amex Offers] Round ${round}: ${eligible.length} eligible / ${offers.length} total`);
     if (eligible.length === 0) break;
 
-    sendProgress({ status: "enrolling", round, added: totalAdded, total: eligible.length });
+    totalEligible += eligible.length;
+    sendProgress({ status: "enrolling", round, added: totalAdded, total: totalEligible });
 
     let roundAdded = 0;
 
@@ -264,7 +274,7 @@ async function runEnrollment(cardId: string) {
       else if (result === "skipped") totalSkipped++;
       else totalFailed++;
 
-      sendProgress({ added: totalAdded, skipped: totalSkipped, failed: totalFailed, round, total: eligible.length });
+      sendProgress({ added: totalAdded, skipped: totalSkipped, failed: totalFailed, round, total: totalEligible });
 
       // Proactive rate limiting
       enrollRequestsSincePause++;
@@ -276,7 +286,6 @@ async function runEnrollment(cardId: string) {
       }
     }
 
-    console.log(`[NextCard Amex Offers] Round ${round}: ${roundAdded} added`);
 
     if (roundAdded === 0) break;
 
@@ -344,6 +353,8 @@ async function runEnrollment(cardId: string) {
         maxReward,
         minSpend,
         merchantUrl: o.merchantUrl,
+        merchantLogoUrl: o.merchantLogoUrl,
+        redemptionChannel: o.redemptionChannel,
       };
     }),
   }).catch(() => {});
@@ -358,11 +369,26 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (message.type === "AMEX_OFFERS_DISCOVER") {
     (async () => {
       const cards = await discoverCards();
+      if (cards.length === 0) {
+        sendResponse({ type: "AMEX_OFFERS_READY", cards: [], offerCounts: {}, error: "no_cards" });
+        return;
+      }
+      // Probe all cards in parallel — validates session and gets per-card unenrolled counts
+      const probes = await Promise.all(cards.map((c) => listOffers(c.id)));
+      if (probes[0] === null) {
+        sendResponse({ type: "AMEX_OFFERS_READY", cards: [], offerCounts: {}, error: "no_cards" });
+        return;
+      }
+      const offerCounts: Record<string, number> = {};
+      for (let i = 0; i < cards.length; i++) {
+        const offers = probes[i] ?? [];
+        offerCounts[cards[i].id] = offers.filter((o) => o.status !== "ENROLLED" && o.status !== "ADDED").length;
+      }
       sendResponse({
         type: "AMEX_OFFERS_READY",
         cards: cards.map((c) => ({ id: c.id, name: c.name, lastDigits: c.lastDigits, accountKey: c.accountKey })),
-        offerCount: -1,
-        error: cards.length === 0 ? "no_cards" : undefined,
+        offerCounts,
+        error: undefined,
       });
     })();
     return true;
@@ -383,4 +409,3 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   }
 });
 
-console.log("[NextCard Amex Offers] Content script loaded");

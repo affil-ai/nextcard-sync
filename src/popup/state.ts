@@ -25,8 +25,6 @@ import {
 } from "../contracts/loyalty-provider-data";
 import { orderedProviderIds } from "../providers/provider-groups";
 
-export const DEBUG_FORCE_ONBOARDING = false;
-
 export interface PopupOnboardingFlags {
   disclosureAccepted: boolean;
   consentGiven: boolean;
@@ -103,14 +101,6 @@ function normalizeAuth(value: unknown): NextCardAuth | null {
 }
 
 export function normalizeOnboardingFlags(record: Record<string, unknown>): PopupOnboardingFlags {
-  if (DEBUG_FORCE_ONBOARDING) {
-    return {
-      disclosureAccepted: false,
-      consentGiven: false,
-      firstSyncCompleted: false,
-    };
-  }
-
   return {
     disclosureAccepted: Boolean(record.disclosureAccepted),
     consentGiven: Boolean(record.consentGiven),

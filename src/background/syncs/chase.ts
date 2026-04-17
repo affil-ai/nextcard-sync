@@ -225,7 +225,6 @@ export function createChaseSync(options: ChaseSyncDeps) {
           pollInterval = setInterval(async () => {
             const hasContent = await chaseDashboardHasContent(tabId);
             if (hasContent) {
-              console.log("[NextCard SW] Chase: dashboard content detected");
               cleanup();
               resolve();
             }
@@ -249,7 +248,6 @@ export function createChaseSync(options: ChaseSyncDeps) {
             options.stateStore.updateProvider("chase", {
               status: "waiting_for_login",
             });
-            console.log("[NextCard SW] Chase: 2FA challenge detected, waiting...");
           }
         }
 
@@ -622,7 +620,6 @@ export function createChaseSync(options: ChaseSyncDeps) {
       if (route.kind === "benefits_hub") {
         const hasHub = route.url.includes("benefits/hub");
         if (hasHub) {
-          console.log("[NextCard SW] Chase: on benefits hub, scraping benefits...");
           try {
             const benefitsMessage = waitForChaseMessage(
               attemptId,
@@ -641,9 +638,6 @@ export function createChaseSync(options: ChaseSyncDeps) {
             const postTab = await chrome.tabs.get(tabId);
             const postUrl = postTab.url ?? "";
             if (!postUrl.includes("secure.chase.com")) {
-              console.log(
-                `[NextCard SW] Chase: redirected during benefits scrape to ${postUrl}`,
-              );
               const points = await waitForChasePointsOnCurrentPage(attemptId, tabId);
               if (points) {
                 availablePoints = points.available;
@@ -668,30 +662,21 @@ export function createChaseSync(options: ChaseSyncDeps) {
               pendingPoints = points.pending;
             }
           } catch (error) {
-            console.log("[NextCard SW] Chase: UR points failed:", error);
           }
         }
       } else if (route.kind === "ur_portal") {
-        console.log("[NextCard SW] Chase: redirected to UR portal, grabbing points...");
         const points = await waitForChasePointsOnCurrentPage(attemptId, tabId);
         if (points) {
           availablePoints = points.available;
           pendingPoints = points.pending;
         }
       } else if (route.kind === "loyalty_portal") {
-        console.log(
-          "[NextCard SW] Chase: redirected to loyalty portal, grabbing points...",
-        );
         const points = await waitForChasePointsOnCurrentPage(attemptId, tabId);
         if (points) {
           availablePoints = points.available;
         }
       } else if (route.kind === "session_expired") {
-        console.log(
-          `[NextCard SW] Chase: session expired while routing card ${accountId}`,
-        );
       } else {
-        console.log(`[NextCard SW] Chase: unexpected redirect to ${route.url}`);
       }
     } catch (error) {
       console.warn(
@@ -725,14 +710,10 @@ export function createChaseSync(options: ChaseSyncDeps) {
       error: null,
       lastSyncedAt: new Date().toISOString(),
     });
-    console.log(
-      `[NextCard SW] Chase sync complete: ${allCards.length} card(s) scraped`,
-    );
 
     options.stateStore.assertRunActive("chase", attemptId);
     void options.pushToNextCard("chase", multiCardData).then((pushResult) => {
       if (pushResult.ok) {
-        console.log("[NextCard SW] Chase pushed to NextCard");
       } else {
         console.warn("[NextCard SW] Chase push failed:", pushResult.error);
       }
@@ -763,17 +744,12 @@ export function createChaseSync(options: ChaseSyncDeps) {
         options.stateStore.updateProvider("chase", {
           status: "waiting_for_login",
         });
-        console.log("[NextCard SW] Chase: waiting for login + dashboard content...");
         await waitForChaseDashboardContent(attemptId, tabId);
       }
 
       options.stateStore.updateProvider("chase", { status: "extracting" });
 
       const cardIds = await waitForChaseCreditCards(attemptId, tabId);
-      console.log(
-        `[NextCard SW] Chase: found ${cardIds.length} credit cards:`,
-        cardIds.map((card) => `${card.cardName} (...${card.lastFour})`),
-      );
 
       if (cardIds.length === 0) {
         throw new Error("No credit cards found on Chase dashboard");
@@ -782,17 +758,10 @@ export function createChaseSync(options: ChaseSyncDeps) {
       const isCoBrand = (name: string) =>
         CO_BRAND_KEYWORDS.some((keyword) => name.toLowerCase().includes(keyword));
       cardIds.sort((left, right) => Number(isCoBrand(left.cardName)) - Number(isCoBrand(right.cardName)));
-      console.log(
-        "[NextCard SW] Chase: card order:",
-        cardIds.map((card) => card.cardName),
-      );
 
       const allCards: ChaseURData[] = [];
       for (let index = 0; index < cardIds.length; index += 1) {
         const card = cardIds[index];
-        console.log(
-          `[NextCard SW] Chase: [${index + 1}/${cardIds.length}] scraping ${card.cardName} (...${card.lastFour})`,
-        );
 
         // Update overlay via content script
         try {
@@ -808,15 +777,8 @@ export function createChaseSync(options: ChaseSyncDeps) {
         const currentUrl = currentTab.url ?? "";
         if (!currentUrl.includes("secure.chase.com/web/auth/dashboard")) {
           if (currentUrl.includes("logoff") || currentUrl.includes("logon")) {
-            console.log(
-              `[NextCard SW] Chase: session expired, finalizing with ${allCards.length} card(s)`,
-            );
             break;
           }
-
-          console.log(
-            `[NextCard SW] Chase: navigating back to dashboard from ${currentUrl}`,
-          );
           await navigateChaseTabAndWaitForLoad(
             tabId,
             "https://secure.chase.com/web/auth/dashboard#/dashboard/overview",
@@ -830,9 +792,6 @@ export function createChaseSync(options: ChaseSyncDeps) {
             || postNavigationUrl.includes("logon")
             || !postNavigationUrl.includes("secure.chase.com")
           ) {
-            console.log(
-              `[NextCard SW] Chase: session expired after navigate back, finalizing with ${allCards.length} card(s)`,
-            );
             break;
           }
         }
@@ -842,9 +801,6 @@ export function createChaseSync(options: ChaseSyncDeps) {
           tabId,
           card.accountId,
           card.cardName,
-        );
-        console.log(
-          `[NextCard SW] Chase: ${card.cardName} — ${result.benefits.length} benefits, points: ${result.availablePoints}`,
         );
 
         allCards.push({
@@ -872,7 +828,6 @@ export function createChaseSync(options: ChaseSyncDeps) {
       await chaseFinalize(attemptId, allCards);
     } catch (error) {
       if (options.stateStore.wasRunCancelled("chase", attemptId, error)) {
-        console.log("[NextCard SW] Chase sync cancelled");
         return;
       }
 

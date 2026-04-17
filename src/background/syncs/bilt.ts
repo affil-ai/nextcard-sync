@@ -194,7 +194,6 @@ export function createBiltSync(options: BiltSyncDeps) {
 
         if (isProgressMessage(progressResult)) {
           Object.assign(accountData, progressResult.progress);
-          console.log("[NextCard SW] Bilt: merged status tracker progress");
         }
       } catch (error) {
         console.warn(
@@ -210,12 +209,10 @@ export function createBiltSync(options: BiltSyncDeps) {
         error: null,
         lastSyncedAt: new Date().toISOString(),
       });
-      console.log("[NextCard SW] Bilt sync complete:", accountData);
 
       options.stateStore.assertRunActive("bilt", attemptId);
       void options.pushToNextCard("bilt", accountData).then((pushResult) => {
         if (pushResult.ok) {
-          console.log("[NextCard SW] Bilt pushed to NextCard");
         } else {
           console.warn("[NextCard SW] Bilt push failed:", pushResult.error);
         }
@@ -223,7 +220,6 @@ export function createBiltSync(options: BiltSyncDeps) {
       options.stateStore.finishSyncRun("bilt", attemptId);
     } catch (error) {
       if (options.stateStore.wasRunCancelled("bilt", attemptId, error)) {
-        console.log("[NextCard SW] Bilt sync cancelled");
         return;
       }
 

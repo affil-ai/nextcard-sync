@@ -109,10 +109,6 @@ export function createAmexSync(options: AmexSyncDeps) {
       const isOnBenefits = landingUrl.includes("global.americanexpress.com/card-benefits");
       const isLoggedIn = isOnRewards || isOnDashboard || isOnBenefits;
 
-      console.log(
-        `[NextCard SW] Amex: landing URL after stabilization: ${landingUrl}, loggedIn=${isLoggedIn}`,
-      );
-
       let firstResult: Record<string, unknown>;
 
       if (isLoggedIn) {
@@ -168,9 +164,6 @@ export function createAmexSync(options: AmexSyncDeps) {
         stopPolling = true;
 
         if (raceResult === null) {
-          console.log(
-            "[NextCard SW] Amex: redirected to login during extraction, switching to login flow",
-          );
           options.stateStore.updateProvider("amex", { status: "waiting_for_login" });
           firstResult = await options.waitForGenericLoginAndExtract(
             "amex",
@@ -182,7 +175,6 @@ export function createAmexSync(options: AmexSyncDeps) {
         }
       } else {
         options.stateStore.updateProvider("amex", { status: "waiting_for_login" });
-        console.log("[NextCard SW] Amex: waiting for login...");
         firstResult = await options.waitForGenericLoginAndExtract(
           "amex",
           attemptId,
@@ -214,10 +206,6 @@ export function createAmexSync(options: AmexSyncDeps) {
       const totalCards = (firstResult.totalCards as number) ?? 1;
       const allCards: AmexCardData[] = [firstCard];
 
-      console.log(
-        `[NextCard SW] Amex: first card scraped. Total cards available: ${totalCards}`,
-      );
-
       if (totalCards > 1) {
         const cardOptions =
           (firstResult.cardOptions as {
@@ -230,15 +218,8 @@ export function createAmexSync(options: AmexSyncDeps) {
           const option = cardOptions[index];
           const firstLastDigits = firstCard.cardName?.match(/\d{4,5}/)?.[0];
           if (firstLastDigits && option.lastDigits === firstLastDigits) {
-            console.log(
-              `[NextCard SW] Amex: skipping already-scraped card: ${option.name} (${option.lastDigits})`,
-            );
             continue;
           }
-
-          console.log(
-            `[NextCard SW] Amex: switching to card ${index + 1}/${cardOptions.length}: ${option.name}`,
-          );
 
           const cardDone = waitForAmexMessage(attemptId, "AMEX_CARD_DONE", 30000);
           try {
@@ -261,7 +242,6 @@ export function createAmexSync(options: AmexSyncDeps) {
             const cardResult = await cardDone.promise;
             if (cardResult.data) {
               allCards.push(cardResult.data as AmexCardData);
-              console.log(`[NextCard SW] Amex: scraped card: ${option.name}`);
             } else {
               console.warn(
                 `[NextCard SW] Amex: no data for card: ${option.name}`,
@@ -296,7 +276,6 @@ export function createAmexSync(options: AmexSyncDeps) {
         error: null,
         lastSyncedAt: new Date().toISOString(),
       });
-      console.log(`[NextCard SW] Amex sync complete: ${allCards.length} cards scraped`);
 
       void sendRunMessageToTab(
         tabId,
@@ -309,7 +288,6 @@ export function createAmexSync(options: AmexSyncDeps) {
       options.stateStore.assertRunActive("amex", attemptId);
       void options.pushToNextCard("amex", multiCardData).then((result) => {
         if (result.ok) {
-          console.log("[NextCard SW] Amex pushed to NextCard");
         } else {
           console.warn("[NextCard SW] Amex push failed:", result.error);
         }
@@ -317,7 +295,6 @@ export function createAmexSync(options: AmexSyncDeps) {
       options.stateStore.finishSyncRun("amex", attemptId);
     } catch (error) {
       if (options.stateStore.wasRunCancelled("amex", attemptId, error)) {
-        console.log("[NextCard SW] Amex sync cancelled");
         return;
       }
       const errorMessage =

@@ -141,7 +141,6 @@ export function createMessageRouter(options: {
           options.stateStore.setTabId(providerId, null);
           void options.deleteFromNextCard(providerId).then((result) => {
             if (result.ok) {
-              console.log(`[NextCard SW] Deleted ${providerId} from NextCard`);
             } else {
               console.warn(
                 `[NextCard SW] Delete failed for ${providerId}:`,
@@ -175,6 +174,7 @@ export function createMessageRouter(options: {
           && (
             message.state === "logged_in"
             || message.state === "logged_out"
+            || message.state === "mfa_challenge"
             || message.state === "unknown"
           )
         ) {
@@ -414,7 +414,7 @@ export function createMessageRouter(options: {
         return true;
 
       case "AMEX_OFFERS_COMPLETE":
-        if (message.enrolledOffers && (message.enrolledOffers as unknown[]).length > 0) {
+        if (Array.isArray(message.enrolledOffers) && message.enrolledOffers.length > 0) {
           options.syncEnrolledOffers?.("amex", message);
         }
         sendResponse({ ok: true });
@@ -422,7 +422,7 @@ export function createMessageRouter(options: {
 
       // ── Chase Offers (sync only — discovery/enrollment handled by content script) ──
       case "CHASE_OFFERS_COMPLETE":
-        if (message.enrolledOffers && (message.enrolledOffers as unknown[]).length > 0) {
+        if (Array.isArray(message.enrolledOffers) && message.enrolledOffers.length > 0) {
           options.syncEnrolledOffers?.("chase", message);
         }
         sendResponse({ ok: true });
@@ -489,7 +489,7 @@ export function createMessageRouter(options: {
         return true;
 
       case "CITI_OFFERS_COMPLETE":
-        if (message.enrolledOffers && (message.enrolledOffers as unknown[]).length > 0) {
+        if (Array.isArray(message.enrolledOffers) && message.enrolledOffers.length > 0) {
           options.syncEnrolledOffers?.("citi", message);
         }
         sendResponse({ ok: true });
@@ -591,7 +591,6 @@ export function createExternalMessageRouter(options: {
 
       void options.setAuth(auth).then(async () => {
         options.resetAuthCache();
-        console.log("[NextCard SW] Auth token received and stored");
         sendResponse({ ok: true });
 
         if (sender.tab?.id) {

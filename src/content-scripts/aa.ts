@@ -6,6 +6,7 @@
 import type { AALoyaltyData, LoginState } from "../lib/types";
 import { createContentScriptRunControl } from "../lib/content-script-run-control";
 import { showOverlay, updateOverlay, updateOverlayProgress } from "../lib/overlay";
+import { createLoginStateMonitor } from "../lib/login-state-monitor";
 
 const runControl = createContentScriptRunControl("aa");
 
@@ -126,7 +127,6 @@ function scrapeAccountPage(): AALoyaltyData {
   // TODO: Scrape travel credits from /aadvantage-program/profile/travel-credits
   // (separate page — need a test account with active credits to build selectors)
 
-  console.log("[NextCard AA] Scraped data:", data);
   return data;
 }
 
@@ -134,10 +134,9 @@ function scrapeAccountPage(): AALoyaltyData {
 
 async function runExtraction(attemptId: string) {
   const loginState = detectLoginState();
-  console.log("[NextCard AA] Login state:", loginState);
   await runControl.sendMessage(attemptId, { type: "LOGIN_STATE", state: loginState });
 
-  if (loginState !== "logged_in") {
+  if (loginState === "logged_out" || loginState === "mfa_challenge") {
     showOverlay("waiting_for_login", "aa");
     await runControl.sendMessage(attemptId, {
       type: "STATUS_UPDATE",
@@ -150,7 +149,6 @@ async function runExtraction(attemptId: string) {
 
   updateOverlay("extracting", "aa");
   updateOverlayProgress("Reading miles and loyalty points...");
-  console.log("[NextCard AA] Waiting for account content...");
   await waitForSelector(".reward-miles, [class*='_member-name_']", 20000);
   await runControl.sleep(3000, attemptId);
 
@@ -176,19 +174,35 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     sendResponse({ ok: true });
   }
   if (message.type === "GET_LOGIN_STATE") {
-    sendResponse({ state: detectLoginState() });
+    sendResponse({ state: monitor.getState() });
   }
   return true;
 });
 
-const initialState = detectLoginState();
+let syncActive = false;
+const monitor = createLoginStateMonitor({
+  provider: "aa",
+  detectLoginState,
+  onStateChange(newState) {
+    if (!syncActive) return;
+    if (newState === "logged_in") {
+      updateOverlay("extracting", "aa");
+    } else if (newState === "mfa_challenge") {
+      updateOverlay("mfa_challenge", "aa");
+    } else {
+      updateOverlay("waiting_for_login", "aa");
+    }
+  },
+});
+monitor.start();
+const initialState = monitor.getState();
 chrome.runtime.sendMessage({ type: "GET_PROVIDER_STATUS", provider: "aa" }, (r) => {
   const s = r?.status;
   if (s === "extracting" || (s === "detecting_login" && initialState === "logged_in")) {
+    syncActive = true;
     showOverlay("extracting", "aa");
   } else if ((s === "waiting_for_login" || s === "detecting_login") && initialState !== "logged_in") {
+    syncActive = true;
     showOverlay("waiting_for_login", "aa");
   }
 });
-chrome.runtime.sendMessage({ type: "LOGIN_STATE", provider: "aa", state: initialState }).catch(() => {});
-console.log("[NextCard AA] Content script loaded. Login state:", initialState);

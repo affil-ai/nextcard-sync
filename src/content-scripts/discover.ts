@@ -6,6 +6,7 @@
 import type { DiscoverLoyaltyData, LoginState } from "../lib/types";
 import { createContentScriptRunControl } from "../lib/content-script-run-control";
 import { showOverlay, updateOverlay, updateOverlayProgress } from "../lib/overlay";
+import { createLoginStateMonitor } from "../lib/login-state-monitor";
 
 const runControl = createContentScriptRunControl("discover");
 
@@ -97,7 +98,6 @@ function scrapeAccountPage(): DiscoverLoyaltyData {
     }
   } catch (e) { console.warn("[NextCard Discover] cashbackBalance:", e); }
 
-  console.log("[NextCard Discover] Scraped data:", data);
   return data;
 }
 
@@ -105,10 +105,9 @@ function scrapeAccountPage(): DiscoverLoyaltyData {
 
 async function runExtraction(attemptId: string) {
   const loginState = detectLoginState();
-  console.log("[NextCard Discover] Login state:", loginState);
   await runControl.sendMessage(attemptId, { type: "LOGIN_STATE", state: loginState });
 
-  if (loginState !== "logged_in") {
+  if (loginState === "logged_out" || loginState === "mfa_challenge") {
     showOverlay("waiting_for_login", "discover");
     await runControl.sendMessage(attemptId, {
       type: "STATUS_UPDATE",
@@ -121,7 +120,6 @@ async function runExtraction(attemptId: string) {
 
   updateOverlay("extracting", "discover");
   updateOverlayProgress("Reading cashback balance...");
-  console.log("[NextCard Discover] Waiting for account content...");
   await waitForSelector('[data-testid="rewardsBalance"], [data-testid="headerCardDetails"]', 20000);
   await runControl.sleep(2000, attemptId);
   const discoverCardEl = document.querySelector('[data-testid="headerCardDetails"]');
@@ -149,19 +147,35 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     sendResponse({ ok: true });
   }
   if (message.type === "GET_LOGIN_STATE") {
-    sendResponse({ state: detectLoginState() });
+    sendResponse({ state: monitor.getState() });
   }
   return true;
 });
 
-const initialState = detectLoginState();
+let syncActive = false;
+const monitor = createLoginStateMonitor({
+  provider: "discover",
+  detectLoginState,
+  onStateChange(newState) {
+    if (!syncActive) return;
+    if (newState === "logged_in") {
+      updateOverlay("extracting", "discover");
+    } else if (newState === "mfa_challenge") {
+      updateOverlay("mfa_challenge", "discover");
+    } else {
+      updateOverlay("waiting_for_login", "discover");
+    }
+  },
+});
+monitor.start();
+const initialState = monitor.getState();
 chrome.runtime.sendMessage({ type: "GET_PROVIDER_STATUS", provider: "discover" }, (r) => {
   const s = r?.status;
   if (s === "extracting" || (s === "detecting_login" && initialState === "logged_in")) {
+    syncActive = true;
     showOverlay("extracting", "discover");
   } else if ((s === "waiting_for_login" || s === "detecting_login") && initialState !== "logged_in") {
+    syncActive = true;
     showOverlay("waiting_for_login", "discover");
   }
 });
-chrome.runtime.sendMessage({ type: "LOGIN_STATE", provider: "discover", state: initialState }).catch(() => {});
-console.log("[NextCard Discover] Content script loaded. Login state:", initialState);

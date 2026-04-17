@@ -6,6 +6,7 @@
 import type { UnitedLoyaltyData, LoginState } from "../lib/types";
 import { createContentScriptRunControl } from "../lib/content-script-run-control";
 import { showOverlay, updateOverlay, updateOverlayProgress } from "../lib/overlay";
+import { createLoginStateMonitor } from "../lib/login-state-monitor";
 
 const runControl = createContentScriptRunControl("united");
 
@@ -150,7 +151,6 @@ function scrapeAccountPage(): UnitedLoyaltyData {
     }
   } catch (e) { console.warn("[NextCard United] eliteStatus:", e); }
 
-  console.log("[NextCard United] Scraped data:", data);
   return data;
 }
 
@@ -158,10 +158,9 @@ function scrapeAccountPage(): UnitedLoyaltyData {
 
 async function runExtraction(attemptId: string) {
   const loginState = detectLoginState();
-  console.log("[NextCard United] Login state:", loginState);
   await runControl.sendMessage(attemptId, { type: "LOGIN_STATE", state: loginState });
 
-  if (loginState !== "logged_in") {
+  if (loginState === "logged_out" || loginState === "mfa_challenge") {
     showOverlay("waiting_for_login", "united");
     await runControl.sendMessage(attemptId, {
       type: "STATUS_UPDATE",
@@ -174,7 +173,6 @@ async function runExtraction(attemptId: string) {
 
   updateOverlay("extracting", "united");
   updateOverlayProgress("Reading miles and Premier status...");
-  console.log("[NextCard United] Waiting for account content...");
   await waitForSelector('[class*="MileageBalance"], [class*="accountSummary"]', 20000);
   await runControl.sleep(3000, attemptId);
 
@@ -200,19 +198,35 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     sendResponse({ ok: true });
   }
   if (message.type === "GET_LOGIN_STATE") {
-    sendResponse({ state: detectLoginState() });
+    sendResponse({ state: monitor.getState() });
   }
   return true;
 });
 
-const initialState = detectLoginState();
+let syncActive = false;
+const monitor = createLoginStateMonitor({
+  provider: "united",
+  detectLoginState,
+  onStateChange(newState) {
+    if (!syncActive) return;
+    if (newState === "logged_in") {
+      updateOverlay("extracting", "united");
+    } else if (newState === "mfa_challenge") {
+      updateOverlay("mfa_challenge", "united");
+    } else {
+      updateOverlay("waiting_for_login", "united");
+    }
+  },
+});
+monitor.start();
+const initialState = monitor.getState();
 chrome.runtime.sendMessage({ type: "GET_PROVIDER_STATUS", provider: "united" }, (r) => {
   const s = r?.status;
   if (s === "extracting" || (s === "detecting_login" && initialState === "logged_in")) {
+    syncActive = true;
     showOverlay("extracting", "united");
   } else if ((s === "waiting_for_login" || s === "detecting_login") && initialState !== "logged_in") {
+    syncActive = true;
     showOverlay("waiting_for_login", "united");
   }
 });
-chrome.runtime.sendMessage({ type: "LOGIN_STATE", provider: "united", state: initialState }).catch(() => {});
-console.log("[NextCard United] Content script loaded. Login state:", initialState);

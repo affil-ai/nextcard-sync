@@ -54,9 +54,9 @@ export const providerRegistry = {
     iconPath: "src/icons/atmos-36.png",
     syncStrategy: "atmos",
     syncUrl: "https://www.alaskaair.com/atmosrewards/account/overview/?lid=AS_Nav_Account_Profile",
-    tabUrlPattern: "https://www.alaskaair.com/*",
+    tabUrlPattern: "https://*.alaskaair.com/*",
     accountUrlPattern: "https://www.alaskaair.com/atmosrewards/*",
-    manifestMatches: ["https://www.alaskaair.com/*"],
+    manifestMatches: ["https://www.alaskaair.com/*", "https://auth0.alaskaair.com/*"],
     contentScriptPath: "src/content-scripts/atmos.ts",
   },
   chase: {
@@ -71,7 +71,7 @@ export const providerRegistry = {
     accountUrlPattern: "https://secure.chase.com/web/auth/dashboard*",
     manifestMatches: ["https://ultimaterewardspoints.chase.com/*"],
     contentScriptPath: "src/content-scripts/chase.ts",
-    benefitsMatches: ["https://secure.chase.com/*"],
+    benefitsMatches: ["https://secure.chase.com/*", "https://chaseloyalty.chase.com/*"],
     benefitsContentScriptPath: "src/content-scripts/chase-benefits.ts",
   },
   aa: {
@@ -296,7 +296,17 @@ export function getProviderHostPermissions(definition: ProviderDefinition) {
 }
 
 export function buildProviderContentScripts() {
-  const scripts = providerIds.flatMap((providerId) => {
+  // Offer detector runs on all pages — registered first so Chrome auto-grants
+  // all-sites access at install time.
+  const scripts: Array<{ matches: string[]; js: string[]; run_at: "document_idle" }> = [
+    {
+      matches: ["http://*/*", "https://*/*"],
+      js: ["src/content-scripts/offer-detector.ts"],
+      run_at: "document_idle" as const,
+    },
+  ];
+
+  scripts.push(...providerIds.flatMap((providerId) => {
     const definition: ProviderDefinition = providerRegistry[providerId];
     const entries = [
       {
@@ -315,7 +325,7 @@ export function buildProviderContentScripts() {
     }
 
     return entries;
-  });
+  }));
 
   // Tool content scripts (offer management, not sync)
   scripts.push({

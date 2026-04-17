@@ -24,6 +24,7 @@ interface CitiOffer {
   merchantCategory: string | null;
   offerEndDate: string | null;
   redemptionType: string | null;
+  merchantImageUrl: string | null;
 }
 
 // ── Helpers ────────────────────────────────────────────────
@@ -50,22 +51,18 @@ async function discoverCards(): Promise<CitiCard[]> {
     null,
   );
 
-  console.log(`[NextCard Citi Offers] Card API response: status=${resp.status}`, resp.data ? Object.keys(resp.data as Record<string, unknown>) : "no data");
   if (resp.status !== 200 || !resp.data) return [];
 
   const data = resp.data as Record<string, unknown>;
   const creditCard = data.creditCardAccount as Record<string, unknown> | undefined;
   const accounts = (creditCard?.accountDetails ?? []) as Record<string, unknown>[];
 
-  console.log(`[NextCard Citi Offers] Found ${accounts.length} accounts`);
   if (accounts.length > 0) {
-    console.log(`[NextCard Citi Offers] Sample account:`, JSON.stringify(accounts[0]).substring(0, 300));
   }
 
   return accounts
     .filter((a) => {
       // Log why cards are filtered out
-      console.log(`[NextCard Citi Offers] Card: ${a.productName ?? a.accountName}, status=${a.accountStatus}, personal=${a.personalAccount}`);
       return a.accountStatus === "ACTIVE";
     })
     .map((a) => ({
@@ -109,6 +106,7 @@ async function listOffers(accountId: string): Promise<CitiOffer[]> {
         merchantCategory: (o.merchantCategory ?? null) as string | null,
         offerEndDate: (o.offerEndDate ?? null) as string | null,
         redemptionType: (o.redemptionType ?? null) as string | null,
+        merchantImageUrl: (o.merchantImageURL ?? null) as string | null,
       });
     }
   }
@@ -153,7 +151,6 @@ async function runEnrollment(accountId: string) {
 
   const offers = await listOffers(accountId);
   const eligible = offers.filter((o) => !o.enrolled);
-  console.log(`[NextCard Citi Offers] ${eligible.length} eligible / ${offers.length} total`);
 
   if (eligible.length === 0) {
     chrome.runtime.sendMessage({ type: "CITI_OFFERS_COMPLETE", added: 0 }).catch(() => {});
@@ -174,7 +171,6 @@ async function runEnrollment(accountId: string) {
     sendProgress({ added, failed, total: eligible.length });
   }
 
-  console.log(`[NextCard Citi Offers] Done: ${added} added, ${failed} failed`);
   chrome.runtime.sendMessage({
     type: "CITI_OFFERS_COMPLETE",
     added,
@@ -198,7 +194,12 @@ async function runEnrollment(accountId: string) {
         rewardCurrency: "cash",
         maxReward: null,
         minSpend: null,
-        merchantUrl: o.merchantName?.includes(".") ? o.merchantName : null,
+        merchantUrl: o.name?.includes(".") ? o.name : null,
+        merchantLogoUrl: o.merchantImageUrl,
+        redemptionChannel: o.redemptionType === "Online" ? "online" as const
+          : o.redemptionType === "Online_instore" ? "both" as const
+          : o.redemptionType ? "in_store" as const
+          : null,
       };
     }),
   }).catch(() => {});
@@ -213,10 +214,20 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (message.type === "CITI_OFFERS_DISCOVER") {
     (async () => {
       const cards = await discoverCards();
+      if (cards.length === 0) {
+        sendResponse({ type: "CITI_OFFERS_READY", cards: [], offerCounts: {}, error: "no_cards" });
+        return;
+      }
+      const probes = await Promise.all(cards.map((c) => listOffers(c.accountId)));
+      const offerCounts: Record<string, number> = {};
+      for (let i = 0; i < cards.length; i++) {
+        offerCounts[cards[i].accountId] = probes[i].filter((o) => !o.enrolled).length;
+      }
       sendResponse({
         type: "CITI_OFFERS_READY",
         cards: cards.map((c) => ({ id: c.accountId, name: c.name, lastDigits: c.lastDigits })),
-        error: cards.length === 0 ? "no_cards" : undefined,
+        offerCounts,
+        error: undefined,
       });
     })();
     return true;
@@ -237,4 +248,3 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   }
 });
 
-console.log("[NextCard Citi Offers] Content script loaded");

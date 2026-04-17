@@ -4,13 +4,12 @@ import type {
   ProviderStateMap,
   ProviderSyncState,
 } from "../lib/types";
-import { coreViews, homeElements, authElements, views, onboardingElements, consentElements, footerElements } from "./dom";
+import { homeElements, authElements, views, onboardingElements, consentElements, footerElements } from "./dom";
 import { createAirlineRenderers } from "./renderers/airlines";
 import { createBankRenderers } from "./renderers/banks";
 import { createHotelRenderers } from "./renderers/hotels";
 import { openWallet, updateWalletBtn } from "./renderers/shared";
 import {
-  DEBUG_FORCE_ONBOARDING,
   loadInitialPopupState,
   loadOnboardingFlags,
   pollPopupSnapshot,
@@ -56,10 +55,13 @@ function initAmexOffers() {
   }
 
   let amexCards: Array<{ id: string; name: string; lastDigits: string | null; locale: string; accountKey: string | null }> = [];
+  let amexOfferCounts: Record<string, number> = {};
   let selectedCardId = "";
   let selectedLocale = "en_US";
   let selectedAccountKey: string | null = null;
   let amexTabId: number | null = null;
+  let amexOurTabId: number | null = null;
+  let amexDiscoverGen = 0;
 
   const discoverBtn = document.getElementById("amexOffersDiscoverBtn");
   const runBtn = document.getElementById("amexOffersRunBtn");
@@ -74,34 +76,47 @@ function initAmexOffers() {
   const summaryEl = document.getElementById("amexOffersSummary");
   const errorMsgEl = document.getElementById("amexOffersErrorMsg");
 
+  function waitForTabLoad(tabId: number, callback: (tabId: number) => void) {
+    const listener = (updatedTabId: number, info: chrome.tabs.TabChangeInfo) => {
+      if (updatedTabId === tabId && info.status === "complete") {
+        chrome.tabs.onUpdated.removeListener(listener);
+        setTimeout(() => callback(tabId), 3000);
+      }
+    };
+    chrome.tabs.onUpdated.addListener(listener);
+  }
+
   function findOrOpenAmexTab(callback: (tabId: number) => void) {
-    // Always open a fresh tab to guarantee the content script hooks.
-    // The content script fetches /dashboard itself for card data, so
-    // the tab just needs to be on any americanexpress.com page.
-    chrome.tabs.create({ url: "https://global.americanexpress.com/offers", active: true }, (newTab) => {
-      if (!newTab?.id) {
-        if (errorMsgEl) errorMsgEl.textContent = "Could not open Amex tab.";
-        showState("Error");
+    chrome.tabs.query({ url: "https://global.americanexpress.com/*" }, (tabs) => {
+      if (tabs[0]?.id) {
+        const tabId = tabs[0].id;
+        amexTabId = tabId;
+        amexOurTabId = null;
+        chrome.tabs.update(tabId, { active: true });
+        chrome.tabs.reload(tabId);
+        waitForTabLoad(tabId, callback);
         return;
       }
-      const tabId = newTab.id;
-      const listener = (updatedTabId: number, info: chrome.tabs.TabChangeInfo) => {
-        if (updatedTabId === tabId && info.status === "complete") {
-          chrome.tabs.onUpdated.removeListener(listener);
-          // Give the content script time to initialize
-          setTimeout(() => callback(tabId), 3000);
+      chrome.tabs.create({ url: "https://global.americanexpress.com/offers", active: true }, (newTab) => {
+        if (!newTab?.id) {
+          if (errorMsgEl) errorMsgEl.textContent = "Could not open Amex tab.";
+          showState("Error");
+          return;
         }
-      };
-      chrome.tabs.onUpdated.addListener(listener);
+        amexTabId = newTab.id;
+        amexOurTabId = newTab.id;
+        waitForTabLoad(newTab.id, callback);
+      });
     });
   }
 
-  function tryDiscoverOffers(tabId: number, retriesLeft = 3) {
+  function tryDiscoverOffers(tabId: number, gen: number, retriesLeft = 10) {
+    if (gen !== amexDiscoverGen) return;
     chrome.tabs.sendMessage(tabId, { type: "AMEX_OFFERS_DISCOVER" }, (resp) => {
+      if (gen !== amexDiscoverGen) return;
       if (chrome.runtime.lastError || !resp) {
         if (retriesLeft > 0) {
-          // Content script may not be ready yet — retry after a short wait
-          setTimeout(() => tryDiscoverOffers(tabId, retriesLeft - 1), 2000);
+          setTimeout(() => tryDiscoverOffers(tabId, gen, retriesLeft - 1), 2000);
           return;
         }
         if (errorMsgEl) errorMsgEl.textContent = "Could not reach Amex page. Make sure you're signed in.";
@@ -110,36 +125,62 @@ function initAmexOffers() {
       }
 
       if (resp.error === "no_cards") {
-        if (errorMsgEl) errorMsgEl.textContent = "No Amex cards found. Sign in to americanexpress.com and try again.";
+        if (retriesLeft > 0) {
+          setTimeout(() => tryDiscoverOffers(tabId, gen, retriesLeft - 1), 3000);
+          return;
+        }
+        if (errorMsgEl) errorMsgEl.textContent = "No Amex cards found. Make sure you're signed in and try again.";
         showState("Error");
         return;
       }
       amexCards = resp.cards ?? [];
+      amexOfferCounts = resp.offerCounts ?? {};
       if (amexCards.length > 0 && cardSelect && cardSelectWrap) {
-        cardSelect.innerHTML = amexCards.map((c) => `<option value="${c.id}" data-locale="${c.locale}">${c.name}</option>`).join("");
+        cardSelect.innerHTML = amexCards.map((c) => {
+          const n = amexOfferCounts[c.id] ?? 0;
+          const suffix = n > 0 ? ` (${n} offers)` : "";
+          return `<option value="${c.id}" data-locale="${c.locale}">${c.name}${suffix}</option>`;
+        }).join("");
         cardSelectWrap.style.display = "";
       }
       selectedCardId = amexCards[0]?.id ?? "";
       selectedLocale = amexCards[0]?.locale ?? "en_US";
       selectedAccountKey = amexCards[0]?.accountKey ?? null;
-      const count = resp.offerCount ?? 0;
-      if (offerCountEl) {
-        offerCountEl.textContent = count > 0
-          ? `${count} eligible offers`
-          : `Found ${amexCards.length} card${amexCards.length === 1 ? "" : "s"} — select one and start`;
-      }
+      updateOfferCountLabel();
       showState("Ready");
     });
   }
 
-  discoverBtn?.addEventListener("click", () => {
+  const amexCard = document.getElementById("amexOffersCard");
+  function handleAmexDiscover() {
+    const gen = ++amexDiscoverGen;
     showState("Loading");
     amexTabId = null;
     findOrOpenAmexTab((tabId) => {
+      if (gen !== amexDiscoverGen) return;
       amexTabId = tabId;
-      tryDiscoverOffers(tabId);
+      tryDiscoverOffers(tabId, gen);
     });
+  }
+  discoverBtn?.addEventListener("click", (e) => { e.stopPropagation(); handleAmexDiscover(); });
+  amexCard?.addEventListener("click", () => { if (panels.Initial?.style.display !== "none") handleAmexDiscover(); });
+  document.getElementById("amexOffersLoadingCancel")?.addEventListener("click", (e) => {
+    e.stopPropagation();
+    amexDiscoverGen++;
+    showState("Initial");
+    if (amexOurTabId) { chrome.tabs.remove(amexOurTabId); }
+    amexTabId = null;
+    amexOurTabId = null;
   });
+  document.getElementById("amexOffersRefreshBtn")?.addEventListener("click", () => { if (amexTabId) tryDiscoverOffers(amexTabId, ++amexDiscoverGen); });
+
+  function updateOfferCountLabel() {
+    if (!offerCountEl) return;
+    const count = amexOfferCounts[selectedCardId] ?? 0;
+    offerCountEl.textContent = count > 0
+      ? `${count} eligible offer${count === 1 ? "" : "s"}`
+      : "No unenrolled offers for this card";
+  }
 
   cardSelect?.addEventListener("change", () => {
     const card = amexCards.find((c) => c.id === cardSelect.value);
@@ -147,6 +188,7 @@ function initAmexOffers() {
       selectedCardId = card.id;
       selectedLocale = card.locale;
       selectedAccountKey = card.accountKey;
+      updateOfferCountLabel();
     }
   });
 
@@ -234,8 +276,11 @@ function initChaseOffers() {
   const errorMsgEl = document.getElementById("chaseOffersErrorMsg");
 
   let chaseCards: Array<{ id: string; name: string; lastDigits: string | null }> = [];
+  let chaseOfferCounts: Record<string, number> = {};
   let chaseTabId: number | null = null;
+  let chaseOurTabId: number | null = null;
   let selectedCardId = "";
+  let chaseDiscoverGen = 0;
 
   function showState(state: keyof typeof states) {
     for (const [key, el] of Object.entries(states)) {
@@ -243,40 +288,47 @@ function initChaseOffers() {
     }
   }
 
+  function waitForChaseTabLoad(tabId: number, callback: (tabId: number) => void) {
+    const listener = (updatedTabId: number, info: chrome.tabs.TabChangeInfo) => {
+      if (updatedTabId === tabId && info.status === "complete") {
+        chrome.tabs.onUpdated.removeListener(listener);
+        setTimeout(() => callback(tabId), 3000);
+      }
+    };
+    chrome.tabs.onUpdated.addListener(listener);
+  }
+
   function findOrOpenChaseTab(callback: (tabId: number) => void) {
-    // Find existing Chase tab or open new one
     chrome.tabs.query({ url: ["https://secure.chase.com/*", "https://secure01a.chase.com/*", "https://secure03a.chase.com/*", "https://secure05a.chase.com/*"] }, (tabs) => {
       if (tabs[0]?.id) {
-        // Existing tab — reload to ensure content script hooks
         const tabId = tabs[0].id;
+        chaseTabId = tabId;
+        chaseOurTabId = null;
         chrome.tabs.update(tabId, { active: true });
-        setTimeout(() => callback(tabId), 1000);
+        chrome.tabs.reload(tabId);
+        waitForChaseTabLoad(tabId, callback);
         return;
       }
-      // Open new tab
       chrome.tabs.create({ url: "https://secure.chase.com/web/auth/dashboard", active: true }, (newTab) => {
         if (!newTab?.id) {
           if (errorMsgEl) errorMsgEl.textContent = "Could not open Chase tab.";
           showState("Error");
           return;
         }
-        const tabId = newTab.id;
-        const listener = (updatedTabId: number, info: chrome.tabs.TabChangeInfo) => {
-          if (updatedTabId === tabId && info.status === "complete") {
-            chrome.tabs.onUpdated.removeListener(listener);
-            setTimeout(() => callback(tabId), 3000);
-          }
-        };
-        chrome.tabs.onUpdated.addListener(listener);
+        chaseTabId = newTab.id;
+        chaseOurTabId = newTab.id;
+        waitForChaseTabLoad(newTab.id, callback);
       });
     });
   }
 
-  function tryDiscover(tabId: number, retriesLeft = 10) {
+  function tryDiscover(tabId: number, gen: number, retriesLeft = 15) {
+    if (gen !== chaseDiscoverGen) return;
     chrome.tabs.sendMessage(tabId, { type: "CHASE_OFFERS_DISCOVER" }, (resp) => {
+      if (gen !== chaseDiscoverGen) return;
       if (chrome.runtime.lastError || !resp) {
         if (retriesLeft > 0) {
-          setTimeout(() => tryDiscover(tabId, retriesLeft - 1), 3000);
+          setTimeout(() => tryDiscover(tabId, gen, retriesLeft - 1), 3000);
           return;
         }
         if (errorMsgEl) errorMsgEl.textContent = "Could not reach Chase. Make sure you're signed in.";
@@ -284,33 +336,67 @@ function initChaseOffers() {
         return;
       }
       if (resp.error === "no_cards") {
+        if (retriesLeft > 0) {
+          setTimeout(() => tryDiscover(tabId, gen, retriesLeft - 1), 3000);
+          return;
+        }
         if (errorMsgEl) errorMsgEl.textContent = "No Chase cards found. Sign in and try again.";
         showState("Error");
         return;
       }
       chaseCards = resp.cards ?? [];
+      chaseOfferCounts = resp.offerCounts ?? {};
       if (chaseCards.length > 1 && cardSelect && cardSelectWrap) {
-        cardSelect.innerHTML = chaseCards.map((c) => `<option value="${c.id}">${c.name}${c.lastDigits ? ` ···· ${c.lastDigits}` : ""}</option>`).join("");
+        cardSelect.innerHTML = chaseCards.map((c) => {
+          const n = chaseOfferCounts[c.id] ?? 0;
+          const suffix = n > 0 ? ` (${n} offers)` : "";
+          return `<option value="${c.id}">${c.name}${c.lastDigits ? ` ···· ${c.lastDigits}` : ""}${suffix}</option>`;
+        }).join("");
         cardSelectWrap.style.display = "";
       }
       selectedCardId = chaseCards[0]?.id ?? "";
-      if (offerCountEl) offerCountEl.textContent = `Found ${chaseCards.length} card${chaseCards.length === 1 ? "" : "s"} — select one and start`;
+      updateChaseOfferCountLabel();
       showState("Ready");
     });
   }
 
-  document.getElementById("chaseOffersDiscoverBtn")?.addEventListener("click", () => {
+  const chaseCard = document.getElementById("chaseOffersCard");
+  function handleChaseDiscover() {
+    const gen = ++chaseDiscoverGen;
     showState("Loading");
     chaseTabId = null;
     findOrOpenChaseTab((tabId) => {
+      if (gen !== chaseDiscoverGen) return;
       chaseTabId = tabId;
-      tryDiscover(tabId);
+      tryDiscover(tabId, gen);
     });
+  }
+  document.getElementById("chaseOffersDiscoverBtn")?.addEventListener("click", (e) => { e.stopPropagation(); handleChaseDiscover(); });
+  chaseCard?.addEventListener("click", () => { if (states.Initial?.style.display !== "none") handleChaseDiscover(); });
+  document.getElementById("chaseOffersLoadingCancel")?.addEventListener("click", (e) => {
+    e.stopPropagation();
+    chaseDiscoverGen++;
+    showState("Initial");
+    if (chaseOurTabId) { chrome.tabs.remove(chaseOurTabId); }
+    chaseTabId = null;
+    chaseOurTabId = null;
   });
+  document.getElementById("chaseOffersRefreshBtn")?.addEventListener("click", () => { if (chaseTabId) tryDiscover(chaseTabId, ++chaseDiscoverGen); });
+
+  function updateChaseOfferCountLabel() {
+    if (!offerCountEl) return;
+    const count = chaseOfferCounts[selectedCardId] ?? 0;
+    offerCountEl.textContent = count > 0
+      ? `${count} eligible offer${count === 1 ? "" : "s"}`
+      : "No unenrolled offers for this card";
+  }
 
   cardSelect?.addEventListener("change", () => {
     const card = chaseCards.find((c) => c.id === cardSelect.value);
-    if (card) selectedCardId = card.id;
+    if (card) {
+      selectedCardId = card.id;
+      updateChaseOfferCountLabel();
+    }
   });
 
   document.getElementById("chaseOffersRunBtn")?.addEventListener("click", () => {
@@ -379,8 +465,11 @@ function initCitiOffers() {
   const errorMsgEl = document.getElementById("citiOffersErrorMsg");
 
   let citiCards: Array<{ id: string; name: string; lastDigits: string | null }> = [];
+  let citiOfferCounts: Record<string, number> = {};
   let citiTabId: number | null = null;
+  let citiOurTabId: number | null = null;
   let selectedAccountId = "";
+  let citiDiscoverGen = 0;
 
   function showState(state: keyof typeof states) {
     for (const [key, el] of Object.entries(states)) {
@@ -389,52 +478,107 @@ function initCitiOffers() {
   }
 
   function findOrOpenCitiTab(callback: (tabId: number) => void) {
-    chrome.tabs.create({ url: "https://online.citi.com/US/ag/products-offers/merchantoffers", active: true }, (newTab) => {
-      if (!newTab?.id) { if (errorMsgEl) errorMsgEl.textContent = "Could not open Citi tab."; showState("Error"); return; }
-      const tabId = newTab.id;
-      const listener = (updatedTabId: number, info: chrome.tabs.TabChangeInfo) => {
-        if (updatedTabId === tabId && info.status === "complete") {
-          chrome.tabs.onUpdated.removeListener(listener);
-          setTimeout(() => callback(tabId), 3000);
-        }
-      };
-      chrome.tabs.onUpdated.addListener(listener);
+    chrome.tabs.query({ url: "https://online.citi.com/*" }, (tabs) => {
+      if (tabs[0]?.id) {
+        const tabId = tabs[0].id;
+        citiTabId = tabId;
+        citiOurTabId = null;
+        chrome.tabs.update(tabId, { active: true, url: "https://online.citi.com/US/ag/products-offers/merchantoffers" });
+        const listener = (updatedTabId: number, info: chrome.tabs.TabChangeInfo) => {
+          if (updatedTabId === tabId && info.status === "complete") {
+            chrome.tabs.onUpdated.removeListener(listener);
+            setTimeout(() => callback(tabId), 3000);
+          }
+        };
+        chrome.tabs.onUpdated.addListener(listener);
+        return;
+      }
+      chrome.tabs.create({ url: "https://online.citi.com/US/ag/dashboard", active: true }, (newTab) => {
+        if (!newTab?.id) { if (errorMsgEl) errorMsgEl.textContent = "Could not open Citi tab."; showState("Error"); return; }
+        const tabId = newTab.id;
+        citiTabId = tabId;
+        citiOurTabId = tabId;
+        const dashListener = (updatedTabId: number, info: chrome.tabs.TabChangeInfo) => {
+          if (updatedTabId !== tabId || info.status !== "complete") return;
+          chrome.tabs.onUpdated.removeListener(dashListener);
+          chrome.tabs.update(tabId, { url: "https://online.citi.com/US/ag/products-offers/merchantoffers" });
+          const offersListener = (updatedTabId2: number, info2: chrome.tabs.TabChangeInfo) => {
+            if (updatedTabId2 !== tabId || info2.status !== "complete") return;
+            chrome.tabs.onUpdated.removeListener(offersListener);
+            setTimeout(() => callback(tabId), 3000);
+          };
+          chrome.tabs.onUpdated.addListener(offersListener);
+        };
+        chrome.tabs.onUpdated.addListener(dashListener);
+      });
     });
   }
 
-  function tryDiscover(tabId: number, retriesLeft = 10) {
+  function tryDiscover(tabId: number, gen: number, retriesLeft = 15) {
+    if (gen !== citiDiscoverGen) return;
     chrome.tabs.sendMessage(tabId, { type: "CITI_OFFERS_DISCOVER" }, (resp) => {
+      if (gen !== citiDiscoverGen) return;
       if (chrome.runtime.lastError || !resp) {
-        if (retriesLeft > 0) { setTimeout(() => tryDiscover(tabId, retriesLeft - 1), 3000); return; }
+        if (retriesLeft > 0) { setTimeout(() => tryDiscover(tabId, gen, retriesLeft - 1), 3000); return; }
         if (errorMsgEl) errorMsgEl.textContent = "Could not reach Citi. Make sure you're signed in.";
         showState("Error");
         return;
       }
       if (resp.error === "no_cards") {
+        if (retriesLeft > 0) { setTimeout(() => tryDiscover(tabId, gen, retriesLeft - 1), 3000); return; }
         if (errorMsgEl) errorMsgEl.textContent = "No Citi cards found. Sign in and try again.";
         showState("Error");
         return;
       }
       citiCards = resp.cards ?? [];
+      citiOfferCounts = resp.offerCounts ?? {};
       if (citiCards.length > 1 && cardSelect && cardSelectWrap) {
-        cardSelect.innerHTML = citiCards.map((c) => `<option value="${c.id}">${c.name}${c.lastDigits ? ` ···· ${c.lastDigits}` : ""}</option>`).join("");
+        cardSelect.innerHTML = citiCards.map((c) => {
+          const n = citiOfferCounts[c.id] ?? 0;
+          const suffix = n > 0 ? ` (${n} offers)` : "";
+          return `<option value="${c.id}">${c.name}${c.lastDigits ? ` ···· ${c.lastDigits}` : ""}${suffix}</option>`;
+        }).join("");
         cardSelectWrap.style.display = "";
       }
       selectedAccountId = citiCards[0]?.id ?? "";
-      if (offerCountEl) offerCountEl.textContent = `Found ${citiCards.length} card${citiCards.length === 1 ? "" : "s"} — select one and start`;
+      updateCitiOfferCountLabel();
       showState("Ready");
     });
   }
 
-  document.getElementById("citiOffersDiscoverBtn")?.addEventListener("click", () => {
+  const citiCard = document.getElementById("citiOffersCard");
+  function handleCitiDiscover() {
+    const gen = ++citiDiscoverGen;
     showState("Loading");
     citiTabId = null;
-    findOrOpenCitiTab((tabId) => { citiTabId = tabId; tryDiscover(tabId); });
+    findOrOpenCitiTab((tabId) => { if (gen !== citiDiscoverGen) return; citiTabId = tabId; tryDiscover(tabId, gen); });
+  }
+  document.getElementById("citiOffersDiscoverBtn")?.addEventListener("click", (e) => { e.stopPropagation(); handleCitiDiscover(); });
+  citiCard?.addEventListener("click", () => { if (states.Initial?.style.display !== "none") handleCitiDiscover(); });
+  document.getElementById("citiOffersLoadingCancel")?.addEventListener("click", (e) => {
+    e.stopPropagation();
+    citiDiscoverGen++;
+    showState("Initial");
+    if (citiOurTabId) { chrome.tabs.remove(citiOurTabId); }
+    citiTabId = null;
+    citiOurTabId = null;
   });
+  document.getElementById("citiOffersRefreshBtn")?.addEventListener("click", () => { if (citiTabId) tryDiscover(citiTabId, ++citiDiscoverGen); });
+
+  function updateCitiOfferCountLabel() {
+    if (!offerCountEl) return;
+    const count = citiOfferCounts[selectedAccountId] ?? 0;
+    offerCountEl.textContent = count > 0
+      ? `${count} eligible offer${count === 1 ? "" : "s"}`
+      : "No unenrolled offers for this card";
+  }
 
   cardSelect?.addEventListener("change", () => {
     const card = citiCards.find((c) => c.id === cardSelect.value);
-    if (card) selectedAccountId = card.id;
+    if (card) {
+      selectedAccountId = card.id;
+      updateCitiOfferCountLabel();
+    }
   });
 
   document.getElementById("citiOffersRunBtn")?.addEventListener("click", () => {
@@ -528,7 +672,8 @@ function initDiscoverBonus() {
     });
   }
 
-  document.getElementById("discoverBonusBtn")?.addEventListener("click", () => {
+  const discoverCard = document.getElementById("discoverBonusCard");
+  function handleDiscoverBonus() {
     showState("Loading");
     chrome.tabs.create({ url: "https://www.discover.com/login/", active: true }, (newTab) => {
       if (!newTab?.id) { showState("Error"); return; }
@@ -560,7 +705,9 @@ function initDiscoverBonus() {
         chrome.tabs.onUpdated.removeListener(listener);
       }, 120000);
     });
-  });
+  }
+  document.getElementById("discoverBonusBtn")?.addEventListener("click", (e) => { e.stopPropagation(); handleDiscoverBonus(); });
+  discoverCard?.addEventListener("click", () => { if (states.Initial?.style.display !== "none") handleDiscoverBonus(); });
 
   document.getElementById("discoverBonusAgainBtn")?.addEventListener("click", () => showState("Initial"));
   document.getElementById("discoverBonusRetryBtn")?.addEventListener("click", () => showState("Initial"));
@@ -768,7 +915,7 @@ const consentController = createConsentController({
 });
 
 async function requestSync(providerId: ProviderId) {
-  if (!consentGiven || DEBUG_FORCE_ONBOARDING) {
+  if (!consentGiven) {
     consentController.request(providerId);
     return false;
   }
@@ -791,9 +938,7 @@ const renderHome = createHomeRenderer({
   getFirstSyncCompleted: () => firstSyncCompleted,
   markFirstSyncCompleted: () => {
     firstSyncCompleted = true;
-    if (!DEBUG_FORCE_ONBOARDING) {
-      chrome.storage.local.set({ firstSyncCompleted: true });
-    }
+    chrome.storage.local.set({ firstSyncCompleted: true });
   },
   onProviderSelected: handleProviderSelected,
 });
@@ -810,15 +955,21 @@ function getInitials(name: string | null) {
     .slice(0, 2);
 }
 
+let authConfirmed = false;
+
 function renderAuthState(auth: NextCardAuth | null) {
   if (!flagsLoaded) return;
 
   if (!auth) {
+    // Don't flash the disclosure view on first load — service worker may still be waking up.
+    // Only show disclosure after a poll confirms auth is truly null.
+    if (!authConfirmed) return;
     if (currentView !== "disclosure") {
       showView("disclosure");
     }
     return;
   }
+  authConfirmed = true;
 
   if (!disclosureAccepted) {
     if (currentView !== "disclosure") {
@@ -867,9 +1018,7 @@ function maybeShowCongratsBanner(allStates: Record<ProviderId, ProviderSyncState
   const providerId = tourSyncProvider;
   tourSyncProvider = null;
   firstSyncCompleted = true;
-  if (!DEBUG_FORCE_ONBOARDING) {
-    chrome.storage.local.set({ firstSyncCompleted: true });
-  }
+  chrome.storage.local.set({ firstSyncCompleted: true });
   showView(providerId);
   homeElements.congratsBanner.classList.add("visible");
 }
@@ -907,6 +1056,7 @@ footerElements.versionFooter.addEventListener("click", () => {
 async function refreshPopupState() {
   try {
     const snapshot = await pollPopupSnapshot();
+    authConfirmed = true;
     renderAuthState(snapshot.auth);
     if (!snapshot.auth || !snapshot.allStates) return;
 

@@ -43,9 +43,6 @@ export function registerNavigationGuard(options: {
 
       const definition = options.providerRegistry[providerId];
       if (!isUrlAllowedForProvider(url, definition)) {
-        console.log(
-          `[NextCard SW] ${definition.name}: user navigated away to ${url}, cancelling sync`,
-        );
         void options.cancelRun(
           providerId,
           `Sync cancelled — you navigated away from ${definition.name}`,
@@ -247,9 +244,6 @@ export async function recoverFromStall(options: {
   }
 
   if (options.isFirstPhase) {
-    console.log(
-      `[NextCard SW] ${options.providerId}: phase 1 stalled, reloading tab...`,
-    );
     await chrome.tabs.reload(options.tabId);
     await waitForTabLoad(options.tabId, 30000);
   }

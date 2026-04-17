@@ -145,9 +145,6 @@ async function hydrateFromNextCard() {
   }
 
   if (hydratedCount > 0) {
-    console.log(
-      `[NextCard SW] Hydrated ${hydratedCount} synced account(s) from NextCard`,
-    );
   }
 }
 
@@ -173,7 +170,6 @@ async function recordConsent(message: Record<string, unknown>) {
         userAgent: message.userAgent,
       }),
     });
-    console.log("[NextCard SW] Consent recorded");
   } catch {
     console.warn("[NextCard SW] Consent API call failed");
   }
@@ -319,5 +315,3 @@ void getAuth().then((auth) => {
     void retryPendingOfferSyncs();
   }
 });
-
-console.log("[NextCard SW] Service worker loaded");

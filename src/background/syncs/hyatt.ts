@@ -192,9 +192,6 @@ export function createHyattSync(options: HyattSyncDeps) {
 
         if (isAwardsMessage(awardsResult)) {
           overviewData.awards = awardsResult.awards;
-          console.log(
-            `[NextCard SW] Hyatt: scraped ${awardsResult.awards.length} awards`,
-          );
         }
       } catch (error) {
         console.warn(
@@ -210,12 +207,10 @@ export function createHyattSync(options: HyattSyncDeps) {
         error: null,
         lastSyncedAt: new Date().toISOString(),
       });
-      console.log("[NextCard SW] Hyatt sync complete:", overviewData);
 
       options.stateStore.assertRunActive("hyatt", attemptId);
       void options.pushToNextCard("hyatt", overviewData).then((pushResult) => {
         if (pushResult.ok) {
-          console.log("[NextCard SW] Hyatt pushed to NextCard");
         } else {
           console.warn("[NextCard SW] Hyatt push failed:", pushResult.error);
         }
@@ -223,7 +218,6 @@ export function createHyattSync(options: HyattSyncDeps) {
       options.stateStore.finishSyncRun("hyatt", attemptId);
     } catch (error) {
       if (options.stateStore.wasRunCancelled("hyatt", attemptId, error)) {
-        console.log("[NextCard SW] Hyatt sync cancelled");
         return;
       }
 

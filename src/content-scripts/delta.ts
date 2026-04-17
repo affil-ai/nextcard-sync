@@ -6,6 +6,7 @@
 import type { DeltaLoyaltyData, LoginState } from "../lib/types";
 import { createContentScriptRunControl } from "../lib/content-script-run-control";
 import { showOverlay, updateOverlay, updateOverlayProgress } from "../lib/overlay";
+import { createLoginStateMonitor } from "../lib/login-state-monitor";
 
 const runControl = createContentScriptRunControl("delta");
 
@@ -153,7 +154,6 @@ function scrapeAccountPage(): DeltaLoyaltyData {
     data.deltaAmexCard = document.querySelector('.banner-container__title')?.textContent?.trim() ?? null;
   } catch (e) { console.warn("[NextCard Delta] deltaAmexCard:", e); }
 
-  console.log("[NextCard Delta] Scraped data:", data);
   return data;
 }
 
@@ -161,10 +161,9 @@ function scrapeAccountPage(): DeltaLoyaltyData {
 
 async function runExtraction(attemptId: string) {
   const loginState = detectLoginState();
-  console.log("[NextCard Delta] Login state:", loginState);
   await runControl.sendMessage(attemptId, { type: "LOGIN_STATE", state: loginState });
 
-  if (loginState !== "logged_in") {
+  if (loginState === "logged_out" || loginState === "mfa_challenge") {
     showOverlay("waiting_for_login", "delta");
     await runControl.sendMessage(attemptId, {
       type: "STATUS_UPDATE",
@@ -177,7 +176,6 @@ async function runExtraction(attemptId: string) {
 
   updateOverlay("extracting", "delta");
   updateOverlayProgress("Reading miles and Medallion status...");
-  console.log("[NextCard Delta] Waiting for account content...");
   // Wait for the overview page trackers or fall back to the banner
   await waitForSelector(".skymiles-landing-page-tracker, .skymiles-medallion-banner", 20000);
   await runControl.sleep(3000, attemptId);
@@ -204,19 +202,35 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     sendResponse({ ok: true });
   }
   if (message.type === "GET_LOGIN_STATE") {
-    sendResponse({ state: detectLoginState() });
+    sendResponse({ state: monitor.getState() });
   }
   return true;
 });
 
-const initialState = detectLoginState();
+let syncActive = false;
+const monitor = createLoginStateMonitor({
+  provider: "delta",
+  detectLoginState,
+  onStateChange(newState) {
+    if (!syncActive) return;
+    if (newState === "logged_in") {
+      updateOverlay("extracting", "delta");
+    } else if (newState === "mfa_challenge") {
+      updateOverlay("mfa_challenge", "delta");
+    } else {
+      updateOverlay("waiting_for_login", "delta");
+    }
+  },
+});
+monitor.start();
+const initialState = monitor.getState();
 chrome.runtime.sendMessage({ type: "GET_PROVIDER_STATUS", provider: "delta" }, (r) => {
   const s = r?.status;
   if (s === "extracting" || (s === "detecting_login" && initialState === "logged_in")) {
+    syncActive = true;
     showOverlay("extracting", "delta");
   } else if ((s === "waiting_for_login" || s === "detecting_login") && initialState !== "logged_in") {
+    syncActive = true;
     showOverlay("waiting_for_login", "delta");
   }
 });
-chrome.runtime.sendMessage({ type: "LOGIN_STATE", provider: "delta", state: initialState }).catch(() => {});
-console.log("[NextCard Delta] Content script loaded. Login state:", initialState);

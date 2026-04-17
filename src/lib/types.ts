@@ -23,7 +23,7 @@ export type ProviderId = "marriott" | "atmos" | "chase" | "aa" | "delta" | "unit
 
 export type SyncStatus = "idle" | "detecting_login" | "waiting_for_login" | "extracting" | "done" | "cancelled" | "error";
 
-export type LoginState = "logged_in" | "logged_out" | "unknown";
+export type LoginState = "logged_in" | "logged_out" | "mfa_challenge" | "unknown";
 
 export interface ProviderSyncState<T = unknown> {
   status: SyncStatus;

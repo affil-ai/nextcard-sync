@@ -6,6 +6,7 @@
 import type { FrontierLoyaltyData, LoginState } from "../lib/types";
 import { createContentScriptRunControl } from "../lib/content-script-run-control";
 import { showOverlay, updateOverlay, updateOverlayProgress } from "../lib/overlay";
+import { createLoginStateMonitor } from "../lib/login-state-monitor";
 
 const runControl = createContentScriptRunControl("frontier");
 
@@ -255,7 +256,6 @@ function scrapeAccountPage(): FrontierLoyaltyData {
     console.warn("[NextCard Frontier] Failed to read next-tier progress:", error);
   }
 
-  console.log("[NextCard Frontier] Scraped data:", data);
   return data;
 }
 
@@ -263,10 +263,9 @@ function scrapeAccountPage(): FrontierLoyaltyData {
 
 async function runExtraction(attemptId: string) {
   const loginState = detectLoginState();
-  console.log("[NextCard Frontier] Login state:", loginState);
   await runControl.sendMessage(attemptId, { type: "LOGIN_STATE", state: loginState });
 
-  if (loginState !== "logged_in") {
+  if (loginState === "logged_out" || loginState === "mfa_challenge") {
     showOverlay("waiting_for_login", "frontier");
     await runControl.sendMessage(attemptId, {
       type: "STATUS_UPDATE",
@@ -279,7 +278,6 @@ async function runExtraction(attemptId: string) {
 
   updateOverlay("extracting", "frontier");
   updateOverlayProgress("Reading miles and status...");
-  console.log("[NextCard Frontier] Waiting for profile content...");
   await waitForSelector(".member-container, .loyalty-tile, .user-logged-in .user-name", 20000);
   // Frontier account tiles hydrate after the shell appears, so give them a short buffer.
   await runControl.sleep(3000, attemptId);
@@ -287,7 +285,6 @@ async function runExtraction(attemptId: string) {
   runControl.throwIfCancelled(attemptId);
   const data = scrapeAccountPage();
   if (!hasAuthenticatedData(data)) {
-    console.log("[NextCard Frontier] Scrape looked unauthenticated, waiting for real login");
     showOverlay("waiting_for_login", "frontier");
     await runControl.sendMessage(attemptId, {
       type: "STATUS_UPDATE",
@@ -317,19 +314,35 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     sendResponse({ ok: true });
   }
   if (message.type === "GET_LOGIN_STATE") {
-    sendResponse({ state: detectLoginState() });
+    sendResponse({ state: monitor.getState() });
   }
   return true;
 });
 
-const initialState = detectLoginState();
+let syncActive = false;
+const monitor = createLoginStateMonitor({
+  provider: "frontier",
+  detectLoginState,
+  onStateChange(newState) {
+    if (!syncActive) return;
+    if (newState === "logged_in") {
+      updateOverlay("extracting", "frontier");
+    } else if (newState === "mfa_challenge") {
+      updateOverlay("mfa_challenge", "frontier");
+    } else {
+      updateOverlay("waiting_for_login", "frontier");
+    }
+  },
+});
+monitor.start();
+const initialState = monitor.getState();
 chrome.runtime.sendMessage({ type: "GET_PROVIDER_STATUS", provider: "frontier" }, (response) => {
   const status = response?.status;
   if (status === "extracting" || (status === "detecting_login" && initialState === "logged_in")) {
+    syncActive = true;
     showOverlay("extracting", "frontier");
   } else if ((status === "waiting_for_login" || status === "detecting_login") && initialState !== "logged_in") {
+    syncActive = true;
     showOverlay("waiting_for_login", "frontier");
   }
 });
-chrome.runtime.sendMessage({ type: "LOGIN_STATE", provider: "frontier", state: initialState }).catch(() => {});
-console.log("[NextCard Frontier] Content script loaded. Login state:", initialState);

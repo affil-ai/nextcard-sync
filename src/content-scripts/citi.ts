@@ -9,6 +9,7 @@
 import type { CitiLoyaltyData, LoginState } from "../lib/types";
 import { createContentScriptRunControl } from "../lib/content-script-run-control";
 import { showOverlay, updateOverlay, updateOverlayProgress } from "../lib/overlay";
+import { createLoginStateMonitor } from "../lib/login-state-monitor";
 
 const runControl = createContentScriptRunControl("citi");
 
@@ -126,7 +127,6 @@ function scrapeDashboard(): CitiLoyaltyData {
     }
   }
 
-  console.log("[NextCard Citi] Scraped data:", { cards });
   return { cards };
 }
 
@@ -134,10 +134,9 @@ function scrapeDashboard(): CitiLoyaltyData {
 
 async function runExtraction(attemptId: string) {
   const loginState = detectLoginState();
-  console.log("[NextCard Citi] Login state:", loginState);
   await runControl.sendMessage(attemptId, { type: "LOGIN_STATE", state: loginState });
 
-  if (loginState !== "logged_in") {
+  if (loginState === "logged_out" || loginState === "mfa_challenge") {
     showOverlay("waiting_for_login", "citi");
     await runControl.sendMessage(attemptId, {
       type: "STATUS_UPDATE",
@@ -150,7 +149,6 @@ async function runExtraction(attemptId: string) {
 
   updateOverlay("extracting", "citi");
   updateOverlayProgress("Finding your Citi cards...");
-  console.log("[NextCard Citi] Waiting for dashboard content...");
   await waitForSelector("dashboard-account-selector-tile, #dashboardWelcomeHeader", 20000);
   await runControl.sleep(3000, attemptId);
   const citiCardName = document.querySelector("dashboard-account-selector-tile h3.account-name");
@@ -178,19 +176,35 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     sendResponse({ ok: true });
   }
   if (message.type === "GET_LOGIN_STATE") {
-    sendResponse({ state: detectLoginState() });
+    sendResponse({ state: monitor.getState() });
   }
   return true;
 });
 
-const initialState = detectLoginState();
+let syncActive = false;
+const monitor = createLoginStateMonitor({
+  provider: "citi",
+  detectLoginState,
+  onStateChange(newState) {
+    if (!syncActive) return;
+    if (newState === "logged_in") {
+      updateOverlay("extracting", "citi");
+    } else if (newState === "mfa_challenge") {
+      updateOverlay("mfa_challenge", "citi");
+    } else {
+      updateOverlay("waiting_for_login", "citi");
+    }
+  },
+});
+monitor.start();
+const initialState = monitor.getState();
 chrome.runtime.sendMessage({ type: "GET_PROVIDER_STATUS", provider: "citi" }, (r) => {
   const s = r?.status;
   if (s === "extracting" || (s === "detecting_login" && initialState === "logged_in")) {
+    syncActive = true;
     showOverlay("extracting", "citi");
   } else if ((s === "waiting_for_login" || s === "detecting_login") && initialState !== "logged_in") {
+    syncActive = true;
     showOverlay("waiting_for_login", "citi");
   }
 });
-chrome.runtime.sendMessage({ type: "LOGIN_STATE", provider: "citi", state: initialState }).catch(() => {});
-console.log("[NextCard Citi] Content script loaded. Login state:", initialState);

@@ -13,6 +13,7 @@
 import type { LoginState } from "../lib/types";
 import { createContentScriptRunControl } from "../lib/content-script-run-control";
 import { showOverlay, updateOverlay, updateOverlayProgress } from "../lib/overlay";
+import { createLoginStateMonitor } from "../lib/login-state-monitor";
 import {
   isLikelyCapitalOneCardTile,
   parseCapitalOneRewardsSummary,
@@ -160,7 +161,6 @@ function scrapeAccountSummary() {
     data.rewardsLabel = rewardsSummary.rewardsLabel;
   }
 
-  console.log("[NextCard CapitalOne] Account summary data:", data);
   return data;
 }
 
@@ -194,7 +194,6 @@ function scrapeBenefits() {
     });
   }
 
-  console.log("[NextCard CapitalOne] Benefits scraped:", benefits);
   return benefits;
 }
 
@@ -202,10 +201,9 @@ function scrapeBenefits() {
 
 async function runExtraction(attemptId: string) {
   const loginState = detectLoginState();
-  console.log("[NextCard CapitalOne] Login state:", loginState);
   await runControl.sendMessage(attemptId, { type: "LOGIN_STATE", state: loginState });
 
-  if (loginState !== "logged_in") {
+  if (loginState === "logged_out" || loginState === "mfa_challenge") {
     showOverlay("waiting_for_login", "capitalone");
     await runControl.sendMessage(attemptId, {
       type: "STATUS_UPDATE",
@@ -221,7 +219,6 @@ async function runExtraction(attemptId: string) {
   const url = window.location.href.toLowerCase();
 
   if (url.includes("/rewards/benefits")) {
-    console.log("[NextCard CapitalOne] On benefits page, scraping...");
     await waitForSelector(".c1-cc-rewards-benefit-tile");
     await runControl.sleep(2000, attemptId);
 
@@ -235,7 +232,6 @@ async function runExtraction(attemptId: string) {
   }
 
   if (url.includes("/rewards")) {
-    console.log("[NextCard CapitalOne] On rewards page, scraping...");
     await waitForSelector(".c1-ease-card-rewards-display__balance, .c1-ease-card-rewards-tabs");
     await runControl.sleep(2000, attemptId);
 
@@ -255,7 +251,6 @@ async function runExtraction(attemptId: string) {
   }
 
   if (url.includes("accountsummary")) {
-    console.log("[NextCard CapitalOne] On account summary, scraping...");
     await waitForSelector("c1-ease-account-tile, .account-tile");
     await runControl.sleep(3000, attemptId);
 
@@ -279,7 +274,6 @@ async function runExtraction(attemptId: string) {
     return;
   }
 
-  console.log("[NextCard CapitalOne] Unknown page, sending empty data");
   await runControl.sendMessage(attemptId, {
     type: "EXTRACTION_DONE",
     data: {
@@ -308,19 +302,35 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     sendResponse({ ok: true });
   }
   if (message.type === "GET_LOGIN_STATE") {
-    sendResponse({ state: detectLoginState() });
+    sendResponse({ state: monitor.getState() });
   }
   return true;
 });
 
-const initialState = detectLoginState();
+let syncActive = false;
+const monitor = createLoginStateMonitor({
+  provider: "capitalone",
+  detectLoginState,
+  onStateChange(newState) {
+    if (!syncActive) return;
+    if (newState === "logged_in") {
+      updateOverlay("extracting", "capitalone");
+    } else if (newState === "mfa_challenge") {
+      updateOverlay("mfa_challenge", "capitalone");
+    } else {
+      updateOverlay("waiting_for_login", "capitalone");
+    }
+  },
+});
+monitor.start();
+const initialState = monitor.getState();
 chrome.runtime.sendMessage({ type: "GET_PROVIDER_STATUS", provider: "capitalone" }, (r) => {
   const s = r?.status;
   if (s === "extracting" || (s === "detecting_login" && initialState === "logged_in")) {
+    syncActive = true;
     showOverlay("extracting", "capitalone");
   } else if ((s === "waiting_for_login" || s === "detecting_login") && initialState !== "logged_in") {
+    syncActive = true;
     showOverlay("waiting_for_login", "capitalone");
   }
 });
-chrome.runtime.sendMessage({ type: "LOGIN_STATE", provider: "capitalone", state: initialState }).catch(() => {});
-console.log("[NextCard CapitalOne] Content script loaded. Login state:", initialState);

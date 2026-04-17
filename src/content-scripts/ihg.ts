@@ -6,6 +6,7 @@
 import type { IHGLoyaltyData, LoginState } from "../lib/types";
 import { createContentScriptRunControl } from "../lib/content-script-run-control";
 import { showOverlay, updateOverlay, updateOverlayProgress } from "../lib/overlay";
+import { createLoginStateMonitor } from "../lib/login-state-monitor";
 
 const runControl = createContentScriptRunControl("ihg");
 
@@ -157,10 +158,8 @@ async function scrapeAccountPage(attemptId: string) {
 
   // The points tracker is useful context for humans even when the first tier lacks a visible target.
   if (progress.pointsText) {
-    console.log("[NextCard IHG] Points tracker:", progress.pointsText);
   }
 
-  console.log("[NextCard IHG] Scraped data:", data);
   return data;
 }
 
@@ -168,7 +167,7 @@ async function runExtraction(attemptId: string) {
   const loginState = detectLoginState();
   await runControl.sendMessage(attemptId, { type: "LOGIN_STATE", state: loginState });
 
-  if (loginState !== "logged_in") {
+  if (loginState === "logged_out" || loginState === "mfa_challenge") {
     showOverlay("waiting_for_login", "ihg");
     await runControl.sendMessage(attemptId, {
       type: "STATUS_UPDATE",
@@ -228,20 +227,36 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   }
 
   if (message.type === "GET_LOGIN_STATE") {
-    sendResponse({ state: detectLoginState() });
+    sendResponse({ state: monitor.getState() });
   }
 
   return true;
 });
 
-const initialState = detectLoginState();
+let syncActive = false;
+const monitor = createLoginStateMonitor({
+  provider: "ihg",
+  detectLoginState,
+  onStateChange(newState) {
+    if (!syncActive) return;
+    if (newState === "logged_in") {
+      updateOverlay("extracting", "ihg");
+    } else if (newState === "mfa_challenge") {
+      updateOverlay("mfa_challenge", "ihg");
+    } else {
+      updateOverlay("waiting_for_login", "ihg");
+    }
+  },
+});
+monitor.start();
+const initialState = monitor.getState();
 chrome.runtime.sendMessage({ type: "GET_PROVIDER_STATUS", provider: "ihg" }, (response) => {
   const status = response?.status;
   if (status === "extracting" || (status === "detecting_login" && initialState === "logged_in")) {
+    syncActive = true;
     showOverlay("extracting", "ihg");
   } else if ((status === "waiting_for_login" || status === "detecting_login") && initialState !== "logged_in") {
+    syncActive = true;
     showOverlay("waiting_for_login", "ihg");
   }
 });
-chrome.runtime.sendMessage({ type: "LOGIN_STATE", provider: "ihg", state: initialState }).catch(() => {});
-console.log("[NextCard IHG] Content script loaded. Login state:", initialState);
