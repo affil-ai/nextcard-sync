@@ -37,6 +37,19 @@ if (tabBar) {
     if (syncTabPanel) syncTabPanel.style.display = tab === "sync" ? "" : "none";
     if (toolsTabPanel) toolsTabPanel.style.display = tab === "tools" ? "" : "none";
   });
+
+  chrome.storage.local.get("pendingTab").then((stored) => {
+    if (stored.pendingTab === "tools" && toolsTabPanel && syncTabPanel) {
+      tabBar.setAttribute("data-active", "tools");
+      tabBar.querySelectorAll(".tab-btn").forEach((b) => {
+        b.classList.toggle("active", b.getAttribute("data-tab") === "tools");
+      });
+      syncTabPanel.style.display = "none";
+      toolsTabPanel.style.display = "";
+      chrome.storage.local.remove("pendingTab");
+      chrome.action.setBadgeText({ text: "" });
+    }
+  });
 }
 
 // ── Amex Offers ────────────────────────────────────────────

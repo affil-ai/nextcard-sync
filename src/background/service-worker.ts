@@ -6,8 +6,8 @@ import {
   pushToNextCard,
   validateProviderData,
 } from "../lib/sync-to-nextcard";
-import { syncOffersToNextCard, retryPendingOfferSyncs, pullOfferUrlCache } from "../lib/sync-offers-to-nextcard";
-import type { OfferSyncPayload } from "../lib/sync-offers-to-nextcard";
+import { syncOffersToNextCard, syncDetectedOffersToNextCard, retryPendingOfferSyncs, pullOfferUrlCache } from "../lib/sync-offers-to-nextcard";
+import type { OfferSyncPayload, DetectedOfferSyncPayload } from "../lib/sync-offers-to-nextcard";
 import { providerRegistry } from "../providers/provider-registry";
 import { createMessageRouter, createExternalMessageRouter } from "./core/message-router";
 import { createRuntimeStateStore } from "./core/runtime-state";
@@ -284,6 +284,23 @@ chrome.runtime.onMessage.addListener(
 
       // Fire-and-forget — don't block the COMPLETE response
       void syncOffersToNextCard(payload);
+    },
+    syncDetectedOffers: (issuer, message) => {
+      type DetectedOfferMsg = Omit<DetectedOfferSyncPayload["offers"][number], "detectedAt">;
+      const detectedOffers = message.detectedOffers as DetectedOfferMsg[];
+
+      const payload: DetectedOfferSyncPayload = {
+        issuer,
+        issuerCardId: String(message.cardId ?? message.accountId ?? ""),
+        issuerCardName: String(message.cardName ?? ""),
+        issuerCardLastDigits: (message.cardLastDigits as string) ?? null,
+        offers: detectedOffers.map((o) => ({
+          ...o,
+          detectedAt: new Date().toISOString(),
+        })),
+      };
+
+      void syncDetectedOffersToNextCard(payload);
     },
   }),
 );

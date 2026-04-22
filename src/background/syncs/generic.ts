@@ -721,6 +721,14 @@ export function createGenericSyncHandlers(options: GenericSyncDeps) {
       let currentTab = await chrome.tabs.get(tabId);
       let landingUrl = currentTab.url ?? "";
 
+      // Some providers (e.g. Discover) do a client-side JS redirect after page load
+      // when the user is already logged in. Wait briefly and re-check the URL.
+      if (landingUrl.match(/sign.?in|login/i) && definition.accountUrl) {
+        await new Promise((r) => setTimeout(r, 3000));
+        currentTab = await chrome.tabs.get(tabId);
+        landingUrl = currentTab.url ?? "";
+      }
+
       // If syncUrl was a sign-in page but we landed elsewhere (user already logged in),
       // navigate to the account page so the content script can extract data.
       if (

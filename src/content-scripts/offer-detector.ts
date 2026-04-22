@@ -1,6 +1,6 @@
 /**
  * Lightweight content script that runs on all pages at document_idle.
- * Checks if the current hostname matches any enrolled merchant offer
+ * Checks if the current hostname matches any enrolled or detected merchant offer
  * in chrome.storage.local and shows a toast if so.
  *
  * Registered in manifest.json on <all_urls> so Chrome auto-grants
@@ -8,6 +8,7 @@
  */
 
 const OFFER_URL_CACHE_KEY = "offerUrlCache";
+const DETECTED_OFFER_URL_CACHE_KEY = "detectedOfferUrlCache";
 
 const ISSUER_HOSTNAMES = new Set([
   "chase.com",
@@ -28,6 +29,7 @@ interface CachedOffer {
   issuer: string;
   rewardType: "percentage" | "flat_cash" | "points" | null;
   rewardAmount: number | null;
+  status?: "enrolled" | "detected";
 }
 
 const hostname = location.hostname.replace(/^www\./, "").toLowerCase();
@@ -38,36 +40,57 @@ if (!ISSUER_HOSTNAMES.has(hostname)) {
   try { dismissed = sessionStorage.getItem(dismissKey) !== null; } catch { /* */ }
 
   if (!dismissed) {
-    chrome.storage.local.get(OFFER_URL_CACHE_KEY).then((stored) => {
-      const cache: Record<string, CachedOffer[]> | undefined = stored[OFFER_URL_CACHE_KEY];
-      if (!cache) return;
-
-      const offers = cache[hostname];
-      if (!offers?.length) return;
+    chrome.storage.local.get([OFFER_URL_CACHE_KEY, DETECTED_OFFER_URL_CACHE_KEY]).then((stored) => {
+      const enrolledCache: Record<string, CachedOffer[]> | undefined = stored[OFFER_URL_CACHE_KEY];
+      const detectedCache: Record<string, CachedOffer[]> | undefined = stored[DETECTED_OFFER_URL_CACHE_KEY];
 
       const now = new Date();
-      const active = offers.filter(
-        (o) => !o.expirationDate || new Date(o.expirationDate) > now,
-      );
-      if (!active.length) return;
+      const filterActive = (offers: CachedOffer[]) =>
+        offers.filter((o) => !o.expirationDate || new Date(o.expirationDate) > now);
 
-      showToast(active, dismissKey);
+      // Enrolled offers take priority
+      const enrolledOffers = filterActive(enrolledCache?.[hostname] ?? []);
+      if (enrolledOffers.length > 0) {
+        showToast(enrolledOffers, dismissKey, "enrolled");
+        return;
+      }
+
+      const detectedOffers = filterActive(detectedCache?.[hostname] ?? []);
+      if (detectedOffers.length > 0) {
+        showToast(detectedOffers, dismissKey, "detected");
+      }
     });
   }
 }
 
-function showToast(offers: CachedOffer[], dismissKey: string): void {
+function showToast(offers: CachedOffer[], dismissKey: string, type: "enrolled" | "detected"): void {
   if (document.getElementById("nextcard-offer-toast")) return;
 
   const sorted = [...offers].sort((a, b) => (b.rewardAmount ?? 0) - (a.rewardAmount ?? 0));
   const best = sorted[0];
-  const moreCount = offers.length - 1;
 
   const offerText = best.offerValue ?? "Special offer";
   const cardText = best.cardLastDigits
     ? `${best.cardName} \u00B7\u00B7\u00B7\u00B7${best.cardLastDigits}`
     : best.cardName;
-  const moreLabel = moreCount > 0 ? ` +${moreCount} more` : "";
+
+  // Build list of unique card labels
+  const seenCards = new Set<string>();
+  const cardLabels: string[] = [];
+  for (const o of sorted) {
+    const key = `${o.issuer}:${o.cardLastDigits ?? o.cardName}`;
+    if (seenCards.has(key)) continue;
+    seenCards.add(key);
+    cardLabels.push(o.cardLastDigits ? `${o.cardName} \u00B7\u00B7\u00B7\u00B7${o.cardLastDigits}` : o.cardName);
+  }
+
+  const isDetected = type === "detected";
+  const tagText = isDetected ? "AVAILABLE" : "OFFER";
+  const tagBg = isDetected ? "#6b5b2d" : "#2d6b2d";
+  const tagColor = isDetected ? "#ebd77d" : "#7deb7d";
+  const subtitle = isDetected
+    ? cardLabels.map((c) => `<div class="nc-card-row">${esc(c)}</div>`).join("")
+    : `Use ${esc(cardText)}`;
 
   function esc(str: string): string {
     const d = document.createElement("div");
@@ -103,7 +126,7 @@ function showToast(offers: CachedOffer[], dismissKey: string): void {
         box-shadow: 0 8px 32px rgba(0,0,0,0.28), 0 2px 8px rgba(0,0,0,0.12);
         max-width: 400px;
         min-width: 280px;
-        cursor: default;
+        cursor: ${isDetected ? "pointer" : "default"};
         animation: nc-in 0.4s cubic-bezier(0.16,1,0.3,1);
         border: 1px solid rgba(255,255,255,0.08);
       }
@@ -120,11 +143,13 @@ function showToast(offers: CachedOffer[], dismissKey: string): void {
       .nc-body { display: flex; flex-direction: column; gap: 2px; flex: 1; min-width: 0; }
       .nc-offer { font-size: 13.5px; font-weight: 600; line-height: 1.3; display: flex; align-items: center; gap: 6px; }
       .nc-tag {
-        background: #2d6b2d; color: #7deb7d; font-size: 10px; font-weight: 700;
+        background: ${tagBg}; color: ${tagColor}; font-size: 10px; font-weight: 700;
         padding: 1px 6px; border-radius: 4px; letter-spacing: 0.3px;
         text-transform: uppercase; white-space: nowrap;
       }
       .nc-card { font-size: 12px; color: rgba(255,255,255,0.55); line-height: 1.3; }
+      .nc-card-row { font-size: 11.5px; color: rgba(255,255,255,0.55); line-height: 1.4; padding-left: 10px; position: relative; }
+      .nc-card-row::before { content: "·"; position: absolute; left: 2px; font-weight: 700; }
       .nc-more { font-size: 11px; color: rgba(255,255,255,0.4); line-height: 1.3; }
       .nc-x {
         background: none; border: none; color: rgba(255,255,255,0.35); cursor: pointer;
@@ -138,9 +163,9 @@ function showToast(offers: CachedOffer[], dismissKey: string): void {
     <div class="nc-toast">
       <img class="nc-icon" src="${iconUrl}" alt="nextcard" />
       <div class="nc-body">
-        <div class="nc-offer"><span>${esc(offerText)}</span><span class="nc-tag">OFFER</span></div>
-        <div class="nc-card">Use ${esc(cardText)}</div>
-        ${moreLabel ? `<div class="nc-more">${esc(moreLabel)} offer${moreCount > 1 ? "s" : ""}</div>` : ""}
+        <div class="nc-offer"><span>${esc(offerText)}</span><span class="nc-tag">${tagText}</span></div>
+        ${isDetected ? `<div class="nc-card" style="margin-bottom:2px;">Add to</div>${subtitle}` : `<div class="nc-card">${subtitle}</div>`}
+        ${!isDetected && offers.length > 1 ? `<div class="nc-more">+${offers.length - 1} more offer${offers.length > 2 ? "s" : ""}</div>` : ""}
       </div>
       <button class="nc-x" aria-label="Dismiss">
         <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round">
@@ -162,6 +187,23 @@ function showToast(offers: CachedOffer[], dismissKey: string): void {
   }
 
   shadow.querySelector(".nc-x")?.addEventListener("click", dismiss);
+
+  if (isDetected) {
+    shadow.querySelector(".nc-toast")?.addEventListener("click", (e) => {
+      if ((e.target as HTMLElement).closest(".nc-x")) return;
+      chrome.storage.local.set({ pendingTab: "tools" });
+      chrome.runtime.sendMessage({ type: "OPEN_TOOLS_TAB" }).catch(() => {});
+      // Transform toast into a nudge to click the extension icon
+      const body = shadow.querySelector(".nc-body");
+      if (body) {
+        body.innerHTML = `
+          <div class="nc-offer"><span>Open nextcard sync</span></div>
+          <div class="nc-card">Click the extension icon in your toolbar</div>
+        `;
+      }
+    });
+  }
+
   setTimeout(dismiss, 8000);
   document.body.appendChild(host);
 }

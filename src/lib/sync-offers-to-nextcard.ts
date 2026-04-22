@@ -47,11 +47,36 @@ export interface CachedOffer {
   issuer: string;
   rewardType: "percentage" | "flat_cash" | "points" | null;
   rewardAmount: number | null;
+  status?: "enrolled" | "detected";
 }
 
 export type OfferUrlCache = Record<string, CachedOffer[]>;
 
 export const OFFER_URL_CACHE_KEY = "offerUrlCache";
+export const DETECTED_OFFER_URL_CACHE_KEY = "detectedOfferUrlCache";
+
+export interface DetectedOfferSyncPayload {
+  issuer: string;
+  issuerCardId: string;
+  issuerCardName: string;
+  issuerCardLastDigits: string | null;
+  offers: Array<{
+    issuerOfferId: string;
+    merchantName: string;
+    offerValue: string | null;
+    category: string | null;
+    expirationDate: string | null;
+    rewardType: "percentage" | "flat_cash" | "points" | null;
+    rewardAmount: number | null;
+    rewardCurrency: string | null;
+    maxReward: number | null;
+    minSpend: number | null;
+    merchantUrl: string | null;
+    merchantLogoUrl: string | null;
+    redemptionChannel: "online" | "in_store" | "both" | null;
+    detectedAt: string;
+  }>;
+}
 
 const MAX_RETRIES = 2;
 const RETRY_DELAY_MS = 2000;
@@ -73,6 +98,29 @@ export function normalizeHostname(urlOrHostname: string): string | null {
   } catch {
     return null;
   }
+}
+
+function splitOfferMapByStatus(offerMap: OfferUrlCache): { enrolled: OfferUrlCache; detected: OfferUrlCache } {
+  const enrolled: OfferUrlCache = {};
+  const detected: OfferUrlCache = {};
+
+  for (const [host, offers] of Object.entries(offerMap)) {
+    for (const offer of offers) {
+      const target = offer.status === "detected" ? detected : enrolled;
+      if (!target[host]) target[host] = [];
+      target[host].push(offer);
+    }
+  }
+
+  return { enrolled, detected };
+}
+
+async function saveOfferMaps(offerMap: OfferUrlCache): Promise<void> {
+  const { enrolled, detected } = splitOfferMapByStatus(offerMap);
+  await chrome.storage.local.set({
+    [OFFER_URL_CACHE_KEY]: enrolled,
+    [DETECTED_OFFER_URL_CACHE_KEY]: detected,
+  });
 }
 
 async function updateOfferUrlCache(payload: OfferSyncPayload): Promise<void> {
@@ -192,7 +240,7 @@ export async function syncOffersToNextCard(payload: OfferSyncPayload): Promise<v
       const result = await postOfferSync(payload);
       if (result.ok) {
         if (result.offerMap) {
-          await chrome.storage.local.set({ [OFFER_URL_CACHE_KEY]: result.offerMap });
+          await saveOfferMaps(result.offerMap);
         } else {
           await updateOfferUrlCache(payload);
         }
@@ -235,7 +283,7 @@ export async function retryPendingOfferSyncs(): Promise<void> {
       if (!result.ok) {
         remaining.push(payload);
       } else if (result.offerMap) {
-        await chrome.storage.local.set({ [OFFER_URL_CACHE_KEY]: result.offerMap });
+        await saveOfferMaps(result.offerMap);
       } else {
         await updateOfferUrlCache(payload);
       }
@@ -250,7 +298,38 @@ export async function retryPendingOfferSyncs(): Promise<void> {
   }
 }
 
-/** Pull enrolled offers from backend and rebuild the URL cache. Call on startup/re-auth. */
+export async function syncDetectedOffersToNextCard(payload: DetectedOfferSyncPayload): Promise<void> {
+  if (payload.offers.length === 0) return;
+
+  const auth = await getAuth();
+  if (!auth) return;
+
+  try {
+    const response = await fetch(`${__CONVEX_SITE_URL__}/extension/offers-detected`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${auth.token}`,
+      },
+      body: JSON.stringify({
+        ...payload,
+        issuerCardId: maskId(payload.issuerCardId),
+      }),
+    });
+
+    if (!response.ok) return;
+
+    const body = await response.json().catch(() => ({}));
+    const offerMap = (body as Record<string, unknown>).offerMap as OfferUrlCache | undefined;
+    if (offerMap) {
+      await saveOfferMaps(offerMap);
+    }
+  } catch (e) {
+    console.warn("[NextCard Detected Offers] sync error:", e);
+  }
+}
+
+/** Pull offers from backend and rebuild both URL caches. Call on startup/re-auth. */
 export async function pullOfferUrlCache(): Promise<void> {
   try {
     const auth = await getAuth();
@@ -274,11 +353,14 @@ export async function pullOfferUrlCache(): Promise<void> {
       expirationDate: string | null;
       rewardType: "percentage" | "flat_cash" | "points" | null;
       rewardAmount: number | null;
+      status?: "enrolled" | "detected";
     }> = data.offers ?? [];
 
     if (offers.length === 0) return;
 
-    const cache: OfferUrlCache = {};
+    const enrolledCache: OfferUrlCache = {};
+    const detectedCache: OfferUrlCache = {};
+
     for (const offer of offers) {
       if (!offer.merchantUrl) continue;
       const host = normalizeHostname(offer.merchantUrl);
@@ -295,14 +377,18 @@ export async function pullOfferUrlCache(): Promise<void> {
         rewardAmount: offer.rewardAmount,
       };
 
-      if (!cache[host]) {
-        cache[host] = [entry];
+      const target = offer.status === "detected" ? detectedCache : enrolledCache;
+      if (!target[host]) {
+        target[host] = [entry];
       } else {
-        cache[host].push(entry);
+        target[host].push(entry);
       }
     }
 
-    await chrome.storage.local.set({ [OFFER_URL_CACHE_KEY]: cache });
+    await chrome.storage.local.set({
+      [OFFER_URL_CACHE_KEY]: enrolledCache,
+      [DETECTED_OFFER_URL_CACHE_KEY]: detectedCache,
+    });
   } catch (e) {
     console.error("[NextCard Offers] pullOfferUrlCache error:", e);
   }

@@ -131,7 +131,7 @@ async function discoverCardsFromDashboard(): Promise<AmexCard[]> {
       if (statusMatch && statusMatch[1] === "Canceled") continue;
 
       const digitsMatch = section.match(/"display_account_number","(\d+)"/);
-      const lastDigits = digitsMatch ? digitsMatch[1] : null;
+      const lastDigits = digitsMatch ? digitsMatch[1].slice(-4) : null;
 
       let accountKey: string | null = null;
       const keyMatch = decoded.match(new RegExp(`"accountToken","${accountToken}","accountKey","([^"]+)"`));
@@ -382,7 +382,32 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       const offerCounts: Record<string, number> = {};
       for (let i = 0; i < cards.length; i++) {
         const offers = probes[i] ?? [];
-        offerCounts[cards[i].id] = offers.filter((o) => o.status !== "ENROLLED" && o.status !== "ADDED").length;
+        const eligible = offers.filter((o) => o.status !== "ENROLLED" && o.status !== "ADDED");
+        offerCounts[cards[i].id] = eligible.length;
+
+        if (offers.length > 0) {
+          chrome.runtime.sendMessage({
+            type: "AMEX_OFFERS_DETECTED",
+            cardId: cards[i].id,
+            cardName: cards[i].name,
+            cardLastDigits: cards[i].lastDigits,
+            detectedOffers: offers.map((o) => ({
+              issuerOfferId: o.offerId,
+              merchantName: o.name,
+              offerValue: o.shortDescription,
+              category: o.category,
+              expirationDate: o.expirationText,
+              rewardType: null as "percentage" | "flat_cash" | "points" | null,
+              rewardAmount: null as number | null,
+              rewardCurrency: null as string | null,
+              maxReward: null as number | null,
+              minSpend: null as number | null,
+              merchantUrl: o.merchantUrl,
+              merchantLogoUrl: o.merchantLogoUrl,
+              redemptionChannel: o.redemptionChannel,
+            })),
+          }).catch(() => {});
+        }
       }
       sendResponse({
         type: "AMEX_OFFERS_READY",

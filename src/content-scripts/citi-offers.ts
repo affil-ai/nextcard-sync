@@ -222,6 +222,33 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       const offerCounts: Record<string, number> = {};
       for (let i = 0; i < cards.length; i++) {
         offerCounts[cards[i].accountId] = probes[i].filter((o) => !o.enrolled).length;
+
+        if (probes[i].length > 0) {
+          chrome.runtime.sendMessage({
+            type: "CITI_OFFERS_DETECTED",
+            accountId: cards[i].accountId,
+            cardName: cards[i].name,
+            cardLastDigits: cards[i].lastDigits,
+            detectedOffers: probes[i].map((o) => ({
+              issuerOfferId: o.offerId,
+              merchantName: o.name,
+              offerValue: o.offerTitle,
+              category: o.merchantCategory,
+              expirationDate: o.offerEndDate,
+              rewardType: (o.offerDiscountType === "PERCENTAGE" || o.offerTitle?.includes("%")) ? "percentage" as const : o.offerDiscountType === "ABSOLUTE" ? "flat_cash" as const : null,
+              rewardAmount: (() => { const m = o.offerTitle?.match(/(\$?\d+(?:\.\d+)?)\s*%?\s*Back/i); return m ? parseFloat(m[1].replace("$", "")) : null; })(),
+              rewardCurrency: "cash" as string | null,
+              maxReward: null as number | null,
+              minSpend: null as number | null,
+              merchantUrl: o.name?.includes(".") ? o.name : null,
+              merchantLogoUrl: o.merchantImageUrl,
+              redemptionChannel: o.redemptionType === "Online" ? "online" as const
+                : o.redemptionType === "Online_instore" ? "both" as const
+                : o.redemptionType ? "in_store" as const
+                : null,
+            })),
+          }).catch(() => {});
+        }
       }
       sendResponse({
         type: "CITI_OFFERS_READY",

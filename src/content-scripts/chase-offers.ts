@@ -278,6 +278,30 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       const offerCounts: Record<string, number> = {};
       for (let i = 0; i < cards.length; i++) {
         offerCounts[cards[i].id] = probes[i].length;
+
+        if (probes[i].length > 0) {
+          chrome.runtime.sendMessage({
+            type: "CHASE_OFFERS_DETECTED",
+            cardId: cards[i].id,
+            cardName: cards[i].name,
+            cardLastDigits: cards[i].lastDigits,
+            detectedOffers: probes[i].map((o) => ({
+              issuerOfferId: o.offerId,
+              merchantName: o.name,
+              offerValue: o.offerHeaderText,
+              category: o.category,
+              expirationDate: o.offerEndTimestamp,
+              rewardType: o.offerRewardTypeCode === "PERCENTAGE" ? "percentage" : o.offerRewardTypeCode === "FLAT_AMOUNT" ? "flat_cash" : null,
+              rewardAmount: o.offerAmount,
+              rewardCurrency: "cash",
+              maxReward: o.maximumRewardAmount === 0 ? null : o.maximumRewardAmount,
+              minSpend: o.minimumSpendAmount === 0 ? null : o.minimumSpendAmount,
+              merchantUrl: o.merchantUrl,
+              merchantLogoUrl: o.merchantLogoUrl,
+              redemptionChannel: o.redemptionChannel,
+            })),
+          }).catch(() => {});
+        }
       }
       sendResponse({
         type: "CHASE_OFFERS_READY",

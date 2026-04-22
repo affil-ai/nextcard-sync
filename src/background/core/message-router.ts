@@ -58,6 +58,7 @@ export function createMessageRouter(options: {
   pushToNextCard: (providerId: ProviderId, data: unknown) => Promise<unknown>;
   deleteFromNextCard: (providerId: ProviderId) => Promise<{ ok: boolean; error?: string }>;
   syncEnrolledOffers?: (issuer: string, message: Record<string, unknown>) => void;
+  syncDetectedOffers?: (issuer: string, message: Record<string, unknown>) => void;
 }) {
   return (message: Record<string, unknown>, _sender: chrome.runtime.MessageSender, sendResponse: (response?: unknown) => void) => {
     switch (message.type) {
@@ -495,6 +496,36 @@ export function createMessageRouter(options: {
         sendResponse({ ok: true });
         return true;
 
+      // ── Detected Offers (all providers) ───────────────
+      case "CHASE_OFFERS_DETECTED":
+        if (Array.isArray(message.detectedOffers) && message.detectedOffers.length > 0) {
+          options.syncDetectedOffers?.("chase", message);
+        }
+        sendResponse({ ok: true });
+        return true;
+
+      case "AMEX_OFFERS_DETECTED":
+        if (Array.isArray(message.detectedOffers) && message.detectedOffers.length > 0) {
+          options.syncDetectedOffers?.("amex", message);
+        }
+        sendResponse({ ok: true });
+        return true;
+
+      case "CITI_OFFERS_DETECTED":
+        if (Array.isArray(message.detectedOffers) && message.detectedOffers.length > 0) {
+          options.syncDetectedOffers?.("citi", message);
+        }
+        sendResponse({ ok: true });
+        return true;
+
+      // ── Open Side Panel to Tools Tab ────────────────
+      case "OPEN_TOOLS_TAB":
+        chrome.storage.local.set({ pendingTab: "tools" });
+        chrome.action.setBadgeText({ text: "!" });
+        chrome.action.setBadgeBackgroundColor({ color: "#d4943a" });
+        sendResponse({ ok: true });
+        return true;
+
       // ── Chase Bonus Registration ─────────────────────
       case "CHASE_BONUS_ENROLL": {
         const bonusCards = message.cards as string[];
@@ -589,9 +620,10 @@ export function createExternalMessageRouter(options: {
         signedInAt: new Date().toISOString(),
       };
 
+      sendResponse({ ok: true });
+
       void options.setAuth(auth).then(async () => {
         options.resetAuthCache();
-        sendResponse({ ok: true });
 
         if (sender.tab?.id) {
           const authTabId = sender.tab.id;
