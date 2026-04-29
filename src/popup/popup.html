@@ -241,6 +241,41 @@
           </div>
         </div>
 
+        <div class="provider-card tool-card" id="capitaloneOffersCard" style="cursor:pointer">
+          <div class="provider-icon"><img src="" id="capitaloneOffersIcon" alt="Capital One" /></div>
+          <div class="provider-info"><div class="provider-name">Capital One Offers</div><div class="provider-desc">Save available shopping offers by card</div></div>
+          <div id="capitaloneOffersInitial"><div class="provider-arrow" id="capitaloneOffersDiscoverBtn">&rsaquo;</div></div>
+          <div id="capitaloneOffersLoading" class="tool-expand" style="display:none;">
+            <div class="tool-status" id="capitaloneOffersLoadingText">Looking for your Capital One offers...</div>
+            <div class="offers-progress-bar"><div id="capitaloneOffersLoadingProgressBar" class="offers-progress-bar-fill"></div></div>
+            <div class="tool-status" id="capitaloneOffersLoadingProgressDetail">Starting...</div>
+            <button class="tool-link-btn" id="capitaloneOffersLoadingCancel">Cancel</button>
+          </div>
+          <div id="capitaloneOffersReady" class="tool-expand" style="display:none;">
+            <div id="capitaloneOffersCardSelectWrap" style="display:none;"><select id="capitaloneOffersCardSelect" class="tool-select"></select></div>
+            <div style="display:flex;justify-content:space-between;align-items:center;"><div class="tool-status" style="font-weight:600;color:#342019;" id="capitaloneOffersOfferCount"></div><button class="tool-link-btn" id="capitaloneOffersRefreshBtn">Refresh</button></div>
+            <button class="sync-btn" id="capitaloneOffersRunBtn" style="margin:0;">Sync offers</button>
+          </div>
+          <div id="capitaloneOffersRunning" class="tool-expand" style="display:none;">
+            <div class="tool-status" style="font-weight:600;color:#342019;">Syncing offers...</div>
+            <div class="offers-progress-bar"><div id="capitaloneOffersProgressBar" class="offers-progress-bar-fill"></div></div>
+            <div style="display:flex;justify-content:space-between;align-items:center;">
+              <span class="tool-status" id="capitaloneOffersProgressDetail">0 synced</span>
+              <button class="tool-link-btn" id="capitaloneOffersStopBtn">Cancel</button>
+            </div>
+          </div>
+          <div id="capitaloneOffersDone" class="tool-expand" style="display:none;">
+            <div style="font-size:13px;font-weight:700;color:#34c759;margin-bottom:4px;">Done!</div>
+            <div class="tool-status" id="capitaloneOffersSummary"></div>
+            <a href="https://www.nextcard.com/dashboard/offers" target="_blank" class="sync-btn" style="margin:8px 0 0;text-align:center;text-decoration:none;display:block;">View your offers &rarr;</a>
+            <button class="tool-link-btn" id="capitaloneOffersRunAgainBtn" style="margin:6px auto 0;display:block;">Refresh</button>
+          </div>
+          <div id="capitaloneOffersError" class="tool-expand" style="display:none;">
+            <div class="error-box" id="capitaloneOffersErrorMsg"></div>
+            <button class="sync-btn" id="capitaloneOffersRetryBtn" style="margin:8px 0 0;">Try Again</button>
+          </div>
+        </div>
+
         <div class="home-section-label" style="margin-top:16px">Bonuses</div>
 
         <div class="provider-card tool-card" id="discoverBonusCard" style="cursor:pointer">
@@ -288,6 +323,11 @@
         </div>
       </div>
       <div class="changelog" id="changelog">
+        <h4>v0.6.1</h4>
+        <ul>
+          <li>Added Capital One offers support</li>
+          <li>Stability fixes</li>
+        </ul>
         <h4>v0.6.0</h4>
         <ul>
           <li>Reduced permission scope</li>

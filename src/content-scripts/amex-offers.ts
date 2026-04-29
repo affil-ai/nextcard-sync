@@ -244,12 +244,13 @@ async function runEnrollment(cardId: string) {
   enrollRequestsSincePause = 0;
 
   let totalAdded = 0;
-  let totalSkipped = 0;
+  let totalAlreadyAdded = 0;
   let totalFailed = 0;
   let totalEligible = 0;
   let round = 0;
   const MAX_ROUNDS = 5;
   const enrolledOffers: AmexOffer[] = [];
+  const enrolledOfferIds = new Set<string>();
 
   while (round < MAX_ROUNDS && !cancelled) {
     round++;
@@ -270,11 +271,19 @@ async function runEnrollment(cardId: string) {
       if (cancelled) break;
 
       const result = await enrollSingleOffer(cardId, offer.offerId, "en-US");
-      if (result === "added") { totalAdded++; roundAdded++; enrolledOffers.push(offer); }
-      else if (result === "skipped") totalSkipped++;
-      else totalFailed++;
+      if (result === "added" || result === "skipped") {
+        if (!enrolledOfferIds.has(offer.offerId)) {
+          enrolledOfferIds.add(offer.offerId);
+          totalAdded++;
+          roundAdded++;
+          enrolledOffers.push(offer);
+        }
+        if (result === "skipped") totalAlreadyAdded++;
+      } else {
+        totalFailed++;
+      }
 
-      sendProgress({ added: totalAdded, skipped: totalSkipped, failed: totalFailed, round, total: totalEligible });
+      sendProgress({ added: totalAdded, skipped: totalAlreadyAdded, failed: totalFailed, round, total: totalEligible });
 
       // Proactive rate limiting
       enrollRequestsSincePause++;
@@ -298,7 +307,7 @@ async function runEnrollment(cardId: string) {
   chrome.runtime.sendMessage({
     type: "AMEX_OFFERS_COMPLETE",
     added: totalAdded,
-    skipped: totalSkipped,
+    skipped: totalAlreadyAdded,
     failed: totalFailed,
     rounds: round,
     cardId,
@@ -433,4 +442,3 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     return true;
   }
 });
-

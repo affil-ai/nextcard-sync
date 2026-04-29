@@ -10,6 +10,7 @@
  */
 
 import type { ProviderId, MarriottLoyaltyData, AtmosLoyaltyData, ChaseURData, AALoyaltyData, DeltaLoyaltyData, UnitedLoyaltyData, SouthwestLoyaltyData, IHGLoyaltyData, HyattLoyaltyData, AmexLoyaltyData, CapitalOneLoyaltyData, HiltonLoyaltyData, FrontierLoyaltyData, BiltLoyaltyData, DiscoverLoyaltyData, CitiLoyaltyData } from "./types";
+import { extractLastFourDigits } from "./card-digits";
 import {
   atmosProviderDataSchema,
   chaseProviderDataSchema,
@@ -435,12 +436,6 @@ function toStandardizedLoyaltyData(provider: ProviderId, data: AnyProviderData):
     stats,
     raw: d,
   };
-}
-
-function extractLastFourDigits(cardName: string | null): string | null {
-  if (!cardName) return null;
-  const match = cardName.match(/(\d{4,5})\s*\)?$/);
-  return match ? match[1] : null;
 }
 
 function toStandardizedIssuerData(provider: ProviderId, data: AnyProviderData): StandardizedIssuerData {

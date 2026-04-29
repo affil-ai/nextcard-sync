@@ -81,6 +81,7 @@ export interface DetectedOfferSyncPayload {
 const MAX_RETRIES = 2;
 const RETRY_DELAY_MS = 2000;
 const STORAGE_KEY = "pendingOfferSyncs";
+const DETECTED_OFFER_SYNC_CHUNK_SIZE = 2_000;
 
 function delay(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
@@ -305,24 +306,42 @@ export async function syncDetectedOffersToNextCard(payload: DetectedOfferSyncPay
   if (!auth) return;
 
   try {
-    const response = await fetch(`${__CONVEX_SITE_URL__}/extension/offers-detected`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${auth.token}`,
-      },
-      body: JSON.stringify({
-        ...payload,
-        issuerCardId: maskId(payload.issuerCardId),
-      }),
-    });
+    let latestOfferMap: OfferUrlCache | undefined;
 
-    if (!response.ok) return;
+    for (let offset = 0; offset < payload.offers.length; offset += DETECTED_OFFER_SYNC_CHUNK_SIZE) {
+      const offers = payload.offers.slice(offset, offset + DETECTED_OFFER_SYNC_CHUNK_SIZE);
+      const isLastChunk = offset + DETECTED_OFFER_SYNC_CHUNK_SIZE >= payload.offers.length;
+      const response = await fetch(`${__CONVEX_SITE_URL__}/extension/offers-detected`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${auth.token}`,
+        },
+        body: JSON.stringify({
+          ...payload,
+          issuerCardId: maskId(payload.issuerCardId),
+          offers,
+          skipOfferMap: !isLastChunk,
+        }),
+      });
 
-    const body = await response.json().catch(() => ({}));
-    const offerMap = (body as Record<string, unknown>).offerMap as OfferUrlCache | undefined;
-    if (offerMap) {
-      await saveOfferMaps(offerMap);
+      if (!response.ok) {
+        const result = await response.json().catch(() => ({}));
+        console.warn("[NextCard Detected Offers] chunk sync failed:", {
+          status: response.status,
+          error: (result as Record<string, string>).error,
+          offset,
+          count: offers.length,
+        });
+        return;
+      }
+
+      const body = await response.json().catch(() => ({}));
+      latestOfferMap = (body as Record<string, unknown>).offerMap as OfferUrlCache | undefined;
+    }
+
+    if (latestOfferMap) {
+      await saveOfferMaps(latestOfferMap);
     }
   } catch (e) {
     console.warn("[NextCard Detected Offers] sync error:", e);

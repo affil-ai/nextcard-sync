@@ -300,7 +300,7 @@ chrome.runtime.onMessage.addListener(
         })),
       };
 
-      void syncDetectedOffersToNextCard(payload);
+      return syncDetectedOffersToNextCard(payload);
     },
   }),
 );

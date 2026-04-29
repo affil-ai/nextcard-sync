@@ -179,8 +179,6 @@ export const providerRegistry = {
       "https://americanexpress.com/*",
     ],
     contentScriptPath: "src/content-scripts/amex.ts",
-    benefitsMatches: ["https://global.americanexpress.com/*"],
-    benefitsContentScriptPath: "src/content-scripts/amex-offers.ts",
   },
   capitalone: {
     id: "capitalone",
@@ -336,6 +334,11 @@ export function buildProviderContentScripts() {
   scripts.push({
     matches: ["https://secure.chase.com/*", "https://secure01a.chase.com/*", "https://secure03a.chase.com/*", "https://secure05a.chase.com/*", "https://secure07a.chase.com/*"],
     js: ["src/content-scripts/chase-offers.ts"],
+    run_at: "document_idle" as const,
+  });
+  scripts.push({
+    matches: ["https://myaccounts.capitalone.com/*", "https://capitaloneoffers.com/*"],
+    js: ["src/content-scripts/capitalone-offers.ts"],
     run_at: "document_idle" as const,
   });
   scripts.push({

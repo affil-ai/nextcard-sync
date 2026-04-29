@@ -635,6 +635,262 @@ function initCitiOffers() {
 
 initCitiOffers();
 
+// ── Capital One Offers ────────────────────────────────────
+
+function initCapitalOneOffers() {
+  const icon = document.getElementById("capitaloneOffersIcon") as HTMLImageElement | null;
+  if (icon) icon.src = chrome.runtime.getURL("src/icons/capitalone-36.png");
+
+  const states = {
+    Initial: document.getElementById("capitaloneOffersInitial"),
+    Loading: document.getElementById("capitaloneOffersLoading"),
+    Ready: document.getElementById("capitaloneOffersReady"),
+    Running: document.getElementById("capitaloneOffersRunning"),
+    Done: document.getElementById("capitaloneOffersDone"),
+    Error: document.getElementById("capitaloneOffersError"),
+  };
+  const cardSelect = document.getElementById("capitaloneOffersCardSelect") as HTMLSelectElement | null;
+  const cardSelectWrap = document.getElementById("capitaloneOffersCardSelectWrap");
+  const offerCountEl = document.getElementById("capitaloneOffersOfferCount");
+  const loadingText = document.getElementById("capitaloneOffersLoadingText");
+  const loadingProgressBar = document.getElementById("capitaloneOffersLoadingProgressBar") as HTMLDivElement | null;
+  const loadingProgressDetail = document.getElementById("capitaloneOffersLoadingProgressDetail");
+  const progressBar = document.getElementById("capitaloneOffersProgressBar") as HTMLDivElement | null;
+  const progressDetail = document.getElementById("capitaloneOffersProgressDetail");
+  const summaryEl = document.getElementById("capitaloneOffersSummary");
+  const errorMsgEl = document.getElementById("capitaloneOffersErrorMsg");
+
+  let capitalOneCards: Array<{ id: string; name: string; lastDigits: string | null }> = [];
+  let capitalOneOfferCounts: Record<string, number> = {};
+  let capitalOneTabId: number | null = null;
+  let capitalOneOurTabId: number | null = null;
+  let capitalOneDiscoverGen = 0;
+
+  function showState(state: keyof typeof states) {
+    for (const [key, el] of Object.entries(states)) {
+      if (el) el.style.display = key === state ? "" : "none";
+    }
+  }
+
+  function escapeHtml(value: string) {
+    return value
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;");
+  }
+
+  function waitForCapitalOneTabLoad(tabId: number, callback: (tabId: number) => void) {
+    const listener = (updatedTabId: number, info: chrome.tabs.TabChangeInfo) => {
+      if (updatedTabId === tabId && info.status === "complete") {
+        chrome.tabs.onUpdated.removeListener(listener);
+        setTimeout(() => callback(tabId), 3000);
+      }
+    };
+    chrome.tabs.onUpdated.addListener(listener);
+  }
+
+  function findOrOpenCapitalOneTab(callback: (tabId: number) => void) {
+    chrome.tabs.query({ url: ["https://capitaloneoffers.com/*", "https://myaccounts.capitalone.com/*"] }, (tabs) => {
+      if (tabs[0]?.id) {
+        const tabId = tabs[0].id;
+        capitalOneTabId = tabId;
+        capitalOneOurTabId = null;
+        if (tabs[0].url?.startsWith("https://capitaloneoffers.com/")) {
+          chrome.tabs.update(tabId, { active: true }, () => {
+            waitForCapitalOneTabLoad(tabId, callback);
+            chrome.tabs.reload(tabId);
+          });
+        } else {
+          chrome.tabs.update(tabId, { active: true, url: "https://myaccounts.capitalone.com/accountSummary" });
+          waitForCapitalOneTabLoad(tabId, callback);
+        }
+        return;
+      }
+      chrome.tabs.create({ url: "https://myaccounts.capitalone.com/accountSummary", active: true }, (newTab) => {
+        if (!newTab?.id) { if (errorMsgEl) errorMsgEl.textContent = "Could not open Capital One tab."; showState("Error"); return; }
+        capitalOneTabId = newTab.id;
+        capitalOneOurTabId = newTab.id;
+        waitForCapitalOneTabLoad(newTab.id, callback);
+      });
+    });
+  }
+
+  function totalOfferCount() {
+    return Object.values(capitalOneOfferCounts).reduce((sum, count) => sum + count, 0);
+  }
+
+  function updateOfferCountLabel() {
+    if (!offerCountEl) return;
+    const total = totalOfferCount();
+    const cardCount = capitalOneCards.length;
+    offerCountEl.textContent = total > 0
+      ? `${total} offer${total === 1 ? "" : "s"} across ${cardCount} card${cardCount === 1 ? "" : "s"}`
+      : "No shopping offers found";
+  }
+
+  function updateDoneSummary() {
+    if (!summaryEl) return;
+    const total = totalOfferCount();
+    const cardCount = capitalOneCards.length;
+    summaryEl.textContent = total > 0
+      ? `${total} offer${total === 1 ? "" : "s"} saved across ${cardCount} card${cardCount === 1 ? "" : "s"}`
+      : "No shopping offers found";
+  }
+
+  function tryDiscover(tabId: number, gen: number, retriesLeft = 15) {
+    if (gen !== capitalOneDiscoverGen) return;
+    chrome.tabs.sendMessage(tabId, { type: "CAPITALONE_OFFERS_DISCOVER" }, (resp) => {
+      if (gen !== capitalOneDiscoverGen) return;
+      if (chrome.runtime.lastError || !resp) {
+        if (retriesLeft > 0) { setTimeout(() => tryDiscover(tabId, gen, retriesLeft - 1), 3000); return; }
+        if (errorMsgEl) errorMsgEl.textContent = "Could not reach Capital One. Make sure you're signed in.";
+        showState("Error");
+        return;
+      }
+      if (resp.redirectUrl) {
+        chrome.tabs.update(tabId, { active: true, url: resp.redirectUrl }, () => {
+          waitForCapitalOneTabLoad(tabId, (loadedTabId) => tryDiscover(loadedTabId, gen, retriesLeft));
+        });
+        return;
+      }
+      if (resp.error === "no_cards") {
+        if (retriesLeft > 0) { setTimeout(() => tryDiscover(tabId, gen, retriesLeft - 1), 3000); return; }
+        if (errorMsgEl) errorMsgEl.textContent = "No eligible Capital One cards found. Sign in and try again.";
+        showState("Error");
+        return;
+      }
+      if (resp.error) {
+        if (errorMsgEl) errorMsgEl.textContent = "Could not save Capital One offers. Try again in a minute.";
+        showState("Error");
+        return;
+      }
+
+      capitalOneCards = resp.cards ?? [];
+      capitalOneOfferCounts = resp.offerCounts ?? {};
+      if (cardSelectWrap) cardSelectWrap.style.display = "none";
+      if (capitalOneCards.length > 1 && cardSelect && cardSelectWrap) {
+        cardSelect.innerHTML = capitalOneCards.map((card) => {
+          const count = capitalOneOfferCounts[card.id] ?? 0;
+          const suffix = count > 0 ? ` (${count} offers)` : "";
+          const label = `${card.name}${card.lastDigits ? ` ···· ${card.lastDigits}` : ""}${suffix}`;
+          return `<option value="${escapeHtml(card.id)}">${escapeHtml(label)}</option>`;
+        }).join("");
+        cardSelectWrap.style.display = "";
+      }
+      updateOfferCountLabel();
+      if (loadingProgressBar) loadingProgressBar.style.width = "100%";
+      if (loadingProgressDetail) loadingProgressDetail.textContent = "Offers saved";
+      updateDoneSummary();
+      showState("Done");
+    });
+  }
+
+  const capitalOneCard = document.getElementById("capitaloneOffersCard");
+  function handleDiscover() {
+    const gen = ++capitalOneDiscoverGen;
+    showState("Loading");
+    if (loadingText) loadingText.textContent = "Looking for your Capital One offers...";
+    if (loadingProgressBar) loadingProgressBar.style.width = "4%";
+    if (loadingProgressDetail) loadingProgressDetail.textContent = "Starting...";
+    capitalOneTabId = null;
+    findOrOpenCapitalOneTab((tabId) => {
+      if (gen !== capitalOneDiscoverGen) return;
+      capitalOneTabId = tabId;
+      tryDiscover(tabId, gen);
+    });
+  }
+
+  function handleRefresh() {
+    const gen = ++capitalOneDiscoverGen;
+    showState("Loading");
+    if (loadingText) loadingText.textContent = "Refreshing Capital One offers...";
+    if (loadingProgressBar) loadingProgressBar.style.width = "4%";
+    if (loadingProgressDetail) loadingProgressDetail.textContent = "Starting...";
+
+    if (capitalOneTabId) {
+      tryDiscover(capitalOneTabId, gen);
+      return;
+    }
+
+    findOrOpenCapitalOneTab((tabId) => {
+      if (gen !== capitalOneDiscoverGen) return;
+      capitalOneTabId = tabId;
+      tryDiscover(tabId, gen);
+    });
+  }
+
+  document.getElementById("capitaloneOffersDiscoverBtn")?.addEventListener("click", (e) => { e.stopPropagation(); handleDiscover(); });
+  capitalOneCard?.addEventListener("click", () => { if (states.Initial?.style.display !== "none") handleDiscover(); });
+  document.getElementById("capitaloneOffersLoadingCancel")?.addEventListener("click", (e) => {
+    e.stopPropagation();
+    capitalOneDiscoverGen++;
+    showState("Initial");
+    if (capitalOneOurTabId) { chrome.tabs.remove(capitalOneOurTabId); }
+    capitalOneTabId = null;
+    capitalOneOurTabId = null;
+  });
+  document.getElementById("capitaloneOffersRefreshBtn")?.addEventListener("click", (e) => {
+    e.stopPropagation();
+    handleRefresh();
+  });
+
+  document.getElementById("capitaloneOffersRunBtn")?.addEventListener("click", () => {
+    if (!capitalOneTabId) return;
+    showState("Running");
+    if (progressBar) progressBar.style.width = "0%";
+    if (progressDetail) progressDetail.textContent = "Syncing all cards...";
+    chrome.tabs.sendMessage(capitalOneTabId, { type: "CAPITALONE_OFFERS_RUN" });
+  });
+
+  document.getElementById("capitaloneOffersStopBtn")?.addEventListener("click", () => {
+    if (!capitalOneTabId) return;
+    chrome.tabs.sendMessage(capitalOneTabId, { type: "CAPITALONE_OFFERS_STOP" });
+    showState("Done");
+    if (summaryEl) summaryEl.textContent = "Cancelled";
+  });
+
+  document.getElementById("capitaloneOffersRunAgainBtn")?.addEventListener("click", () => {
+    handleRefresh();
+  });
+  document.getElementById("capitaloneOffersRetryBtn")?.addEventListener("click", () => showState("Initial"));
+
+  chrome.runtime.onMessage.addListener((msg) => {
+    if (msg.type === "CAPITALONE_OFFERS_PROGRESS") {
+      if (msg.phase === "discovering") {
+        const pct = typeof msg.progress === "number" ? Math.max(4, Math.min(95, msg.progress)) : 12;
+        const offersFound = msg.offersFound ?? 0;
+        const cardIndex = msg.cardIndex ?? 0;
+        const cardTotal = msg.cardTotal ?? 1;
+        const page = msg.page ?? 0;
+        if (loadingText) loadingText.textContent = "Fetching Capital One offers...";
+        if (loadingProgressBar) loadingProgressBar.style.width = `${pct}%`;
+        if (loadingProgressDetail) {
+          loadingProgressDetail.textContent = typeof msg.statusText === "string"
+            ? msg.statusText
+            : page > 0
+            ? `Card ${Number(cardIndex) + 1} of ${cardTotal} · page ${page} · ${offersFound} offers`
+            : "Opening full offers feed...";
+        }
+      }
+      const synced = msg.synced ?? 0;
+      const total = msg.total ?? totalOfferCount();
+      const pct = total > 0 ? Math.min(100, Math.round((synced / total) * 100)) : 0;
+      if (progressBar) progressBar.style.width = `${pct}%`;
+      if (progressDetail) progressDetail.textContent = `${synced} synced`;
+    }
+    if (msg.type === "CAPITALONE_OFFERS_COMPLETE") {
+      const synced = msg.synced ?? 0;
+      if (summaryEl) summaryEl.textContent = synced > 0
+        ? `${synced} offer${synced === 1 ? "" : "s"} synced`
+        : "No shopping offers found";
+      showState("Done");
+    }
+  });
+}
+
+initCapitalOneOffers();
+
 // ── Discover 5% Bonus ─────────────────────────────────────
 
 function initDiscoverBonus() {

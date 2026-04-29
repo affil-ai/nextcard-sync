@@ -155,6 +155,59 @@ export function createCapitalOneSync(options: CapitalOneSyncDeps) {
     const scrapeResults = await chrome.scripting.executeScript({
       target: { tabId },
       func: () => {
+        function parseDollarAmount(value: string) {
+          const match = value.match(/\$([\d,]+(?:\.\d{1,2})?)/);
+          if (!match) return null;
+
+          const amount = Number.parseFloat(match[1].replace(/,/g, ""));
+          return Number.isFinite(amount) ? amount : null;
+        }
+
+        function parseLastDollarAmount(value: string) {
+          const matches = Array.from(value.matchAll(/\$([\d,]+(?:\.\d{1,2})?)/g));
+          const lastMatch = matches.at(-1);
+          if (!lastMatch) return null;
+
+          const amount = Number.parseFloat(lastMatch[1].replace(/,/g, ""));
+          return Number.isFinite(amount) ? amount : null;
+        }
+
+        function getVisibleLines(element: Element) {
+          const text = element instanceof HTMLElement
+            ? element.innerText
+            : element.textContent ?? "";
+          return text
+            .split("\n")
+            .map((line) => line.trim())
+            .filter(Boolean);
+        }
+
+        function findDollarNearLabel(lines: string[], label: RegExp) {
+          for (let index = 0; index < lines.length; index += 1) {
+            const line = lines[index];
+            const labelMatch = line.match(label);
+            if (!labelMatch) continue;
+
+            const labelIndex = labelMatch.index ?? 0;
+            const afterLabel = line.slice(labelIndex + labelMatch[0].length);
+            const beforeLabel = line.slice(0, labelIndex);
+            const inlineAmount =
+              parseDollarAmount(afterLabel) ?? parseLastDollarAmount(beforeLabel);
+            if (inlineAmount != null) return inlineAmount;
+
+            const candidates = [
+              lines[index + 1] ?? "",
+              lines[index - 1] ?? "",
+            ];
+            for (const candidate of candidates) {
+              const amount = parseDollarAmount(candidate);
+              if (amount != null) return amount;
+            }
+          }
+
+          return null;
+        }
+
         const modal = document.querySelector(
           ".travel-credit-history-modal-root, .travel-credit-history-modal-content",
         );
@@ -169,24 +222,23 @@ export function createCapitalOneSync(options: CapitalOneSyncDeps) {
           return null;
         }
 
-        const text = topSection.textContent ?? "";
-        const balanceMatch = text.match(
-          /\$([\d,]+(?:\.\d{2})?)\s*(?:Available|available)/,
-        );
-        const remaining = balanceMatch
-          ? parseFloat(balanceMatch[1].replace(/,/g, ""))
-          : 0;
+        const topLines = getVisibleLines(topSection);
+        const text = topLines.join("\n");
+        const remaining = findDollarNearLabel(
+          topLines,
+          /available\s+to\s+spend\s+on\s+travel|available/i,
+        ) ?? 0;
 
         const bottomSection = modal.querySelector(
           ".travel-credit-history-modal-bottom-section",
         );
-        const bottomText = bottomSection?.textContent ?? "";
-        const creditMatch = bottomText.match(
-          /ANNUAL TRAVEL CREDIT[^+]*\+\s*\$([\d,]+(?:\.\d{2})?)/,
-        );
-        const total = creditMatch
-          ? parseFloat(creditMatch[1].replace(/,/g, ""))
-          : 300;
+        const bottomLines = bottomSection ? getVisibleLines(bottomSection) : [];
+        const bottomText = bottomLines.join("\n");
+        const total = findDollarNearLabel(topLines, /^annual\s+travel\s+credit$/i)
+          ?? parseDollarAmount(
+            bottomText.match(/ANNUAL TRAVEL CREDIT[^+]*\+\s*\$[\d,]+(?:\.\d{2})?/i)?.[0] ?? "",
+          )
+          ?? 300;
 
         const renewMatch = text.match(/Renews\s+(.+?)(?:\s*$|\s*Travel)/);
         const period = renewMatch ? `Renews ${renewMatch[1].trim()}` : null;

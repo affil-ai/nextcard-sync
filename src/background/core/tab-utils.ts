@@ -16,6 +16,9 @@ export function isUrlAllowedForProvider(url: string, definition: ProviderDefinit
   for (const pattern of definition.allowedUrlPatterns ?? []) {
     if (urlMatchesPattern(url, pattern)) return true;
   }
+  for (const pattern of definition.extraHostPermissions ?? []) {
+    if (urlMatchesPattern(url, pattern)) return true;
+  }
   return false;
 }
 

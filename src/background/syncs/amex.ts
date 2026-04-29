@@ -1,4 +1,5 @@
 import type { AmexLoyaltyData } from "../../lib/types";
+import { extractLastFourDigits } from "../../lib/card-digits";
 import type { ProviderDefinition } from "../../providers/provider-registry";
 import type { createRuntimeStateStore } from "../core/runtime-state";
 import { sendRunMessageToTab, triggerExtraction, waitForTabLoad } from "../core/tab-utils";
@@ -216,7 +217,7 @@ export function createAmexSync(options: AmexSyncDeps) {
 
         for (let index = 0; index < cardOptions.length; index += 1) {
           const option = cardOptions[index];
-          const firstLastDigits = firstCard.cardName?.match(/\d{4,5}/)?.[0];
+          const firstLastDigits = extractLastFourDigits(firstCard.cardName);
           if (firstLastDigits && option.lastDigits === firstLastDigits) {
             continue;
           }

@@ -644,7 +644,7 @@ export function createGenericSyncHandlers(options: GenericSyncDeps) {
 
         function onMessage(
           message: Record<string, unknown>,
-          _sender: chrome.runtime.MessageSender,
+          sender: chrome.runtime.MessageSender,
           sendResponse: (response?: unknown) => void,
         ) {
           if (message.type === "EXTRACTION_DONE" && message.provider === providerId) {
@@ -663,16 +663,34 @@ export function createGenericSyncHandlers(options: GenericSyncDeps) {
             resolve(message);
             return true;
           }
-          if (
+          const senderTabId = sender.tab?.id;
+          const senderUrl = sender.url ?? sender.tab?.url ?? "";
+          const isExpectedTab =
+            senderTabId === tabId
+            || (
+              definition.magicLinkLogin
+              && senderTabId != null
+              && senderUrl.startsWith(tabUrlBase)
+            );
+          const isCurrentAttemptLoginState =
             options.isProviderAttemptMessage(
               message,
               providerId,
               attemptId,
               "LOGIN_STATE",
-            )
+            );
+          const isInitialPageLoginState =
+            message.type === "LOGIN_STATE"
+            && message.provider === providerId
             && message.state === "logged_in"
+            && message.attemptId == null
+            && isExpectedTab;
+
+          if (
+            message.state === "logged_in"
+            && (isCurrentAttemptLoginState || isInitialPageLoginState)
           ) {
-            handleAccountArrival(tabId);
+            handleAccountArrival(senderTabId ?? tabId);
           }
         }
 

@@ -68,6 +68,39 @@ function waitForSelector(selector: string, maxWaitMs = 15000): Promise<Element |
   });
 }
 
+function waitForWalletReady(maxWaitMs = 20000): Promise<boolean> {
+  return new Promise((resolve) => {
+    const isReady = () => {
+      const bodyText = document.body?.innerText ?? "";
+      return Boolean(document.querySelector('[data-testid="user-info-points-pill"]'))
+        || /Your Wallet|Bilt Cash|\b[\d,.]+\s*[km]?\s*pts?\.?\b/i.test(bodyText);
+    };
+
+    if (isReady()) {
+      resolve(true);
+      return;
+    }
+
+    const timeout = setTimeout(() => {
+      observer.disconnect();
+      resolve(false);
+    }, maxWaitMs);
+
+    const observer = new MutationObserver(() => {
+      if (!isReady()) return;
+      observer.disconnect();
+      clearTimeout(timeout);
+      resolve(true);
+    });
+
+    observer.observe(document.body, {
+      childList: true,
+      subtree: true,
+      characterData: true,
+    });
+  });
+}
+
 // ── Helpers ──────────────────────────────────────────────────
 
 function parseIntSafe(str: string): number | null {
@@ -92,6 +125,34 @@ function parseDollarAmount(str: string): number | null {
   if (!match) return null;
   const amount = Number.parseFloat(match[1].replace(/,/g, ""));
   return Number.isNaN(amount) ? null : amount;
+}
+
+function findLineValueNearLabel(
+  lines: string[],
+  label: RegExp,
+  valuePattern: RegExp,
+) {
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index];
+    const labelMatch = line.match(label);
+    if (!labelMatch) continue;
+
+    const labelIndex = labelMatch.index ?? 0;
+    const afterLabel = line.slice(labelIndex + labelMatch[0].length);
+    const afterMatch = afterLabel.match(valuePattern);
+    if (afterMatch) return afterMatch[1] ?? afterMatch[0];
+
+    const candidates = [
+      lines[index + 1] ?? "",
+      lines[index - 1] ?? "",
+    ];
+    for (const candidate of candidates) {
+      const match = candidate.match(valuePattern);
+      if (match) return match[1] ?? match[0];
+    }
+  }
+
+  return null;
 }
 
 function getBodyLines() {
@@ -174,6 +235,52 @@ function extractExactPointsFromMenu() {
   return parseIntSafe(match[1]);
 }
 
+function extractVisiblePointsBalance(lines: string[]) {
+  const exactPointsText = findLineValueNearLabel(
+    lines,
+    /^your\s+points$/i,
+    /^([\d,]+)$/i,
+  );
+  const exactPoints = exactPointsText ? parseIntSafe(exactPointsText) : null;
+  if (exactPoints != null) return exactPoints;
+
+  for (const line of lines) {
+    const compactMatch = line.match(/\b([\d,.]+\s*[km]?)\s*pts?\.?\b/i);
+    if (compactMatch) {
+      const points = parseCompactNumber(compactMatch[1]);
+      if (points != null) return points;
+    }
+  }
+
+  return null;
+}
+
+function extractBiltCash(lines: string[], bodyText: string) {
+  const balanceText = findLineValueNearLabel(
+    lines,
+    /bilt\s+cash\s+balance/i,
+    /\$[\d,]+(?:\.\d{1,2})?/,
+  ) ?? bodyText.match(/Your\s+\d{4}\s+Bilt\s+Cash\s+balance\s*\n\s*(\$[\d,]+(?:\.\d{1,2})?)/i)?.[1]
+    ?? bodyText.match(/Bilt\s+Cash\s+balance\s*\n\s*(\$[\d,]+(?:\.\d{1,2})?)/i)?.[1];
+
+  const expiration = findLineValueNearLabel(
+    lines,
+    /bilt\s+cash\s+balance|spend\s+your\s+bilt\s+cash/i,
+    /^Expires\s+(.+)$/i,
+  ) ?? null;
+
+  const nextRewardMatch = bodyText.match(
+    /(?:You're|You are)\s+([\d,]+)\s+points?\s+away\s+from\s+earning\s+\$([\d,]+(?:\.\d{1,2})?)\s+Bilt\s+Cash/i,
+  );
+
+  return {
+    balance: balanceText ? parseDollarAmount(balanceText) : null,
+    expiration,
+    pointsToNextReward: nextRewardMatch ? parseIntSafe(nextRewardMatch[1]) : null,
+    nextRewardAmount: nextRewardMatch ? parseDollarAmount(`$${nextRewardMatch[2]}`) : null,
+  };
+}
+
 function parseWalletLinkedCards(lines: string[]) {
   const cards: Array<{ cardName: string; lastFourDigits: string | null }> = [];
 
@@ -200,15 +307,17 @@ async function scrapeWalletPage() {
   const linkedCards = parseWalletLinkedCards(lines);
   // Scope credits to the dedicated panel so we don't confuse carousel copy with real wallet credits.
   const { availableCreditsCount, walletCredits } = parseWalletCredits(lines);
-  const biltCashBalanceMatch = bodyText.match(/Your \d{4} Bilt Cash balance\s*\n\s*(\$[\d,]+(?:\.\d{1,2})?)/i);
-  const biltCashExpirationMatch = bodyText.match(/Expires\s+(\d{1,2}\/\d{1,2}\/\d{2,4})/i);
-  const nextCashRewardMatch = bodyText.match(/You're\s+([\d,]+)\s+points away from earning\s+\$([\d,]+(?:\.\d{1,2})?)\s+Bilt Cash/i);
+  const biltCash = extractBiltCash(lines, bodyText);
 
   await expandWalletUserMenu();
   const exactPointsBalance = extractExactPointsFromMenu();
+  const visiblePointsBalance = extractVisiblePointsBalance(getBodyLines());
 
   const data: BiltLoyaltyData = {
-    pointsBalance: exactPointsBalance ?? parseCompactNumber(pointsPill?.textContent ?? ""),
+    pointsBalance:
+      exactPointsBalance
+      ?? parseCompactNumber(pointsPill?.textContent ?? "")
+      ?? visiblePointsBalance,
     eliteStatus: null,
     statusValidThrough: null,
     pointsProgress: null,
@@ -220,10 +329,10 @@ async function scrapeWalletPage() {
     primaryCardName: linkedCards[0]?.cardName ?? null,
     linkedCardsCount: linkedCards.length || null,
     availableCreditsCount,
-    biltCashBalance: biltCashBalanceMatch ? parseDollarAmount(biltCashBalanceMatch[1]) : null,
-    biltCashExpiration: biltCashExpirationMatch?.[1] ?? null,
-    pointsToNextBiltCashReward: nextCashRewardMatch ? parseIntSafe(nextCashRewardMatch[1]) : null,
-    nextBiltCashRewardAmount: nextCashRewardMatch ? parseDollarAmount(`$${nextCashRewardMatch[2]}`) : null,
+    biltCashBalance: biltCash.balance,
+    biltCashExpiration: biltCash.expiration,
+    pointsToNextBiltCashReward: biltCash.pointsToNextReward,
+    nextBiltCashRewardAmount: biltCash.nextRewardAmount,
     walletCredits,
     linkedCards,
   };
@@ -364,10 +473,11 @@ async function runExtraction(attemptId: string) {
 
   updateOverlay("extracting", "bilt");
   updateOverlayProgress("Reading Bilt wallet and points...");
-  const readySelector = url.includes("/wallet")
-    ? '[data-testid="user-info-points-pill"]'
-    : "div";
-  await waitForSelector(readySelector, 20000);
+  if (url.includes("/wallet")) {
+    await waitForWalletReady(20000);
+  } else {
+    await waitForSelector("div", 20000);
+  }
   await runControl.sleep(3000, attemptId);
 
   runControl.throwIfCancelled(attemptId);
@@ -380,6 +490,7 @@ async function runExtraction(attemptId: string) {
     data.pointsBalance != null ||
     data.linkedCardsCount != null ||
     data.availableCreditsCount != null ||
+    data.biltCashBalance != null ||
     data.memberName != null ||
     data.memberNumber != null;
   if (!hasMeaningfulData) {

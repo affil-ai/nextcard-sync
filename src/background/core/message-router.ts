@@ -57,8 +57,8 @@ export function createMessageRouter(options: {
   recordConsent: (message: Record<string, unknown>) => Promise<void>;
   pushToNextCard: (providerId: ProviderId, data: unknown) => Promise<unknown>;
   deleteFromNextCard: (providerId: ProviderId) => Promise<{ ok: boolean; error?: string }>;
-  syncEnrolledOffers?: (issuer: string, message: Record<string, unknown>) => void;
-  syncDetectedOffers?: (issuer: string, message: Record<string, unknown>) => void;
+  syncEnrolledOffers?: (issuer: string, message: Record<string, unknown>) => void | Promise<void>;
+  syncDetectedOffers?: (issuer: string, message: Record<string, unknown>) => void | Promise<void>;
 }) {
   return (message: Record<string, unknown>, _sender: chrome.runtime.MessageSender, sendResponse: (response?: unknown) => void) => {
     switch (message.type) {
@@ -496,6 +496,18 @@ export function createMessageRouter(options: {
         sendResponse({ ok: true });
         return true;
 
+      // ── Capital One Offers (shopping offers are detected, not enrolled) ──
+      case "CAPITALONE_OFFERS_PROGRESS":
+        sendResponse({ ok: true });
+        return true;
+
+      case "CAPITALONE_OFFERS_COMPLETE":
+        if (Array.isArray(message.detectedOffers) && message.detectedOffers.length > 0) {
+          options.syncDetectedOffers?.("capitalone", message);
+        }
+        sendResponse({ ok: true });
+        return true;
+
       // ── Detected Offers (all providers) ───────────────
       case "CHASE_OFFERS_DETECTED":
         if (Array.isArray(message.detectedOffers) && message.detectedOffers.length > 0) {
@@ -514,6 +526,19 @@ export function createMessageRouter(options: {
       case "CITI_OFFERS_DETECTED":
         if (Array.isArray(message.detectedOffers) && message.detectedOffers.length > 0) {
           options.syncDetectedOffers?.("citi", message);
+        }
+        sendResponse({ ok: true });
+        return true;
+
+      case "CAPITALONE_OFFERS_DETECTED":
+        if (Array.isArray(message.detectedOffers) && message.detectedOffers.length > 0) {
+          void Promise.resolve(options.syncDetectedOffers?.("capitalone", message))
+            .then(() => sendResponse({ ok: true }))
+            .catch((error) => {
+              console.warn("[NextCard Capital One Offers] detected offers sync failed:", error);
+              sendResponse({ ok: false });
+            });
+          return true;
         }
         sendResponse({ ok: true });
         return true;
