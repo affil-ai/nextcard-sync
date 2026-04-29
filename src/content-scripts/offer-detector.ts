@@ -32,6 +32,14 @@ interface CachedOffer {
   status?: "enrolled" | "detected";
 }
 
+interface OfferGroup {
+  merchantName: string;
+  offerValue: string | null;
+  rewardAmount: number;
+  status: "enrolled" | "detected" | "mixed";
+  cards: string[];
+}
+
 const hostname = location.hostname.replace(/^www\./, "").toLowerCase();
 
 if (!ISSUER_HOSTNAMES.has(hostname)) {
@@ -48,55 +56,89 @@ if (!ISSUER_HOSTNAMES.has(hostname)) {
       const filterActive = (offers: CachedOffer[]) =>
         offers.filter((o) => !o.expirationDate || new Date(o.expirationDate) > now);
 
-      // Enrolled offers take priority
-      const enrolledOffers = filterActive(enrolledCache?.[hostname] ?? []);
-      if (enrolledOffers.length > 0) {
-        showToast(enrolledOffers, dismissKey, "enrolled");
-        return;
-      }
+      const enrolledOffers = filterActive(enrolledCache?.[hostname] ?? [])
+        .map((offer) => ({ ...offer, status: "enrolled" as const }));
+      const detectedOffers = filterActive(detectedCache?.[hostname] ?? [])
+        .map((offer) => ({ ...offer, status: "detected" as const }));
+      const matchingOffers = [...enrolledOffers, ...detectedOffers];
 
-      const detectedOffers = filterActive(detectedCache?.[hostname] ?? []);
-      if (detectedOffers.length > 0) {
-        showToast(detectedOffers, dismissKey, "detected");
+      if (matchingOffers.length > 0) {
+        showToast(matchingOffers, dismissKey);
       }
     });
   }
 }
 
-function showToast(offers: CachedOffer[], dismissKey: string, type: "enrolled" | "detected"): void {
+function showToast(offers: CachedOffer[], dismissKey: string): void {
   if (document.getElementById("nextcard-offer-toast")) return;
 
   const sorted = [...offers].sort((a, b) => (b.rewardAmount ?? 0) - (a.rewardAmount ?? 0));
-  const best = sorted[0];
-
-  const offerText = best.offerValue ?? "Special offer";
-  const cardText = best.cardLastDigits
-    ? `${best.cardName} \u00B7\u00B7\u00B7\u00B7${best.cardLastDigits}`
-    : best.cardName;
-
-  // Build list of unique card labels
-  const seenCards = new Set<string>();
-  const cardLabels: string[] = [];
-  for (const o of sorted) {
-    const key = `${o.issuer}:${o.cardLastDigits ?? o.cardName}`;
-    if (seenCards.has(key)) continue;
-    seenCards.add(key);
-    cardLabels.push(o.cardLastDigits ? `${o.cardName} \u00B7\u00B7\u00B7\u00B7${o.cardLastDigits}` : o.cardName);
-  }
-
-  const isDetected = type === "detected";
-  const tagText = isDetected ? "AVAILABLE" : "OFFER";
-  const tagBg = isDetected ? "#6b5b2d" : "#2d6b2d";
-  const tagColor = isDetected ? "#ebd77d" : "#7deb7d";
-  const subtitle = isDetected
-    ? cardLabels.map((c) => `<div class="nc-card-row">${esc(c)}</div>`).join("")
-    : `Use ${esc(cardText)}`;
+  const hasDetectedOffers = sorted.some((offer) => offer.status === "detected");
 
   function esc(str: string): string {
     const d = document.createElement("div");
     d.textContent = str;
     return d.innerHTML;
   }
+
+  function cardLabel(offer: CachedOffer): string {
+    const name = offer.cardName || `${offer.issuer} Card`;
+    return offer.cardLastDigits ? `${name} \u00B7\u00B7\u00B7\u00B7${offer.cardLastDigits}` : name;
+  }
+
+  function groupOffers(entries: CachedOffer[]): OfferGroup[] {
+    const groups = new Map<string, OfferGroup>();
+
+    for (const offer of entries) {
+      const key = [
+        offer.merchantName.trim().toLowerCase(),
+        offer.offerValue?.trim().toLowerCase() ?? "",
+        offer.rewardType ?? "",
+        offer.rewardAmount ?? "",
+      ].join("|");
+      const label = cardLabel(offer);
+      const group = groups.get(key);
+
+      if (group) {
+        if (!group.cards.includes(label)) group.cards.push(label);
+        if (group.status !== offer.status) group.status = "mixed";
+        continue;
+      }
+
+      groups.set(key, {
+        merchantName: offer.merchantName,
+        offerValue: offer.offerValue,
+        rewardAmount: offer.rewardAmount ?? 0,
+        status: offer.status ?? "enrolled",
+        cards: [label],
+      });
+    }
+
+    return Array.from(groups.values()).sort((a, b) => b.rewardAmount - a.rewardAmount);
+  }
+
+  const offerGroups = groupOffers(sorted);
+  const title =
+    offerGroups.length === 1
+      ? "1 offer here"
+      : `${offerGroups.length} offers here`;
+  const offerRows = offerGroups.map((group) => {
+    const offerText = group.offerValue ?? group.merchantName ?? "Special offer";
+    const isDetectedGroup = group.status === "detected";
+    const tagText = isDetectedGroup ? "AVAILABLE" : "OFFER";
+    const tagClass = isDetectedGroup ? "nc-tag nc-tag-detected" : "nc-tag";
+    const cardRows = group.cards
+      .map((card) => `<div class="nc-card-row">${esc(card)}</div>`)
+      .join("");
+
+    return `
+      <div class="nc-offer-group">
+        <div class="nc-offer"><span>${esc(offerText)}</span><span class="${tagClass}">${tagText}</span></div>
+        <div class="nc-card">Eligible cards</div>
+        ${cardRows}
+      </div>
+    `;
+  }).join("");
 
   const iconUrl = chrome.runtime.getURL("src/icons/icon128.png");
 
@@ -117,16 +159,16 @@ function showToast(offers: CachedOffer[], dismissKey: string, type: "enrolled" |
       }
       .nc-toast {
         display: flex;
-        align-items: center;
+        align-items: flex-start;
         gap: 12px;
         background: #1a1a1a;
         color: #fff;
         padding: 14px 18px;
         border-radius: 14px;
         box-shadow: 0 8px 32px rgba(0,0,0,0.28), 0 2px 8px rgba(0,0,0,0.12);
-        max-width: 400px;
-        min-width: 280px;
-        cursor: ${isDetected ? "pointer" : "default"};
+        max-width: min(420px, calc(100vw - 40px));
+        min-width: min(320px, calc(100vw - 40px));
+        cursor: ${hasDetectedOffers ? "pointer" : "default"};
         animation: nc-in 0.4s cubic-bezier(0.16,1,0.3,1);
         border: 1px solid rgba(255,255,255,0.08);
       }
@@ -140,13 +182,29 @@ function showToast(offers: CachedOffer[], dismissKey: string, type: "enrolled" |
         to   { opacity: 0; transform: translateX(100px); }
       }
       .nc-icon { width: 28px; height: 28px; flex-shrink: 0; border-radius: 6px; }
-      .nc-body { display: flex; flex-direction: column; gap: 2px; flex: 1; min-width: 0; }
-      .nc-offer { font-size: 13.5px; font-weight: 600; line-height: 1.3; display: flex; align-items: center; gap: 6px; }
+      .nc-body { display: flex; flex-direction: column; gap: 8px; flex: 1; min-width: 0; }
+      .nc-title { font-size: 12px; font-weight: 700; color: rgba(255,255,255,0.9); line-height: 1.2; }
+      .nc-list {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+        max-height: min(360px, calc(100vh - 80px));
+        overflow-y: auto;
+        padding-right: 2px;
+      }
+      .nc-offer-group {
+        border-top: 1px solid rgba(255,255,255,0.08);
+        padding-top: 8px;
+      }
+      .nc-offer-group:first-child { border-top: 0; padding-top: 0; }
+      .nc-offer { font-size: 13.5px; font-weight: 600; line-height: 1.3; display: flex; align-items: center; gap: 6px; min-width: 0; }
+      .nc-offer span:first-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
       .nc-tag {
-        background: ${tagBg}; color: ${tagColor}; font-size: 10px; font-weight: 700;
+        background: #2d6b2d; color: #7deb7d; font-size: 10px; font-weight: 700;
         padding: 1px 6px; border-radius: 4px; letter-spacing: 0.3px;
         text-transform: uppercase; white-space: nowrap;
       }
+      .nc-tag-detected { background: #6b5b2d; color: #ebd77d; }
       .nc-card { font-size: 12px; color: rgba(255,255,255,0.55); line-height: 1.3; }
       .nc-card-row { font-size: 11.5px; color: rgba(255,255,255,0.55); line-height: 1.4; padding-left: 10px; position: relative; }
       .nc-card-row::before { content: "·"; position: absolute; left: 2px; font-weight: 700; }
@@ -163,9 +221,8 @@ function showToast(offers: CachedOffer[], dismissKey: string, type: "enrolled" |
     <div class="nc-toast">
       <img class="nc-icon" src="${iconUrl}" alt="nextcard" />
       <div class="nc-body">
-        <div class="nc-offer"><span>${esc(offerText)}</span><span class="nc-tag">${tagText}</span></div>
-        ${isDetected ? `<div class="nc-card" style="margin-bottom:2px;">Add to</div>${subtitle}` : `<div class="nc-card">${subtitle}</div>`}
-        ${!isDetected && offers.length > 1 ? `<div class="nc-more">+${offers.length - 1} more offer${offers.length > 2 ? "s" : ""}</div>` : ""}
+        <div class="nc-title">${esc(title)}</div>
+        <div class="nc-list">${offerRows}</div>
       </div>
       <button class="nc-x" aria-label="Dismiss">
         <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round">
@@ -188,7 +245,7 @@ function showToast(offers: CachedOffer[], dismissKey: string, type: "enrolled" |
 
   shadow.querySelector(".nc-x")?.addEventListener("click", dismiss);
 
-  if (isDetected) {
+  if (hasDetectedOffers) {
     shadow.querySelector(".nc-toast")?.addEventListener("click", (e) => {
       if ((e.target as HTMLElement).closest(".nc-x")) return;
       chrome.storage.local.set({ pendingTab: "tools" });

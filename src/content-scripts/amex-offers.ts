@@ -36,6 +36,66 @@ function delay(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
 }
 
+function readString(value: unknown): string | null {
+  return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
+}
+
+function readLastDigits(product: Record<string, unknown>): string | null {
+  const candidates = [
+    product.display_account_number,
+    product.displayAccountNumber,
+    product.lastDigits,
+    product.lastFour,
+    product.last4,
+    product.maskedAccountNumber,
+    product.accountNumber,
+  ];
+
+  for (const candidate of candidates) {
+    const text = readString(candidate);
+    const digits = text?.match(/\d{4}(?!.*\d)/)?.[0] ?? null;
+    if (digits) return digits;
+  }
+
+  return null;
+}
+
+function isGenericAmexCardName(name: string | null | undefined): boolean {
+  if (!name) return true;
+  const normalized = name.trim().toLowerCase();
+  return (
+    normalized === "amex card" ||
+    normalized === "american express card" ||
+    normalized === "unknown card" ||
+    /^card\s*[·.*-]*\s*\d{0,4}$/.test(normalized)
+  );
+}
+
+function mergeDiscoveredCards(
+  productCards: AmexCard[],
+  dashboardCards: AmexCard[],
+): AmexCard[] {
+  if (productCards.length === 0) return dashboardCards;
+  if (dashboardCards.length === 0) return productCards;
+
+  return productCards.map((card, index) => {
+    const match =
+      dashboardCards.find((candidate) => candidate.id === card.id)
+      ?? dashboardCards.find((candidate) => candidate.accountKey && candidate.accountKey === card.accountKey)
+      ?? dashboardCards.find((candidate) => candidate.lastDigits && candidate.lastDigits === card.lastDigits)
+      ?? dashboardCards[index];
+
+    if (!match) return card;
+
+    return {
+      id: card.id,
+      name: isGenericAmexCardName(card.name) ? match.name : card.name,
+      lastDigits: card.lastDigits ?? match.lastDigits,
+      accountKey: card.accountKey ?? match.accountKey,
+    };
+  });
+}
+
 /** Route an API call through the service worker's executeScript (MAIN world) */
 function amexApiFetch(url: string, options: { method: string; headers: Record<string, string>; body?: string }): Promise<{ status: number; data: unknown }> {
   return new Promise((resolve) => {
@@ -65,9 +125,9 @@ function injectAndReadProducts(): Promise<AmexCard[]> {
           })
           .map((p) => ({
             id: (p.id ?? "") as string,
-            name: (p.description ?? "Unknown Card") as string,
-            lastDigits: null,
-            accountKey: null,
+            name: readString(p.description) ?? "Unknown Card",
+            lastDigits: readLastDigits(p),
+            accountKey: readString(p.accountKey),
           }));
         resolve(cards);
       }
@@ -149,9 +209,15 @@ async function discoverCardsFromDashboard(): Promise<AmexCard[]> {
 
 /** Try digitalData.products first, fall back to dashboard HTML parsing */
 async function discoverCards(): Promise<AmexCard[]> {
-  const cards = await discoverCardsFromProducts();
-  if (cards.length > 0) return cards;
-  return discoverCardsFromDashboard();
+  const productCards = await discoverCardsFromProducts();
+  const needsDashboardEnrichment = productCards.some(
+    (card) => isGenericAmexCardName(card.name) || !card.lastDigits,
+  );
+
+  if (productCards.length > 0 && !needsDashboardEnrichment) return productCards;
+
+  const dashboardCards = await discoverCardsFromDashboard();
+  return mergeDiscoveredCards(productCards, dashboardCards);
 }
 
 // ── Offer Listing ──────────────────────────────────────────
