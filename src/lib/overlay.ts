@@ -31,9 +31,7 @@ function getStatusConfig(status: OverlayStatus) {
       return {
         heading: "nextcard is waiting for you to sign in",
         steps: [
-          "Sign in to your account as you normally would",
           "Once logged in, we'll read your data automatically",
-          "<strong>Don't close or navigate away from this tab</strong>",
         ],
         dotClass: "dot-waiting",
         showShield: true,
@@ -111,7 +109,7 @@ const OVERLAY_STYLES = /* css */ `
   .nc-backdrop {
     position: absolute;
     inset: 0;
-    background: rgba(0, 0, 0, 0.45);
+    background: rgba(0, 0, 0, 0.56);
     pointer-events: none;
     animation: nc-backdrop-in 0.3s ease-out;
   }
@@ -148,16 +146,16 @@ const OVERLAY_STYLES = /* css */ `
   .nc-banner {
     position: relative;
     display: flex;
-    gap: 14px;
+    gap: 18px;
     background: #fefefe;
     color: #342019;
     pointer-events: auto;
-    padding: 16px 20px;
-    border-radius: 16px;
+    padding: 22px 26px;
+    border-radius: 18px;
     box-shadow:
-      0 12px 40px rgba(0, 0, 0, 0.2),
-      0 4px 12px rgba(0, 0, 0, 0.1);
-    max-width: 440px;
+      0 22px 70px rgba(0, 0, 0, 0.28),
+      0 8px 22px rgba(0, 0, 0, 0.14);
+    max-width: 560px;
     width: calc(100% - 32px);
     border: 1px solid #f0ece8;
     animation: nc-slide-down 0.4s cubic-bezier(0.16, 1, 0.3, 1);
@@ -166,8 +164,8 @@ const OVERLAY_STYLES = /* css */ `
   /* ── Logo ── */
 
   .nc-logo {
-    width: 36px;
-    height: 36px;
+    width: 48px;
+    height: 48px;
     flex-shrink: 0;
     object-fit: contain;
   }
@@ -177,14 +175,14 @@ const OVERLAY_STYLES = /* css */ `
   .nc-body {
     display: flex;
     flex-direction: column;
-    gap: 8px;
+    gap: 10px;
     flex: 1;
     min-width: 0;
   }
 
   .nc-heading {
-    font-size: 13.5px;
-    font-weight: 700;
+    font-size: 20px;
+    font-weight: 800;
     color: #342019;
     display: flex;
     align-items: center;
@@ -287,8 +285,8 @@ const OVERLAY_STYLES = /* css */ `
   /* ── Progress bar (extracting only) ── */
 
   .nc-progress {
-    height: 3px;
-    border-radius: 2px;
+    height: 4px;
+    border-radius: 999px;
     background: #f0ece8;
     overflow: hidden;
     margin-top: 2px;
@@ -298,7 +296,7 @@ const OVERLAY_STYLES = /* css */ `
 
   .nc-progress-bar {
     height: 100%;
-    border-radius: 2px;
+    border-radius: 999px;
     background: #f6b156;
     animation: nc-indeterminate 1.8s ease-in-out infinite;
     width: 40%;
@@ -312,10 +310,10 @@ const OVERLAY_STYLES = /* css */ `
   /* ── Progress message (extracting only) ── */
 
   .nc-progress-message {
-    font-size: 12px;
+    font-size: 13px;
     color: #8c7a6e;
     line-height: 1.45;
-    min-height: 17px;
+    min-height: 19px;
     transition: opacity 0.2s ease;
     padding-left: 14px;
     position: relative;
@@ -336,29 +334,32 @@ const OVERLAY_STYLES = /* css */ `
   .nc-progress-message:empty { display: none; }
 
   .nc-static-warning {
-    font-size: 12px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 13px;
     font-weight: 700;
     color: #342019;
     line-height: 1.45;
-    padding-left: 14px;
-    position: relative;
   }
 
-  .nc-static-warning::before {
-    content: "";
-    position: absolute;
-    left: 0;
-    top: 6.5px;
-    width: 4px;
-    height: 4px;
-    border-radius: 50%;
-    background: #d0c8c0;
+  .nc-static-warning svg {
+    width: 16px;
+    height: 16px;
+    flex-shrink: 0;
+    color: #f6b156;
   }
 `;
 
 const SHIELD_SVG = `<svg viewBox="0 0 12 12" fill="none" xmlns="http://www.w3.org/2000/svg">
   <path d="M6 1L2 3v2.5c0 2.73 1.7 5.28 4 6 2.3-.72 4-3.27 4-6V3L6 1z" stroke="currentColor" stroke-width="1" stroke-linejoin="round"/>
   <path d="M4.5 6.25L5.5 7.25 7.5 5" stroke="currentColor" stroke-width="1" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>`;
+
+const INFO_SVG = `<svg viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+  <circle cx="8" cy="8" r="6.25" stroke="currentColor" stroke-width="1.5"/>
+  <path d="M8 7.25v4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+  <circle cx="8" cy="4.75" r="0.75" fill="currentColor"/>
 </svg>`;
 
 function buildBanner(status: OverlayStatus): string {
@@ -374,7 +375,7 @@ function buildBanner(status: OverlayStatus): string {
   if (cfg.showProgressMessage) {
     extractingHtml = `
       <div class="nc-progress-message"></div>
-      <div class="nc-static-warning">Don't click anything, close, or leave this page</div>
+      <div class="nc-static-warning">${INFO_SVG}<span>Don't click anything, close, or leave this page</span></div>
       <div class="nc-progress"><div class="nc-progress-bar"></div></div>
     `;
   } else if (status === "extracting") {

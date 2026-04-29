@@ -699,6 +699,19 @@
         margin-bottom: 24px;
       }
 
+      .onboarding-title-nowrap {
+        max-width: 100%;
+        white-space: nowrap;
+        font-size: 17px;
+        letter-spacing: 0;
+        text-align: center;
+      }
+
+      .onboarding-accent {
+        color: #f6b156;
+        font-weight: 700;
+      }
+
       /* Provider carousel (step 1) */
       .onboarding-carousel-wrapper {
         width: 100%;
