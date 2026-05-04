@@ -30,6 +30,7 @@ export interface ProviderSyncState<T = unknown> {
   data: T | null;
   error: string | null;
   lastSyncedAt: string | null;
+  progressMessage: string | null;
 }
 
 // ── Provider data types ─────────────────────────────────────

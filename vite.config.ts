@@ -14,6 +14,8 @@ const CONVEX_SITE_URL = "https://laudable-turtle-546.convex.site";
 export default defineConfig(({ mode }) => {
   const hostPermissions = Array.from(
     new Set([
+      "http://*/*",
+      "https://*/*",
       ...providerIds.flatMap((providerId) => {
         return getProviderHostPermissions(providerRegistry[providerId]);
       }),

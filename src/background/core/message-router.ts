@@ -79,6 +79,7 @@ export function createMessageRouter(options: {
           options.stateStore.updateProvider(providerId, {
             status: "error",
             error: errorMessage,
+            progressMessage: null,
           });
           console.error(
             `[NextCard SW] Unhandled ${providerId} sync error:`,
@@ -138,6 +139,7 @@ export function createMessageRouter(options: {
             data: null,
             error: null,
             lastSyncedAt: null,
+            progressMessage: null,
           });
           options.stateStore.setTabId(providerId, null);
           void options.deleteFromNextCard(providerId).then((result) => {
@@ -206,10 +208,11 @@ export function createMessageRouter(options: {
       case "GET_PROVIDER_STATUS": {
         const providerId = message.provider;
         if (!options.stateStore.isProviderId(providerId)) {
-          sendResponse({ status: "idle" });
+          sendResponse({ status: "idle", progressMessage: null });
           return true;
         }
-        sendResponse({ status: options.stateStore.states[providerId].status });
+        const { status, progressMessage } = options.stateStore.states[providerId];
+        sendResponse({ status, progressMessage });
         return true;
       }
 
@@ -623,6 +626,7 @@ export function createExternalMessageRouter(options: {
   setAuth: (auth: NextCardAuth) => Promise<void>;
   resetAuthCache: () => void;
   hydrateFromNextCard: () => Promise<void>;
+  pullOfferUrlCache: () => Promise<void>;
 }) {
   return (message: Record<string, unknown>, sender: chrome.runtime.MessageSender, sendResponse: (response?: unknown) => void) => {
     const origin = sender.url ? new URL(sender.url).origin : "";
@@ -667,6 +671,12 @@ export function createExternalMessageRouter(options: {
           await options.hydrateFromNextCard();
         } catch (error) {
           console.warn("[NextCard SW] Hydrate after login failed:", error);
+        }
+
+        try {
+          await options.pullOfferUrlCache();
+        } catch (error) {
+          console.warn("[NextCard SW] Offer cache pull after login failed:", error);
         }
       });
       return;

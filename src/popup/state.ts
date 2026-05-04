@@ -42,6 +42,7 @@ function emptyProviderState<T>(): ProviderSyncState<T> {
     data: null,
     error: null,
     lastSyncedAt: null,
+    progressMessage: null,
   };
 }
 
@@ -75,6 +76,8 @@ function normalizeProviderState<T>(
   const error = typeof value.error === "string" ? value.error : null;
   const lastSyncedAt =
     typeof value.lastSyncedAt === "string" ? value.lastSyncedAt : null;
+  const progressMessage =
+    typeof value.progressMessage === "string" ? value.progressMessage : null;
 
   const parsed = "data" in value ? schema.safeParse(value.data) : { success: false as const };
 
@@ -83,6 +86,7 @@ function normalizeProviderState<T>(
     data: parsed.success ? parsed.data : null,
     error,
     lastSyncedAt,
+    progressMessage,
   };
 }
 

@@ -77,6 +77,16 @@ function readSummaryCards(value: unknown): CapitalOneSummaryCard[] {
 }
 
 export function createCapitalOneSync(options: CapitalOneSyncDeps) {
+  function setCapitalOneProgress(
+    message: string,
+    status: "extracting" | "detecting_login" | "waiting_for_login" = "extracting",
+  ) {
+    options.stateStore.updateProvider("capitalone", {
+      status,
+      progressMessage: message,
+    });
+  }
+
   function waitForCapitalOneMessage(
     attemptId: string,
     messageType: string,
@@ -122,6 +132,7 @@ export function createCapitalOneSync(options: CapitalOneSyncDeps) {
 
   async function scrapeCapitalOneTravelCredits(tabId: number) {
     // The annual credit balance lives in Capital One Travel, so we read it there.
+    setCapitalOneProgress("Opening Capital One Travel credits...");
     await navigateAndWait(
       tabId,
       "https://travel.capitalone.com/travel-offers/#offers",
@@ -129,6 +140,7 @@ export function createCapitalOneSync(options: CapitalOneSyncDeps) {
     );
     await new Promise((resolve) => setTimeout(resolve, 5000));
 
+    setCapitalOneProgress("Finding Capital One travel credit activity...");
     const clickResults = await chrome.scripting.executeScript({
       target: { tabId },
       func: () => {
@@ -152,6 +164,7 @@ export function createCapitalOneSync(options: CapitalOneSyncDeps) {
 
     await new Promise((resolve) => setTimeout(resolve, 3000));
 
+    setCapitalOneProgress("Reading Capital One travel credit balance...");
     const scrapeResults = await chrome.scripting.executeScript({
       target: { tabId },
       func: () => {
@@ -325,11 +338,13 @@ export function createCapitalOneSync(options: CapitalOneSyncDeps) {
       : fullData;
 
     options.stateStore.assertRunActive("capitalone", attemptId);
+    setCapitalOneProgress("Saving Capital One rewards to nextcard...");
     options.stateStore.updateProvider("capitalone", {
       status: "done",
       data: multiCardData,
       error: null,
       lastSyncedAt: new Date().toISOString(),
+      progressMessage: null,
     });
 
     options.stateStore.assertRunActive("capitalone", attemptId);
@@ -348,6 +363,7 @@ export function createCapitalOneSync(options: CapitalOneSyncDeps) {
     options.stateStore.updateProvider("capitalone", {
       status: "detecting_login",
       error: null,
+      progressMessage: "Opening Capital One...",
     });
 
     try {
@@ -375,9 +391,10 @@ export function createCapitalOneSync(options: CapitalOneSyncDeps) {
 
       let summaryResult: Record<string, unknown>;
       if (isLoggedIn) {
-        options.stateStore.updateProvider("capitalone", { status: "extracting" });
+        setCapitalOneProgress("Reading Capital One rewards...");
 
         if (!landingUrl.includes("accountSummary")) {
+          setCapitalOneProgress("Opening Capital One account summary...");
           await navigateAndWait(
             tabId,
             definition.syncUrl,
@@ -390,6 +407,7 @@ export function createCapitalOneSync(options: CapitalOneSyncDeps) {
           attemptId,
           "EXTRACTION_DONE",
         );
+        setCapitalOneProgress("Reading Capital One rewards...");
         await triggerExtraction({
           providerId: "capitalone",
           attemptId,
@@ -398,18 +416,14 @@ export function createCapitalOneSync(options: CapitalOneSyncDeps) {
         });
         summaryResult = await extractionMessage.promise;
       } else if (isLogin) {
-        options.stateStore.updateProvider("capitalone", {
-          status: "waiting_for_login",
-        });
+        setCapitalOneProgress("Waiting for Capital One sign-in...", "waiting_for_login");
         summaryResult = await options.waitForGenericLoginAndExtract(
           "capitalone",
           attemptId,
           tabId,
         );
       } else {
-        options.stateStore.updateProvider("capitalone", {
-          status: "waiting_for_login",
-        });
+        setCapitalOneProgress("Waiting for Capital One sign-in...", "waiting_for_login");
         summaryResult = await options.waitForGenericLoginAndExtract(
           "capitalone",
           attemptId,
@@ -438,6 +452,7 @@ export function createCapitalOneSync(options: CapitalOneSyncDeps) {
       options.stateStore.updateProvider("capitalone", {
         status: "error",
         error: errorMessage,
+        progressMessage: null,
       });
       console.error("[NextCard SW] CapitalOne sync error:", error);
     }

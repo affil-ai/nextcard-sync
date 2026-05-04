@@ -294,15 +294,7 @@ export function getProviderHostPermissions(definition: ProviderDefinition) {
 }
 
 export function buildProviderContentScripts() {
-  // Offer detector runs on all pages — registered first so Chrome auto-grants
-  // all-sites access at install time.
-  const scripts: Array<{ matches: string[]; js: string[]; run_at: "document_idle" }> = [
-    {
-      matches: ["http://*/*", "https://*/*"],
-      js: ["src/content-scripts/offer-detector.ts"],
-      run_at: "document_idle" as const,
-    },
-  ];
+  const scripts: Array<{ matches: string[]; js: string[]; run_at: "document_idle" }> = [];
 
   scripts.push(...providerIds.flatMap((providerId) => {
     const definition: ProviderDefinition = providerRegistry[providerId];

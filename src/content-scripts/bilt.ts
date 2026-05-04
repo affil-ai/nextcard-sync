@@ -267,7 +267,8 @@ function extractBiltCash(lines: string[], bodyText: string) {
     lines,
     /bilt\s+cash\s+balance|spend\s+your\s+bilt\s+cash/i,
     /^Expires\s+(.+)$/i,
-  ) ?? null;
+  ) ?? bodyText.match(/Bilt\s+Cash\s+balance[\s\S]{0,120}?Expires\s+([^\n]+)/i)?.[1]?.trim()
+    ?? null;
 
   const nextRewardMatch = bodyText.match(
     /(?:You're|You are)\s+([\d,]+)\s+points?\s+away\s+from\s+earning\s+\$([\d,]+(?:\.\d{1,2})?)\s+Bilt\s+Cash/i,
@@ -567,6 +568,7 @@ chrome.runtime.sendMessage({ type: "GET_PROVIDER_STATUS", provider: "bilt" }, (r
   if (s === "extracting" || (s === "detecting_login" && initialState === "logged_in")) {
     syncActive = true;
     showOverlay("extracting", "bilt");
+    if (typeof r?.progressMessage === "string") updateOverlayProgress(r.progressMessage);
   } else if ((s === "waiting_for_login" || s === "detecting_login") && initialState !== "logged_in") {
     syncActive = true;
     showOverlay("waiting_for_login", "bilt");

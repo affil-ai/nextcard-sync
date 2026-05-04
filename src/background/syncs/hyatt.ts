@@ -39,6 +39,16 @@ function isAwardsMessage(
 }
 
 export function createHyattSync(options: HyattSyncDeps) {
+  function setHyattProgress(
+    message: string,
+    status: "extracting" | "detecting_login" | "waiting_for_login" = "extracting",
+  ) {
+    options.stateStore.updateProvider("hyatt", {
+      status,
+      progressMessage: message,
+    });
+  }
+
   return async function startHyattSync() {
     const attemptId = options.stateStore.beginSyncRun("hyatt").attemptId;
     const definition = options.providerRegistry.hyatt;
@@ -50,6 +60,7 @@ export function createHyattSync(options: HyattSyncDeps) {
     options.stateStore.updateProvider("hyatt", {
       status: "detecting_login",
       error: null,
+      progressMessage: "Opening Hyatt...",
     });
 
     try {
@@ -61,7 +72,7 @@ export function createHyattSync(options: HyattSyncDeps) {
 
       await waitForTabLoad(tabId, 30000);
       options.stateStore.recordRunTab("hyatt", attemptId, tabId, { owned: true });
-      options.stateStore.updateProvider("hyatt", { status: "detecting_login" });
+      setHyattProgress("Checking Hyatt sign-in...", "detecting_login");
 
       const firstMessage = await new Promise<Record<string, unknown>>((resolve) => {
         const timeout = setTimeout(() => {
@@ -91,6 +102,7 @@ export function createHyattSync(options: HyattSyncDeps) {
         }
 
         chrome.runtime.onMessage.addListener(listener);
+        setHyattProgress("Reading Hyatt points and tier...");
         void triggerExtraction({
           providerId: "hyatt",
           attemptId,
@@ -112,7 +124,7 @@ export function createHyattSync(options: HyattSyncDeps) {
         firstMessage.type === "STATUS_UPDATE"
         && firstMessage.status === "waiting_for_login"
       ) {
-        options.stateStore.updateProvider("hyatt", { status: "waiting_for_login" });
+        setHyattProgress("Waiting for Hyatt sign-in...", "waiting_for_login");
         overviewResult = await options.waitForGenericLoginAndExtract(
           "hyatt",
           attemptId,
@@ -121,7 +133,7 @@ export function createHyattSync(options: HyattSyncDeps) {
       } else if (firstMessage.type === "EXTRACTION_DONE") {
         overviewResult = firstMessage;
       } else {
-        options.stateStore.updateProvider("hyatt", { status: "waiting_for_login" });
+        setHyattProgress("Waiting for Hyatt sign-in...", "waiting_for_login");
         overviewResult = await options.waitForGenericLoginAndExtract(
           "hyatt",
           attemptId,
@@ -129,10 +141,12 @@ export function createHyattSync(options: HyattSyncDeps) {
         );
       }
 
+      setHyattProgress("Reading Hyatt points and tier...");
       if (overviewResult.type !== "EXTRACTION_DONE" || !overviewResult.data) {
         options.stateStore.updateProvider("hyatt", {
           status: "error",
           error: "No data extracted from overview",
+          progressMessage: null,
         });
         return;
       }
@@ -143,6 +157,7 @@ export function createHyattSync(options: HyattSyncDeps) {
           : {};
 
       try {
+        setHyattProgress("Opening Hyatt awards...");
         await navigateAndWait(
           tabId,
           "https://www.hyatt.com/profile/en-US/awards",
@@ -177,6 +192,7 @@ export function createHyattSync(options: HyattSyncDeps) {
           }
 
           chrome.runtime.onMessage.addListener(listener);
+          setHyattProgress("Reading Hyatt awards...");
           void sendRunMessageToTab(
             tabId,
             "hyatt",
@@ -201,11 +217,13 @@ export function createHyattSync(options: HyattSyncDeps) {
       }
 
       options.stateStore.assertRunActive("hyatt", attemptId);
+      setHyattProgress("Saving Hyatt rewards to nextcard...");
       options.stateStore.updateProvider("hyatt", {
         status: "done",
         data: overviewData,
         error: null,
         lastSyncedAt: new Date().toISOString(),
+        progressMessage: null,
       });
 
       options.stateStore.assertRunActive("hyatt", attemptId);
@@ -226,6 +244,7 @@ export function createHyattSync(options: HyattSyncDeps) {
       options.stateStore.updateProvider("hyatt", {
         status: "error",
         error: errorMessage,
+        progressMessage: null,
       });
       console.error("[NextCard SW] Hyatt sync error:", error);
     }

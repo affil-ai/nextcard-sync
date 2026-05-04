@@ -15,6 +15,7 @@ import {
   formatTerms,
   getAirlineEls,
   renderAirline,
+  renderIssueReportHtml,
   renderValue,
   showConfirmDelete,
   STATUS_DOT_CLASS,
@@ -56,16 +57,17 @@ export function createAirlineRenderers(
     const json = JSON.stringify(state);
     if (json === lastAtmosJson) return;
     lastAtmosJson = json;
-    const { status, data, error, lastSyncedAt } = state;
+    const { status, data, error, lastSyncedAt, progressMessage } = state;
 
     atmosEls.statusDot.className = `status-dot ${STATUS_DOT_CLASS[status]}`;
     atmosEls.statusText.textContent = STATUS_LABELS[status];
-    atmosEls.statusSubtitle.textContent = STATUS_SUBTITLES[status];
 
     const isBusy =
       status === "extracting"
       || status === "detecting_login"
       || status === "waiting_for_login";
+    atmosEls.statusSubtitle.textContent =
+      isBusy && progressMessage ? progressMessage : STATUS_SUBTITLES[status];
     atmosEls.syncBtn.disabled = isBusy;
     atmosEls.syncBtn.textContent = isBusy
       ? "Syncing..."
@@ -85,8 +87,8 @@ export function createAirlineRenderers(
     }
 
     atmosEls.errorContainer.innerHTML = error
-      ? `<div class="error-msg">${escapeHtml(error)}</div>`
-      : "";
+      ? `<div class="error-msg">${escapeHtml(error)}</div>${renderIssueReportHtml("Alaska Atmos", "atmos", status, error)}`
+      : renderIssueReportHtml("Alaska Atmos", "atmos", status, null);
 
     if (!data) {
       atmosEls.dataSection.style.display = "none";
@@ -178,6 +180,7 @@ export function createAirlineRenderers(
           data: null,
           error: null,
           lastSyncedAt: null,
+          progressMessage: null,
         });
       }
     });
@@ -200,7 +203,7 @@ export function createAirlineRenderers(
   const aaEls = getAirlineEls("aa", ["loyaltyPoints", "lpToNextTier", "millionMiler"]);
   const lastAAJson = { value: "" };
   function renderAA(state: ProviderSyncState<AALoyaltyData>) {
-    renderAirline(aaEls, state, "AAdvantage", lastAAJson, (data, els) => {
+    renderAirline(aaEls, state, "aa", "AAdvantage", lastAAJson, (data, els) => {
       renderValue(
         els.extraFields.loyaltyPoints,
         typeof data.loyaltyPoints === "number"
@@ -222,7 +225,13 @@ export function createAirlineRenderers(
     });
   }
   wireAirlineEvents(aaEls, "aa", "AAdvantage", requestSync, () => {
-    renderAA({ status: "detecting_login", data: null, error: null, lastSyncedAt: null });
+    renderAA({
+      status: "detecting_login",
+      data: null,
+      error: null,
+      lastSyncedAt: null,
+      progressMessage: null,
+    });
   });
 
   const deltaEls = getAirlineEls("delta", [
@@ -234,7 +243,7 @@ export function createAirlineRenderers(
   ]);
   const lastDeltaJson = { value: "" };
   function renderDelta(state: ProviderSyncState<DeltaLoyaltyData>) {
-    renderAirline(deltaEls, state, "Delta SkyMiles", lastDeltaJson, (data, els) => {
+    renderAirline(deltaEls, state, "delta", "Delta SkyMiles", lastDeltaJson, (data, els) => {
       renderValue(
         els.extraFields.mqds,
         typeof data.mqds === "number" ? `$${data.mqds.toLocaleString()}` : null,
@@ -265,6 +274,7 @@ export function createAirlineRenderers(
       data: null,
       error: null,
       lastSyncedAt: null,
+      progressMessage: null,
     });
   });
 
@@ -276,7 +286,7 @@ export function createAirlineRenderers(
   ]);
   const lastUnitedJson = { value: "" };
   function renderUnited(state: ProviderSyncState<UnitedLoyaltyData>) {
-    renderAirline(unitedEls, state, "United MileagePlus", lastUnitedJson, (data, els) => {
+    renderAirline(unitedEls, state, "united", "United MileagePlus", lastUnitedJson, (data, els) => {
       renderValue(
         els.extraFields.pqps,
         typeof data.pqps === "number" ? data.pqps.toLocaleString() : null,
@@ -303,6 +313,7 @@ export function createAirlineRenderers(
       data: null,
       error: null,
       lastSyncedAt: null,
+      progressMessage: null,
     });
   });
 
@@ -327,6 +338,7 @@ export function createAirlineRenderers(
     renderAirline(
       southwestEls,
       state,
+      "southwest",
       "Southwest Rapid Rewards",
       lastSouthwestJson,
       (data, els) => {
@@ -378,6 +390,7 @@ export function createAirlineRenderers(
         data: null,
         error: null,
         lastSyncedAt: null,
+        progressMessage: null,
       });
     },
   );
@@ -389,7 +402,7 @@ export function createAirlineRenderers(
   ]);
   const lastFrontierJson = { value: "" };
   function renderFrontier(state: ProviderSyncState<FrontierLoyaltyData>) {
-    renderAirline(frontierEls, state, "Frontier Miles", lastFrontierJson, (data, els) => {
+    renderAirline(frontierEls, state, "frontier", "Frontier Miles", lastFrontierJson, (data, els) => {
       renderValue(
         els.extraFields.eliteStatusPoints,
         typeof data.eliteStatusPoints === "number"
@@ -414,6 +427,7 @@ export function createAirlineRenderers(
       data: null,
       error: null,
       lastSyncedAt: null,
+      progressMessage: null,
     });
   });
 

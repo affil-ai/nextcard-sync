@@ -375,8 +375,6 @@ export async function pullOfferUrlCache(): Promise<void> {
       status?: "enrolled" | "detected";
     }> = data.offers ?? [];
 
-    if (offers.length === 0) return;
-
     const enrolledCache: OfferUrlCache = {};
     const detectedCache: OfferUrlCache = {};
 

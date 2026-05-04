@@ -41,6 +41,16 @@ function isProgressMessage(value: Record<string, unknown>) {
 }
 
 export function createBiltSync(options: BiltSyncDeps) {
+  function setBiltProgress(
+    message: string,
+    status: "extracting" | "detecting_login" | "waiting_for_login" = "extracting",
+  ) {
+    options.stateStore.updateProvider("bilt", {
+      status,
+      progressMessage: message,
+    });
+  }
+
   return async function startBiltSync() {
     const attemptId = options.stateStore.beginSyncRun("bilt").attemptId;
     const definition = options.providerRegistry.bilt;
@@ -52,6 +62,7 @@ export function createBiltSync(options: BiltSyncDeps) {
     options.stateStore.updateProvider("bilt", {
       status: "detecting_login",
       error: null,
+      progressMessage: "Opening Bilt...",
     });
 
     try {
@@ -63,7 +74,7 @@ export function createBiltSync(options: BiltSyncDeps) {
 
       await waitForTabLoad(tabId, 30000);
       options.stateStore.recordRunTab("bilt", attemptId, tabId, { owned: true });
-      options.stateStore.updateProvider("bilt", { status: "extracting" });
+      setBiltProgress("Reading Bilt wallet...");
 
       const firstMessage = await new Promise<Record<string, unknown>>((resolve) => {
         const timeout = setTimeout(() => {
@@ -114,7 +125,7 @@ export function createBiltSync(options: BiltSyncDeps) {
         firstMessage.type === "STATUS_UPDATE"
         && firstMessage.status === "waiting_for_login"
       ) {
-        options.stateStore.updateProvider("bilt", { status: "waiting_for_login" });
+        setBiltProgress("Waiting for Bilt sign-in...", "waiting_for_login");
         accountResult = await options.waitForGenericLoginAndExtract(
           "bilt",
           attemptId,
@@ -123,7 +134,7 @@ export function createBiltSync(options: BiltSyncDeps) {
       } else if (firstMessage.type === "EXTRACTION_DONE") {
         accountResult = firstMessage;
       } else {
-        options.stateStore.updateProvider("bilt", { status: "waiting_for_login" });
+        setBiltProgress("Waiting for Bilt sign-in...", "waiting_for_login");
         accountResult = await options.waitForGenericLoginAndExtract(
           "bilt",
           attemptId,
@@ -131,10 +142,12 @@ export function createBiltSync(options: BiltSyncDeps) {
         );
       }
 
+      setBiltProgress("Reading Bilt wallet...");
       if (accountResult.type !== "EXTRACTION_DONE" || !accountResult.data) {
         options.stateStore.updateProvider("bilt", {
           status: "error",
           error: "No data extracted from account",
+          progressMessage: null,
         });
         return;
       }
@@ -145,6 +158,7 @@ export function createBiltSync(options: BiltSyncDeps) {
           : {};
 
       try {
+        setBiltProgress("Opening Bilt status tracker...");
         await navigateAndWait(
           tabId,
           "https://www.bilt.com/account/status-tracker",
@@ -179,6 +193,7 @@ export function createBiltSync(options: BiltSyncDeps) {
           }
 
           chrome.runtime.onMessage.addListener(listener);
+          setBiltProgress("Reading Bilt tier progress...");
           void sendRunMessageToTab(
             tabId,
             "bilt",
@@ -203,11 +218,13 @@ export function createBiltSync(options: BiltSyncDeps) {
       }
 
       options.stateStore.assertRunActive("bilt", attemptId);
+      setBiltProgress("Saving Bilt rewards to nextcard...");
       options.stateStore.updateProvider("bilt", {
         status: "done",
         data: accountData,
         error: null,
         lastSyncedAt: new Date().toISOString(),
+        progressMessage: null,
       });
 
       options.stateStore.assertRunActive("bilt", attemptId);
@@ -228,6 +245,7 @@ export function createBiltSync(options: BiltSyncDeps) {
       options.stateStore.updateProvider("bilt", {
         status: "error",
         error: errorMessage,
+        progressMessage: null,
       });
       console.error("[NextCard SW] Bilt sync error:", error);
     }

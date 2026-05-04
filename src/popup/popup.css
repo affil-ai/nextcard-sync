@@ -74,6 +74,66 @@
         margin-bottom: 10px;
       }
 
+      .home-section-heading {
+        position: relative;
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        width: fit-content;
+        margin-bottom: 10px;
+      }
+
+      .home-section-heading .home-section-label {
+        margin-bottom: 0;
+      }
+
+      .info-popover-btn {
+        width: 18px;
+        height: 18px;
+        border-radius: 50%;
+        border: 1px solid #d8cec5;
+        background: #fff;
+        color: #8c7a6e;
+        cursor: pointer;
+        font-size: 11px;
+        font-weight: 800;
+        line-height: 16px;
+        text-align: center;
+      }
+
+      .info-popover-btn:hover,
+      .info-popover-btn:focus-visible {
+        border-color: #f6b156;
+        color: #342019;
+        outline: none;
+      }
+
+      .info-popover {
+        display: none;
+        position: absolute;
+        z-index: 20;
+        top: 24px;
+        left: 0;
+        width: min(300px, calc(100vw - 40px));
+        padding: 10px 12px;
+        border: 1px solid #eadfd6;
+        border-radius: 12px;
+        background: #fff;
+        box-shadow: 0 8px 24px rgba(52, 32, 25, 0.12);
+        color: #5a4a3e;
+        font-size: 12px;
+        font-weight: 600;
+        line-height: 1.45;
+        text-transform: none;
+        letter-spacing: 0;
+      }
+
+      .home-section-heading:hover .info-popover,
+      .home-section-heading:focus-within .info-popover,
+      .info-popover.visible {
+        display: block;
+      }
+
       .provider-list {
         display: flex;
         flex-direction: column;
@@ -549,6 +609,36 @@
         font-size: 13px;
         color: #dc2626;
         line-height: 1.5;
+      }
+
+      .issue-report {
+        margin-top: 10px;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        flex-wrap: wrap;
+        color: #8c7a6e;
+        font-size: 12px;
+      }
+
+      .issue-report-btn {
+        border: 1px solid #eadfd6;
+        border-radius: 999px;
+        background: #fff;
+        color: #342019;
+        cursor: pointer;
+        font-size: 12px;
+        font-weight: 700;
+        padding: 6px 10px;
+      }
+
+      .issue-report-btn:hover {
+        border-color: #f6b156;
+        background: #fef9f3;
+      }
+
+      .issue-report-email {
+        user-select: text;
       }
 
       /* ── Login prompt ── */
@@ -1095,6 +1185,25 @@
       }
 
       .wallet-btn:hover {
+        border-color: #f6b156;
+        background: #fef9f3;
+      }
+
+      .home-wallet-btn {
+        width: 100%;
+        padding: 10px;
+        margin: 12px 0 14px;
+        font-size: 13px;
+        font-weight: 700;
+        border: 1.5px solid #eadfd6;
+        border-radius: 12px;
+        cursor: pointer;
+        background: #fff;
+        color: #342019;
+        transition: border-color 0.15s, background 0.15s;
+      }
+
+      .home-wallet-btn:hover {
         border-color: #f6b156;
         background: #fef9f3;
       }

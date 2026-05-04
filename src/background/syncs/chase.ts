@@ -5,7 +5,11 @@ import type {
 } from "../../lib/types";
 import type { ProviderDefinition } from "../../providers/provider-registry";
 import type { createRuntimeStateStore } from "../core/runtime-state";
-import { waitForTabLoad, triggerExtraction, tabClosedSignal } from "../core/tab-utils";
+import {
+  waitForTabLoad,
+  triggerExtraction,
+  tabClosedSignal,
+} from "../core/tab-utils";
 
 type RuntimeStateStore = ReturnType<typeof createRuntimeStateStore>;
 
@@ -113,6 +117,23 @@ function isChaseRoute(value: unknown): value is ChaseRoute {
 }
 
 export function createChaseSync(options: ChaseSyncDeps) {
+  let progressTabId: number | null = null;
+
+  function setChaseProgress(message: string, status: "extracting" | "waiting_for_login" = "extracting") {
+    options.stateStore.updateProvider("chase", {
+      status,
+      progressMessage: message,
+    });
+
+    if (progressTabId == null) return;
+    void chrome.tabs.sendMessage(progressTabId, {
+      type: "UPDATE_OVERLAY_PROGRESS",
+      message,
+    }).catch(() => {
+      // Chase navigates across pages aggressively; overlay polling is the reliable path.
+    });
+  }
+
   function waitForChaseMessage(
     attemptId: string,
     messageType: string,
@@ -247,6 +268,7 @@ export function createChaseSync(options: ChaseSyncDeps) {
           if (isTwoFactor) {
             options.stateStore.updateProvider("chase", {
               status: "waiting_for_login",
+              progressMessage: "Waiting for Chase sign-in...",
             });
           }
         }
@@ -647,6 +669,7 @@ export function createChaseSync(options: ChaseSyncDeps) {
         const hasHub = route.url.includes("benefits/hub");
         if (hasHub) {
           try {
+            setChaseProgress(`Reading benefits for ${cardName}...`);
             const benefitsMessage = waitForChaseMessage(
               attemptId,
               "CHASE_BENEFITS_DONE",
@@ -664,6 +687,7 @@ export function createChaseSync(options: ChaseSyncDeps) {
             const postTab = await chrome.tabs.get(tabId);
             const postUrl = postTab.url ?? "";
             if (!postUrl.includes("secure.chase.com")) {
+              setChaseProgress(`Reading points for ${cardName}...`);
               const points = await waitForChasePointsOnCurrentPage(attemptId, tabId);
               if (points) {
                 availablePoints = points.available;
@@ -681,6 +705,7 @@ export function createChaseSync(options: ChaseSyncDeps) {
         if (availablePoints == null && !isCoBrandCard) {
           try {
             const urUrl = `https://ultimaterewardspoints.chase.com/home?AI=${accountId}`;
+            setChaseProgress(`Reading points for ${cardName}...`);
             await navigateChaseTabAndWaitForLoad(tabId, urUrl);
             const points = await waitForChasePointsOnCurrentPage(attemptId, tabId);
             if (points) {
@@ -691,12 +716,14 @@ export function createChaseSync(options: ChaseSyncDeps) {
           }
         }
       } else if (route.kind === "ur_portal") {
+        setChaseProgress(`Reading points for ${cardName}...`);
         const points = await waitForChasePointsOnCurrentPage(attemptId, tabId);
         if (points) {
           availablePoints = points.available;
           pendingPoints = points.pending;
         }
       } else if (route.kind === "loyalty_portal") {
+        setChaseProgress(`Reading rewards for ${cardName}...`);
         const points = await waitForChasePointsOnCurrentPage(attemptId, tabId);
         if (points) {
           availablePoints = points.available;
@@ -729,12 +756,14 @@ export function createChaseSync(options: ChaseSyncDeps) {
       ? { ...fullData, _allCards: allCards }
       : fullData;
 
+    setChaseProgress("Saving Chase rewards to nextcard...");
     options.stateStore.assertRunActive("chase", attemptId);
     options.stateStore.updateProvider("chase", {
       status: "done",
       data: multiCardData,
       error: null,
       lastSyncedAt: new Date().toISOString(),
+      progressMessage: null,
     });
 
     options.stateStore.assertRunActive("chase", attemptId);
@@ -753,6 +782,7 @@ export function createChaseSync(options: ChaseSyncDeps) {
     options.stateStore.updateProvider("chase", {
       status: "detecting_login",
       error: null,
+      progressMessage: "Opening Chase...",
     });
 
     try {
@@ -762,6 +792,7 @@ export function createChaseSync(options: ChaseSyncDeps) {
         throw new Error("Could not create tab");
       }
 
+      progressTabId = tabId;
       await waitForTabLoad(tabId, 30000);
       options.stateStore.recordRunTab("chase", attemptId, tabId, { owned: true });
 
@@ -769,11 +800,12 @@ export function createChaseSync(options: ChaseSyncDeps) {
       if (!alreadyLoaded) {
         options.stateStore.updateProvider("chase", {
           status: "waiting_for_login",
+          progressMessage: "Waiting for Chase sign-in...",
         });
         await waitForChaseDashboardContent(attemptId, tabId);
       }
 
-      options.stateStore.updateProvider("chase", { status: "extracting" });
+      setChaseProgress("Finding your Chase cards...");
 
       const cardIds = await waitForChaseCreditCards(attemptId, tabId);
 
@@ -789,15 +821,7 @@ export function createChaseSync(options: ChaseSyncDeps) {
       for (let index = 0; index < cardIds.length; index += 1) {
         const card = cardIds[index];
 
-        // Update overlay via content script
-        try {
-          await chrome.tabs.sendMessage(tabId, {
-            type: "UPDATE_OVERLAY_PROGRESS",
-            message: index === 0
-              ? `Syncing ${card.cardName}...`
-              : `Switching to ${card.cardName}...`,
-          });
-        } catch { /* content script may not be ready */ }
+        setChaseProgress(`Syncing ${index + 1} of ${cardIds.length}: ${card.cardName}`);
 
         const currentTab = await chrome.tabs.get(tabId);
         const currentUrl = currentTab.url ?? "";
@@ -805,6 +829,7 @@ export function createChaseSync(options: ChaseSyncDeps) {
           if (currentUrl.includes("logoff") || currentUrl.includes("logon")) {
             break;
           }
+          setChaseProgress("Returning to Chase dashboard...");
           await navigateChaseTabAndWaitForLoad(
             tabId,
             "https://secure.chase.com/web/auth/dashboard#/dashboard/overview",
@@ -839,6 +864,7 @@ export function createChaseSync(options: ChaseSyncDeps) {
       }
 
       try {
+        setChaseProgress("Returning to Chase dashboard...");
         await navigateChaseTabAndWaitForLoad(
           tabId,
           "https://secure.chase.com/web/auth/dashboard#/dashboard/overview",
@@ -862,8 +888,11 @@ export function createChaseSync(options: ChaseSyncDeps) {
       options.stateStore.updateProvider("chase", {
         status: "error",
         error: errorMessage,
+        progressMessage: null,
       });
       console.error("[NextCard SW] Chase sync error:", error);
+    } finally {
+      progressTabId = null;
     }
   };
 }

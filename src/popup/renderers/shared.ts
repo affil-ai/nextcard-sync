@@ -7,6 +7,9 @@ const confirmModalConfirm = document.getElementById("confirmModalConfirm") as HT
 
 // Keep the extension's wallet CTA aligned with the current NextCard dashboard route.
 export const WALLET_URL = `${__NEXTCARD_URL__}/dashboard/wallet`;
+export const REWARDS_URL = `${__NEXTCARD_URL__}/dashboard/rewards`;
+
+const SUPPORT_EMAIL = "help@nextcard.com";
 
 export const STATUS_LABELS: Record<SyncStatus, string> = {
   idle: "Ready to sync",
@@ -70,10 +73,15 @@ export function openWallet() {
   chrome.tabs.create({ url: WALLET_URL });
 }
 
+export function openRewards() {
+  chrome.tabs.create({ url: REWARDS_URL });
+}
+
 export function updateWalletBtn(providerId: string, status: string) {
   const btn = document.getElementById(`${providerId}WalletBtn`);
   if (btn) {
     btn.style.display = status === "done" ? "block" : "none";
+    btn.textContent = "View on nextcard";
   }
 }
 
@@ -94,6 +102,50 @@ export function escapeHtml(str: string) {
   const div = document.createElement("div");
   div.textContent = str;
   return div.innerHTML;
+}
+
+export function buildIssueReportMailto(
+  providerName: string,
+  providerId: string,
+  status: SyncStatus,
+  error: string | null,
+) {
+  const version = chrome.runtime.getManifest().version;
+  const body = [
+    "Tell us what happened:",
+    "",
+    "",
+    "---",
+    `Provider: ${providerName} (${providerId})`,
+    `Status: ${status}`,
+    `Extension version: ${version}`,
+    error ? `Error: ${error}` : null,
+  ]
+    .filter((line): line is string => line != null)
+    .join("\n");
+
+  return `mailto:${SUPPORT_EMAIL}?subject=${encodeURIComponent("Issue Report: nextcard sync")}&body=${encodeURIComponent(body)}`;
+}
+
+export function renderIssueReportHtml(
+  providerName: string,
+  providerId: string,
+  status: SyncStatus,
+  error: string | null,
+) {
+  if (status !== "error" && status !== "cancelled") {
+    return "";
+  }
+
+  const mailto = buildIssueReportMailto(providerName, providerId, status, error);
+  return `
+    <div class="issue-report">
+      <button class="issue-report-btn" type="button" data-issue-report-mailto="${escapeHtml(mailto)}">
+        Report issue
+      </button>
+      <span class="issue-report-email">${SUPPORT_EMAIL}</span>
+    </div>
+  `;
 }
 
 export function formatTerms(raw: string) {
@@ -184,6 +236,7 @@ export function getAirlineEls(prefix: string, extraFieldIds: string[]): AirlineE
 export function renderAirline<T extends Record<string, unknown>>(
   els: AirlineEls,
   state: ProviderSyncState<T>,
+  providerId: ProviderId,
   providerName: string,
   lastJson: { value: string },
   extraRenderer?: (data: T, els: AirlineEls) => void,
@@ -192,15 +245,16 @@ export function renderAirline<T extends Record<string, unknown>>(
   if (json === lastJson.value) return;
   lastJson.value = json;
 
-  const { status, data, error, lastSyncedAt } = state;
+  const { status, data, error, lastSyncedAt, progressMessage } = state;
   els.statusDot.className = `status-dot ${STATUS_DOT_CLASS[status]}`;
   els.statusText.textContent = STATUS_LABELS[status];
-  els.statusSubtitle.textContent = STATUS_SUBTITLES[status];
 
   const isBusy =
     status === "extracting"
     || status === "detecting_login"
     || status === "waiting_for_login";
+  els.statusSubtitle.textContent =
+    isBusy && progressMessage ? progressMessage : STATUS_SUBTITLES[status];
   els.syncBtn.disabled = isBusy;
   els.syncBtn.textContent = isBusy
     ? "Syncing..."
@@ -220,8 +274,8 @@ export function renderAirline<T extends Record<string, unknown>>(
   }
 
   els.errorContainer.innerHTML = error
-    ? `<div class="error-msg">${escapeHtml(error)}</div>`
-    : "";
+    ? `<div class="error-msg">${escapeHtml(error)}</div>${renderIssueReportHtml(providerName, providerId, status, error)}`
+    : renderIssueReportHtml(providerName, providerId, status, null);
 
   if (!data || typeof data !== "object") {
     els.dataSection.style.display = "none";

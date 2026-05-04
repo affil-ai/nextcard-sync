@@ -9,6 +9,7 @@ import type {
 import {
   escapeHtml,
   formatRelativeTime,
+  renderIssueReportHtml,
   renderValue,
   showConfirmDelete,
   STATUS_DOT_CLASS,
@@ -134,16 +135,17 @@ export function createHotelRenderers(
     const json = JSON.stringify(state);
     if (json === lastMarriottJson) return;
     lastMarriottJson = json;
-    const { status, data, error, lastSyncedAt } = state;
+    const { status, data, error, lastSyncedAt, progressMessage } = state;
 
     marriottEls.statusDot.className = `status-dot ${STATUS_DOT_CLASS[status]}`;
     marriottEls.statusText.textContent = STATUS_LABELS[status];
-    marriottEls.statusSubtitle.textContent = STATUS_SUBTITLES[status];
 
     const isBusy =
       status === "extracting"
       || status === "detecting_login"
       || status === "waiting_for_login";
+    marriottEls.statusSubtitle.textContent =
+      isBusy && progressMessage ? progressMessage : STATUS_SUBTITLES[status];
     marriottEls.syncBtn.disabled = isBusy;
     marriottEls.syncBtn.textContent = isBusy
       ? "Syncing..."
@@ -163,8 +165,8 @@ export function createHotelRenderers(
     }
 
     marriottEls.errorContainer.innerHTML = error
-      ? `<div class="error-msg">${escapeHtml(error)}</div>`
-      : "";
+      ? `<div class="error-msg">${escapeHtml(error)}</div>${renderIssueReportHtml("Marriott Bonvoy", "marriott", status, error)}`
+      : renderIssueReportHtml("Marriott Bonvoy", "marriott", status, null);
 
     if (!data) {
       marriottEls.dataSection.style.display = "none";
@@ -235,6 +237,7 @@ export function createHotelRenderers(
           data: null,
           error: null,
           lastSyncedAt: null,
+          progressMessage: null,
         });
       }
     });
@@ -259,16 +262,17 @@ export function createHotelRenderers(
     const json = JSON.stringify(state);
     if (json === lastIhgJson) return;
     lastIhgJson = json;
-    const { status, data, error, lastSyncedAt } = state;
+    const { status, data, error, lastSyncedAt, progressMessage } = state;
 
     ihgEls.statusDot.className = `status-dot ${STATUS_DOT_CLASS[status]}`;
     ihgEls.statusText.textContent = STATUS_LABELS[status];
-    ihgEls.statusSubtitle.textContent = STATUS_SUBTITLES[status];
 
     const isBusy =
       status === "extracting"
       || status === "detecting_login"
       || status === "waiting_for_login";
+    ihgEls.statusSubtitle.textContent =
+      isBusy && progressMessage ? progressMessage : STATUS_SUBTITLES[status];
     ihgEls.syncBtn.disabled = isBusy;
     ihgEls.syncBtn.textContent = isBusy
       ? "Syncing..."
@@ -288,8 +292,8 @@ export function createHotelRenderers(
     }
 
     ihgEls.errorContainer.innerHTML = error
-      ? `<div class="error-msg">${escapeHtml(error)}</div>`
-      : "";
+      ? `<div class="error-msg">${escapeHtml(error)}</div>${renderIssueReportHtml("IHG One Rewards", "ihg", status, error)}`
+      : renderIssueReportHtml("IHG One Rewards", "ihg", status, null);
 
     if (!data) {
       ihgEls.dataSection.style.display = "none";
@@ -354,6 +358,7 @@ export function createHotelRenderers(
           data: null,
           error: null,
           lastSyncedAt: null,
+          progressMessage: null,
         });
       }
     });
@@ -378,16 +383,17 @@ export function createHotelRenderers(
     const json = JSON.stringify(state);
     if (json === lastHyattJson) return;
     lastHyattJson = json;
-    const { status, data, error, lastSyncedAt } = state;
+    const { status, data, error, lastSyncedAt, progressMessage } = state;
 
     hyattEls.statusDot.className = `status-dot ${STATUS_DOT_CLASS[status]}`;
     hyattEls.statusText.textContent = STATUS_LABELS[status];
-    hyattEls.statusSubtitle.textContent = STATUS_SUBTITLES[status];
 
     const isBusy =
       status === "extracting"
       || status === "detecting_login"
       || status === "waiting_for_login";
+    hyattEls.statusSubtitle.textContent =
+      isBusy && progressMessage ? progressMessage : STATUS_SUBTITLES[status];
     hyattEls.syncBtn.disabled = isBusy;
     hyattEls.syncBtn.textContent = isBusy
       ? "Syncing..."
@@ -407,8 +413,8 @@ export function createHotelRenderers(
     }
 
     hyattEls.errorContainer.innerHTML = error
-      ? `<div class="error-msg">${escapeHtml(error)}</div>`
-      : "";
+      ? `<div class="error-msg">${escapeHtml(error)}</div>${renderIssueReportHtml("World of Hyatt", "hyatt", status, error)}`
+      : renderIssueReportHtml("World of Hyatt", "hyatt", status, null);
 
     if (!data) {
       hyattEls.dataSection.style.display = "none";
@@ -490,6 +496,7 @@ export function createHotelRenderers(
           data: null,
           error: null,
           lastSyncedAt: null,
+          progressMessage: null,
         });
       }
     });
@@ -514,16 +521,17 @@ export function createHotelRenderers(
     const json = JSON.stringify(state);
     if (json === lastHiltonJson) return;
     lastHiltonJson = json;
-    const { status, data, error, lastSyncedAt } = state;
+    const { status, data, error, lastSyncedAt, progressMessage } = state;
 
     hiltonEls.statusDot.className = `status-dot ${STATUS_DOT_CLASS[status]}`;
     hiltonEls.statusText.textContent = STATUS_LABELS[status];
-    hiltonEls.statusSubtitle.textContent = STATUS_SUBTITLES[status];
 
     const isBusy =
       status === "extracting"
       || status === "detecting_login"
       || status === "waiting_for_login";
+    hiltonEls.statusSubtitle.textContent =
+      isBusy && progressMessage ? progressMessage : STATUS_SUBTITLES[status];
     hiltonEls.syncBtn.disabled = isBusy;
     hiltonEls.syncBtn.textContent = isBusy
       ? "Syncing..."
@@ -543,8 +551,8 @@ export function createHotelRenderers(
     }
 
     hiltonEls.errorContainer.innerHTML = error
-      ? `<div class="error-msg">${escapeHtml(error)}</div>`
-      : "";
+      ? `<div class="error-msg">${escapeHtml(error)}</div>${renderIssueReportHtml("Hilton Honors", "hilton", status, error)}`
+      : renderIssueReportHtml("Hilton Honors", "hilton", status, null);
 
     if (!data) {
       hiltonEls.dataSection.style.display = "none";
@@ -639,6 +647,7 @@ export function createHotelRenderers(
           data: null,
           error: null,
           lastSyncedAt: null,
+          progressMessage: null,
         });
       }
     });

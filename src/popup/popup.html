@@ -126,6 +126,9 @@
         </div>
         <button class="user-sign-out" id="userSignOutBtn">Sign out</button>
       </div>
+      <button class="home-wallet-btn" id="homeWalletBtn" type="button">
+        Open nextcard wallet
+      </button>
       <div class="tab-bar hidden" id="tabBar" data-active="sync">
         <div class="tab-slider"></div>
         <button class="tab-btn active" data-tab="sync">sync</button>
@@ -137,7 +140,13 @@
       <div class="version-footer" id="versionFooter"></div>
       </div><!-- /syncTabPanel -->
       <div id="toolsTabPanel" style="display:none;">
-        <div class="home-section-label" style="margin-top:16px">Offers</div>
+        <div class="home-section-heading" style="margin-top:16px">
+          <div class="home-section-label">Offers</div>
+          <button class="info-popover-btn" type="button" aria-label="About offer tools" aria-expanded="false" aria-describedby="offersExplainer" data-info-toggle="offersExplainer">?</button>
+          <div class="info-popover" id="offersExplainer" role="tooltip">
+            Offer tools find eligible card-linked merchant offers, add or sync them, and save them to your nextcard offers dashboard.
+          </div>
+        </div>
 
         <div class="provider-card tool-card" id="chaseOffersCard" style="cursor:pointer">
           <div class="provider-icon"><img src="" id="chaseOffersIcon" alt="Chase" /></div>
@@ -276,7 +285,13 @@
           </div>
         </div>
 
-        <div class="home-section-label" style="margin-top:16px">Bonuses</div>
+        <div class="home-section-heading" style="margin-top:16px">
+          <div class="home-section-label">Bonuses</div>
+          <button class="info-popover-btn" type="button" aria-label="About bonus tools" aria-expanded="false" aria-describedby="bonusesExplainer" data-info-toggle="bonusesExplainer">?</button>
+          <div class="info-popover" id="bonusesExplainer" role="tooltip">
+            Bonus tools activate quarterly or targeted card bonuses when an issuer supports automated registration.
+          </div>
+        </div>
 
         <div class="provider-card tool-card" id="discoverBonusCard" style="cursor:pointer">
           <div class="provider-icon"><img src="" id="discoverBonusIcon" alt="Discover" /></div>
@@ -323,6 +338,13 @@
         </div>
       </div>
       <div class="changelog" id="changelog">
+        <h4>v0.6.4</h4>
+        <ul>
+          <li>Better sync progress across providers</li>
+          <li>UX improvements for tools, support reporting, and nextcard CTAs</li>
+          <li>Improved Citi and Bilt sync reliability</li>
+          <li>Offer alert improvements</li>
+        </ul>
         <h4>v0.6.3</h4>
         <ul>
           <li>UI improvements</li>
@@ -514,7 +536,7 @@
         Clear synced data
       </button>
       <button class="wallet-btn" id="marriottWalletBtn" style="display: none">
-        View your nextcard wallet
+        View on nextcard
       </button>
 
       <div id="marriottErrorContainer"></div>
@@ -643,7 +665,7 @@
         Clear synced data
       </button>
       <button class="wallet-btn" id="atmosWalletBtn" style="display: none">
-        View your nextcard wallet
+        View on nextcard
       </button>
 
       <div id="atmosErrorContainer"></div>
@@ -730,7 +752,7 @@
         Clear synced data
       </button>
       <button class="wallet-btn" id="chaseWalletBtn" style="display: none">
-        View your nextcard wallet
+        View on nextcard
       </button>
 
       <div id="chaseErrorContainer"></div>
@@ -787,7 +809,7 @@
         Clear synced data
       </button>
       <button class="wallet-btn" id="aaWalletBtn" style="display: none">
-        View your nextcard wallet
+        View on nextcard
       </button>
 
       <div id="aaErrorContainer"></div>
@@ -869,7 +891,7 @@
         Clear synced data
       </button>
       <button class="wallet-btn" id="deltaWalletBtn" style="display: none">
-        View your nextcard wallet
+        View on nextcard
       </button>
 
       <div id="deltaErrorContainer"></div>
@@ -965,7 +987,7 @@
         Clear synced data
       </button>
       <button class="wallet-btn" id="unitedWalletBtn" style="display: none">
-        View your nextcard wallet
+        View on nextcard
       </button>
 
       <div id="unitedErrorContainer"></div>
@@ -1057,7 +1079,7 @@
         Clear synced data
       </button>
       <button class="wallet-btn" id="southwestWalletBtn" style="display: none">
-        View your nextcard wallet
+        View on nextcard
       </button>
 
       <div id="southwestErrorContainer"></div>
@@ -1140,7 +1162,7 @@
         Clear synced data
       </button>
       <button class="wallet-btn" id="ihgWalletBtn" style="display: none">
-        View your nextcard wallet
+        View on nextcard
       </button>
 
       <div id="ihgErrorContainer"></div>
@@ -1232,7 +1254,7 @@
         Clear synced data
       </button>
       <button class="wallet-btn" id="hyattWalletBtn" style="display: none">
-        View your nextcard wallet
+        View on nextcard
       </button>
 
       <div id="hyattErrorContainer"></div>
@@ -1328,7 +1350,7 @@
         Clear synced data
       </button>
       <button class="wallet-btn" id="hiltonWalletBtn" style="display: none">
-        View your nextcard wallet
+        View on nextcard
       </button>
 
       <div id="hiltonErrorContainer"></div>
@@ -1407,7 +1429,7 @@
         Clear synced data
       </button>
       <button class="wallet-btn" id="amexWalletBtn" style="display: none">
-        View your nextcard wallet
+        View on nextcard
       </button>
 
       <div id="amexErrorContainer"></div>
@@ -1467,7 +1489,7 @@
         Clear synced data
       </button>
       <button class="wallet-btn" id="capitaloneWalletBtn" style="display: none">
-        View your nextcard wallet
+        View on nextcard
       </button>
 
       <div id="capitaloneErrorContainer"></div>
@@ -1531,7 +1553,7 @@
         Clear synced data
       </button>
       <button class="wallet-btn" id="frontierWalletBtn" style="display: none">
-        View your nextcard wallet
+        View on nextcard
       </button>
 
       <div id="frontierErrorContainer"></div>
@@ -1610,7 +1632,7 @@
         Clear synced data
       </button>
       <button class="wallet-btn" id="biltWalletBtn" style="display: none">
-        View your nextcard wallet
+        View on nextcard
       </button>
 
       <div id="biltErrorContainer"></div>
@@ -1648,6 +1670,18 @@
           <div class="data-card" id="biltMemberNumberCard">
             <div class="data-label">Member #</div>
             <div class="data-value" id="biltMemberNumber">--</div>
+          </div>
+          <div class="data-card">
+            <div class="data-label">Bilt Cash</div>
+            <div class="data-value" id="biltCashBalance">--</div>
+          </div>
+          <div class="data-card">
+            <div class="data-label">Cash Expires</div>
+            <div class="data-value" id="biltCashExpiration">--</div>
+          </div>
+          <div class="data-card full-width">
+            <div class="data-label">Next Bilt Cash Reward</div>
+            <div class="data-value" id="biltNextCashReward">--</div>
           </div>
         </div>
 
@@ -1756,7 +1790,7 @@
         </div>
       </div>
       <div class="bottom-actions">
-        <button class="wallet-btn" id="discoverWalletBtn" style="display: none">View in nextcard wallet</button>
+        <button class="wallet-btn" id="discoverWalletBtn" style="display: none">View on nextcard</button>
         <button class="clear-btn" id="discoverClearBtn" style="display: none">Clear synced data</button>
       </div>
       <button class="raw-toggle" id="discoverRawToggle" style="display: none">
@@ -1794,7 +1828,7 @@
         <div id="citiCardsContainer"></div>
       </div>
       <div class="bottom-actions">
-        <button class="wallet-btn" id="citiWalletBtn" style="display: none">View in nextcard wallet</button>
+        <button class="wallet-btn" id="citiWalletBtn" style="display: none">View on nextcard</button>
         <button class="clear-btn" id="citiClearBtn" style="display: none">Clear synced data</button>
       </div>
       <button class="raw-toggle" id="citiRawToggle" style="display: none">

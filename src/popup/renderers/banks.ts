@@ -11,6 +11,7 @@ import type {
 import {
   escapeHtml,
   formatRelativeTime,
+  renderIssueReportHtml,
   renderValue,
   showConfirmDelete,
   STATUS_DOT_CLASS,
@@ -88,6 +89,9 @@ export function createBankRenderers(
     memberNameCard: document.getElementById("biltMemberNameCard") as HTMLDivElement,
     memberNumber: document.getElementById("biltMemberNumber") as HTMLDivElement,
     memberNumberCard: document.getElementById("biltMemberNumberCard") as HTMLDivElement,
+    cashBalance: document.getElementById("biltCashBalance") as HTMLDivElement,
+    cashExpiration: document.getElementById("biltCashExpiration") as HTMLDivElement,
+    nextCashReward: document.getElementById("biltNextCashReward") as HTMLDivElement,
     progressSection: document.getElementById("biltProgressSection") as HTMLDivElement,
     progressCards: document.getElementById("biltProgressCards") as HTMLDivElement,
   };
@@ -151,16 +155,18 @@ export function createBankRenderers(
     const json = JSON.stringify(state);
     if (json === lastChaseJson) return;
     lastChaseJson = json;
-    const { status, data, error, lastSyncedAt } = state;
+    const { status, data, error, lastSyncedAt, progressMessage } = state;
 
     chaseEls.statusDot.className = `status-dot ${STATUS_DOT_CLASS[status]}`;
     chaseEls.statusText.textContent = STATUS_LABELS[status];
-    chaseEls.statusSubtitle.textContent = STATUS_SUBTITLES[status];
-
     const isBusy =
       status === "extracting"
       || status === "detecting_login"
       || status === "waiting_for_login";
+    chaseEls.statusSubtitle.textContent =
+      isBusy && progressMessage
+        ? progressMessage
+        : STATUS_SUBTITLES[status];
     chaseEls.syncBtn.disabled = isBusy;
     chaseEls.syncBtn.textContent = isBusy
       ? "Syncing..."
@@ -180,8 +186,8 @@ export function createBankRenderers(
     }
 
     chaseEls.errorContainer.innerHTML = error
-      ? `<div class="error-msg">${escapeHtml(error)}</div>`
-      : "";
+      ? `<div class="error-msg">${escapeHtml(error)}</div>${renderIssueReportHtml("Chase", "chase", status, error)}`
+      : renderIssueReportHtml("Chase", "chase", status, null);
 
     if (!data) {
       chaseEls.dataSection.style.display = "none";
@@ -208,6 +214,7 @@ export function createBankRenderers(
           data: null,
           error: null,
           lastSyncedAt: null,
+          progressMessage: "Opening Chase...",
         });
       }
     });
@@ -284,16 +291,17 @@ export function createBankRenderers(
     const json = JSON.stringify(state);
     if (json === lastAmexJson) return;
     lastAmexJson = json;
-    const { status, data, error, lastSyncedAt } = state;
+    const { status, data, error, lastSyncedAt, progressMessage } = state;
 
     amexEls.statusDot.className = `status-dot ${STATUS_DOT_CLASS[status]}`;
     amexEls.statusText.textContent = STATUS_LABELS[status];
-    amexEls.statusSubtitle.textContent = STATUS_SUBTITLES[status];
 
     const isBusy =
       status === "extracting"
       || status === "detecting_login"
       || status === "waiting_for_login";
+    amexEls.statusSubtitle.textContent =
+      isBusy && progressMessage ? progressMessage : STATUS_SUBTITLES[status];
     amexEls.syncBtn.disabled = isBusy;
     amexEls.syncBtn.textContent = isBusy
       ? "Syncing..."
@@ -313,8 +321,8 @@ export function createBankRenderers(
     }
 
     amexEls.errorContainer.innerHTML = error
-      ? `<div class="error-msg">${escapeHtml(error)}</div>`
-      : "";
+      ? `<div class="error-msg">${escapeHtml(error)}</div>${renderIssueReportHtml("American Express", "amex", status, error)}`
+      : renderIssueReportHtml("American Express", "amex", status, null);
 
     if (!data) {
       amexEls.dataSection.style.display = "none";
@@ -348,6 +356,7 @@ export function createBankRenderers(
           data: null,
           error: null,
           lastSyncedAt: null,
+          progressMessage: null,
         });
       }
     });
@@ -434,16 +443,17 @@ export function createBankRenderers(
     const json = JSON.stringify(state);
     if (json === lastCapitalOneJson) return;
     lastCapitalOneJson = json;
-    const { status, data, error, lastSyncedAt } = state;
+    const { status, data, error, lastSyncedAt, progressMessage } = state;
 
     capitaloneEls.statusDot.className = `status-dot ${STATUS_DOT_CLASS[status]}`;
     capitaloneEls.statusText.textContent = STATUS_LABELS[status];
-    capitaloneEls.statusSubtitle.textContent = STATUS_SUBTITLES[status];
 
     const isBusy =
       status === "extracting"
       || status === "detecting_login"
       || status === "waiting_for_login";
+    capitaloneEls.statusSubtitle.textContent =
+      isBusy && progressMessage ? progressMessage : STATUS_SUBTITLES[status];
     capitaloneEls.syncBtn.disabled = isBusy;
     capitaloneEls.syncBtn.textContent = isBusy
       ? "Syncing..."
@@ -463,8 +473,8 @@ export function createBankRenderers(
     }
 
     capitaloneEls.errorContainer.innerHTML = error
-      ? `<div class="error-msg">${escapeHtml(error)}</div>`
-      : "";
+      ? `<div class="error-msg">${escapeHtml(error)}</div>${renderIssueReportHtml("Capital One", "capitalone", status, error)}`
+      : renderIssueReportHtml("Capital One", "capitalone", status, null);
 
     if (!data) {
       capitaloneEls.dataSection.style.display = "none";
@@ -501,6 +511,7 @@ export function createBankRenderers(
           data: null,
           error: null,
           lastSyncedAt: null,
+          progressMessage: null,
         });
       }
     });
@@ -525,16 +536,17 @@ export function createBankRenderers(
     const json = JSON.stringify(state);
     if (json === lastBiltJson) return;
     lastBiltJson = json;
-    const { status, data, error, lastSyncedAt } = state;
+    const { status, data, error, lastSyncedAt, progressMessage } = state;
 
     biltEls.statusDot.className = `status-dot ${STATUS_DOT_CLASS[status]}`;
     biltEls.statusText.textContent = STATUS_LABELS[status];
-    biltEls.statusSubtitle.textContent = STATUS_SUBTITLES[status];
 
     const isBusy =
       status === "extracting"
       || status === "detecting_login"
       || status === "waiting_for_login";
+    biltEls.statusSubtitle.textContent =
+      isBusy && progressMessage ? progressMessage : STATUS_SUBTITLES[status];
     biltEls.syncBtn.disabled = isBusy;
     biltEls.syncBtn.textContent = isBusy
       ? "Syncing..."
@@ -554,8 +566,8 @@ export function createBankRenderers(
     }
 
     biltEls.errorContainer.innerHTML = error
-      ? `<div class="error-msg">${escapeHtml(error)}</div>`
-      : "";
+      ? `<div class="error-msg">${escapeHtml(error)}</div>${renderIssueReportHtml("Bilt Rewards", "bilt", status, error)}`
+      : renderIssueReportHtml("Bilt Rewards", "bilt", status, null);
 
     if (!data) {
       biltEls.dataSection.style.display = "none";
@@ -566,6 +578,17 @@ export function createBankRenderers(
     biltEls.dataSection.style.display = "block";
     renderValue(biltEls.pointsBalance, data.pointsBalance?.toLocaleString() ?? null);
     renderValue(biltEls.eliteStatus, data.eliteStatus);
+    renderValue(
+      biltEls.cashBalance,
+      data.biltCashBalance != null ? `$${data.biltCashBalance.toFixed(2)}` : null,
+    );
+    renderValue(biltEls.cashExpiration, data.biltCashExpiration);
+    renderValue(
+      biltEls.nextCashReward,
+      data.pointsToNextBiltCashReward != null && data.nextBiltCashRewardAmount != null
+        ? `${data.pointsToNextBiltCashReward.toLocaleString()} points to $${data.nextBiltCashRewardAmount.toFixed(2)}`
+        : null,
+    );
 
     if (data.memberName) {
       renderValue(biltEls.memberName, data.memberName);
@@ -633,6 +656,7 @@ export function createBankRenderers(
           data: null,
           error: null,
           lastSyncedAt: null,
+          progressMessage: null,
         });
       }
     });
@@ -681,14 +705,20 @@ export function createBankRenderers(
     const s = state.status;
     discoverEls.statusDot.className = `status-dot ${STATUS_DOT_CLASS[s] ?? "idle"}`;
     discoverEls.statusText.textContent = STATUS_LABELS[s] ?? "Ready to sync";
-    discoverEls.statusSubtitle.textContent = STATUS_SUBTITLES[s] ?? "";
     const busy = s === "detecting_login" || s === "waiting_for_login" || s === "extracting";
+    discoverEls.statusSubtitle.textContent =
+      busy && state.progressMessage
+        ? state.progressMessage
+        : STATUS_SUBTITLES[s] ?? "";
     discoverEls.syncBtn.disabled = busy;
     discoverEls.syncBtn.textContent = s === "done" ? "Sync Again" : busy ? "Syncing..." : "Sync Discover";
     discoverEls.cancelBtn.style.display = busy ? "" : "none";
     discoverEls.loginPrompt.style.display = s === "waiting_for_login" ? "" : "none";
-    discoverEls.errorMsg.style.display = s === "error" ? "" : "none";
-    if (s === "error") discoverEls.errorMsg.textContent = state.error ?? "Unknown error";
+    discoverEls.errorMsg.style.display =
+      s === "error" || s === "cancelled" ? "" : "none";
+    discoverEls.errorMsg.innerHTML = s === "error"
+      ? `${escapeHtml(state.error ?? "Unknown error")}${renderIssueReportHtml("Discover", "discover", s, state.error)}`
+      : renderIssueReportHtml("Discover", "discover", s, null);
     if (state.lastSyncedAt) {
       discoverEls.lastSynced.style.display = "";
       discoverEls.lastSyncedTime.textContent = formatRelativeTime(state.lastSyncedAt);
@@ -751,14 +781,20 @@ export function createBankRenderers(
     const s = state.status;
     citiEls.statusDot.className = `status-dot ${STATUS_DOT_CLASS[s] ?? "idle"}`;
     citiEls.statusText.textContent = STATUS_LABELS[s] ?? "Ready to sync";
-    citiEls.statusSubtitle.textContent = STATUS_SUBTITLES[s] ?? "";
     const busy = s === "detecting_login" || s === "waiting_for_login" || s === "extracting";
+    citiEls.statusSubtitle.textContent =
+      busy && state.progressMessage
+        ? state.progressMessage
+        : STATUS_SUBTITLES[s] ?? "";
     citiEls.syncBtn.disabled = busy;
     citiEls.syncBtn.textContent = s === "done" ? "Sync Again" : busy ? "Syncing..." : "Sync Citi";
     citiEls.cancelBtn.style.display = busy ? "" : "none";
     citiEls.loginPrompt.style.display = s === "waiting_for_login" ? "" : "none";
-    citiEls.errorMsg.style.display = s === "error" ? "" : "none";
-    if (s === "error") citiEls.errorMsg.textContent = state.error ?? "Unknown error";
+    citiEls.errorMsg.style.display =
+      s === "error" || s === "cancelled" ? "" : "none";
+    citiEls.errorMsg.innerHTML = s === "error"
+      ? `${escapeHtml(state.error ?? "Unknown error")}${renderIssueReportHtml("Citi", "citi", s, state.error)}`
+      : renderIssueReportHtml("Citi", "citi", s, null);
     if (state.lastSyncedAt) {
       citiEls.lastSynced.style.display = "";
       citiEls.lastSyncedTime.textContent = formatRelativeTime(state.lastSyncedAt);

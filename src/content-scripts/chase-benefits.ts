@@ -343,5 +343,8 @@ chrome.runtime.sendMessage({ type: "GET_PROVIDER_STATUS", provider: "chase" }, (
     showOverlay("waiting_for_login", "chase");
   } else if (status === "extracting") {
     showOverlay("extracting", "chase");
+    if (typeof response?.progressMessage === "string") {
+      updateOverlayProgress(response.progressMessage);
+    }
   }
 });

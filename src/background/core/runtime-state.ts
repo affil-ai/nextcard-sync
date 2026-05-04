@@ -17,6 +17,7 @@ function defaultState(): RuntimeState {
     data: null,
     error: null,
     lastSyncedAt: null,
+    progressMessage: null,
     tabId: null,
   };
 }
@@ -67,6 +68,15 @@ export function createRuntimeStateStore() {
 
   function updateProvider(providerId: ProviderId, updates: Partial<RuntimeState>) {
     Object.assign(states[providerId], updates);
+    if (
+      updates.status
+      && updates.status !== "detecting_login"
+      && updates.status !== "waiting_for_login"
+      && updates.status !== "extracting"
+      && !("progressMessage" in updates)
+    ) {
+      states[providerId].progressMessage = null;
+    }
     const { status, data, error, lastSyncedAt } = states[providerId];
     chrome.storage.local.set({
       [`provider_${providerId}`]: { status, data, error, lastSyncedAt },
@@ -95,8 +105,8 @@ export function createRuntimeStateStore() {
   }
 
   function getPublicState(providerId: ProviderId) {
-    const { status, data, error, lastSyncedAt } = states[providerId];
-    return { status, data, error, lastSyncedAt };
+    const { status, data, error, lastSyncedAt, progressMessage } = states[providerId];
+    return { status, data, error, lastSyncedAt, progressMessage };
   }
 
   function getAllPublicStates() {
@@ -134,6 +144,7 @@ export function createRuntimeStateStore() {
 
   function finishSyncRun(providerId: ProviderId, attemptId: string) {
     states[providerId].tabId = null;
+    states[providerId].progressMessage = null;
     runRegistry.clearRun(providerId, attemptId);
   }
 

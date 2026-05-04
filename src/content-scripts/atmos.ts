@@ -408,6 +408,7 @@ chrome.runtime.sendMessage({ type: "GET_PROVIDER_STATUS", provider: "atmos" }, (
   if (s === "extracting" || (s === "detecting_login" && initialState === "logged_in")) {
     syncActive = true;
     showOverlay("extracting", "atmos");
+    if (typeof r?.progressMessage === "string") updateOverlayProgress(r.progressMessage);
   } else if ((s === "waiting_for_login" || s === "detecting_login") && initialState !== "logged_in") {
     syncActive = true;
     showOverlay("waiting_for_login", "atmos");

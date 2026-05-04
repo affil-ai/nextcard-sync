@@ -22,6 +22,7 @@ import { createCapitalOneSync } from "./syncs/capitalone";
 import { createChaseSync } from "./syncs/chase";
 import { createGenericSyncHandlers } from "./syncs/generic";
 import { createHyattSync } from "./syncs/hyatt";
+import { registerMerchantOfferAlertMonitor } from "./merchant-offer-alerts";
 
 const VERIFY_INTERVAL_MS = 5 * 60 * 1000;
 type EnrolledOfferSyncMessage = Omit<OfferSyncPayload["offers"][number], "enrolledAt">;
@@ -253,6 +254,7 @@ registerNavigationGuard({
   stateStore,
   cancelRun,
 });
+registerMerchantOfferAlertMonitor();
 
 chrome.runtime.onMessage.addListener(
   createMessageRouter({
@@ -311,6 +313,7 @@ chrome.runtime.onMessageExternal.addListener(
     setAuth,
     resetAuthCache,
     hydrateFromNextCard,
+    pullOfferUrlCache,
   }),
 );
 

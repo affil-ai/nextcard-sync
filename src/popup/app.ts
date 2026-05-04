@@ -8,7 +8,7 @@ import { homeElements, authElements, views, onboardingElements, consentElements,
 import { createAirlineRenderers } from "./renderers/airlines";
 import { createBankRenderers } from "./renderers/banks";
 import { createHotelRenderers } from "./renderers/hotels";
-import { openWallet, updateWalletBtn } from "./renderers/shared";
+import { openRewards, openWallet, updateWalletBtn } from "./renderers/shared";
 import {
   loadInitialPopupState,
   loadOnboardingFlags,
@@ -1108,8 +1108,59 @@ for (const button of document.querySelectorAll("[data-back]")) {
 }
 
 for (const button of document.querySelectorAll(".wallet-btn")) {
-  button.addEventListener("click", () => openWallet());
+  button.addEventListener("click", () => openRewards());
 }
+
+document.getElementById("homeWalletBtn")?.addEventListener("click", () => openWallet());
+
+document.addEventListener("click", (event) => {
+  const target = event.target as HTMLElement;
+  const reportButton = target.closest("[data-issue-report-mailto]") as HTMLElement | null;
+  if (reportButton) {
+    event.preventDefault();
+    event.stopPropagation();
+    const mailto = reportButton.getAttribute("data-issue-report-mailto");
+    if (mailto) {
+      chrome.tabs.create({ url: mailto });
+    }
+    return;
+  }
+
+  const infoButton = target.closest("[data-info-toggle]") as HTMLButtonElement | null;
+  const openPopover = document.querySelector(".info-popover.visible");
+  if (!infoButton) {
+    openPopover?.classList.remove("visible");
+    document
+      .querySelectorAll("[data-info-toggle][aria-expanded='true']")
+      .forEach((button) => button.setAttribute("aria-expanded", "false"));
+    return;
+  }
+
+  const popoverId = infoButton.getAttribute("data-info-toggle");
+  const popover = popoverId ? document.getElementById(popoverId) : null;
+  if (!popover) return;
+
+  const willOpen = !popover.classList.contains("visible");
+  document
+    .querySelectorAll(".info-popover.visible")
+    .forEach((element) => element.classList.remove("visible"));
+  document
+    .querySelectorAll("[data-info-toggle][aria-expanded='true']")
+    .forEach((button) => button.setAttribute("aria-expanded", "false"));
+
+  popover.classList.toggle("visible", willOpen);
+  infoButton.setAttribute("aria-expanded", String(willOpen));
+});
+
+document.addEventListener("keydown", (event) => {
+  if (event.key !== "Escape") return;
+  document
+    .querySelectorAll(".info-popover.visible")
+    .forEach((element) => element.classList.remove("visible"));
+  document
+    .querySelectorAll("[data-info-toggle][aria-expanded='true']")
+    .forEach((button) => button.setAttribute("aria-expanded", "false"));
+});
 
 homeElements.congratsBtn.addEventListener("click", () => {
   homeElements.congratsBanner.classList.remove("visible");

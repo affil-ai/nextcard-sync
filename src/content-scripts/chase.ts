@@ -205,9 +205,13 @@ chrome.runtime.sendMessage({ type: "GET_PROVIDER_STATUS", provider: "chase" }, (
   if (s === "extracting" || (s === "detecting_login" && initialState === "logged_in")) {
     syncActive = true;
     showOverlay("extracting", "chase");
-    const cardNameEl = document.querySelector(".card-details .mds-body-large-heavier");
-    if (cardNameEl) {
-      updateOverlayProgress(`Syncing ${cardNameEl.textContent?.trim().replace(/®/g, "")}...`);
+    if (typeof r?.progressMessage === "string") {
+      updateOverlayProgress(r.progressMessage);
+    } else {
+      const cardNameEl = document.querySelector(".card-details .mds-body-large-heavier");
+      if (cardNameEl) {
+        updateOverlayProgress(`Syncing ${cardNameEl.textContent?.trim().replace(/®/g, "")}...`);
+      }
     }
   } else if ((s === "waiting_for_login" || s === "detecting_login") && initialState !== "logged_in") {
     syncActive = true;

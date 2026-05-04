@@ -3,7 +3,7 @@
   "incognito": "split",
   "name": "nextcard sync",
   "short_name": "nextcard sync",
-  "version": "0.6.3",
+  "version": "0.6.4",
   "description": "Sync your loyalty program balances and credit card benefit usage to your nextcard wallet.",
   "permissions": ["storage", "scripting", "sidePanel", "tabs", "alarms"],
   "host_permissions": [],
@@ -15,11 +15,6 @@
     "type": "module"
   },
   "content_scripts": [
-    {
-      "matches": ["http://*/*", "https://*/*"],
-      "js": ["src/content-scripts/offer-detector.ts"],
-      "run_at": "document_idle"
-    },
     {
       "matches": ["https://global.americanexpress.com/*", "https://www.americanexpress.com/*"],
       "js": ["src/content-scripts/amex-offers.ts"],

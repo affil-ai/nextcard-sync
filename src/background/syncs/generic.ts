@@ -47,6 +47,17 @@ const ATMOS_DISCOUNTS_URL =
   "https://www.alaskaair.com/atmosrewards/account/wallet?section=discounts";
 
 export function createGenericSyncHandlers(options: GenericSyncDeps) {
+  function setProviderProgress(
+    providerId: ProviderId,
+    message: string,
+    status: "extracting" | "detecting_login" | "waiting_for_login" = "extracting",
+  ) {
+    options.stateStore.updateProvider(providerId, {
+      status,
+      progressMessage: message,
+    });
+  }
+
   function waitForMarriottLoginAndExtract(
     attemptId: string,
     tabId: number,
@@ -84,6 +95,7 @@ export function createGenericSyncHandlers(options: GenericSyncDeps) {
           if (isOtpChallenge) {
             options.stateStore.updateProvider(providerId, {
               status: "waiting_for_login",
+              progressMessage: "Waiting for Marriott sign-in...",
             });
             return;
           }
@@ -334,6 +346,7 @@ export function createGenericSyncHandlers(options: GenericSyncDeps) {
     options.stateStore.updateProvider("atmos", {
       status: "detecting_login",
       error: null,
+      progressMessage: "Opening Alaska Atmos...",
     });
 
     try {
@@ -343,16 +356,17 @@ export function createGenericSyncHandlers(options: GenericSyncDeps) {
       const tabId = tab.id;
       if (!tabId) throw new Error("Could not create tab");
       options.stateStore.recordRunTab("atmos", attemptId, tabId, { owned: true });
-      options.stateStore.updateProvider("atmos", { status: "extracting" });
+      setProviderProgress("atmos", "Reading Alaska Atmos overview...");
 
       let overview = waitForAtmosMessage(attemptId, "ATMOS_OVERVIEW_DONE");
 
       if (await checkIfLoginPage(tabId)) {
         overview.cancel();
-        options.stateStore.updateProvider("atmos", { status: "waiting_for_login" });
+        setProviderProgress("atmos", "Waiting for Alaska sign-in...", "waiting_for_login");
         const loginResult = await waitForAtmosLoginAndExtract(attemptId, tabId);
         overview = waitForAtmosMessage(attemptId, "ATMOS_OVERVIEW_DONE");
         if (loginResult.type !== "ATMOS_OVERVIEW_DONE") {
+          setProviderProgress("atmos", "Reading Alaska Atmos overview...");
           await triggerExtraction({
             providerId: "atmos",
             attemptId,
@@ -391,7 +405,7 @@ export function createGenericSyncHandlers(options: GenericSyncDeps) {
             }),
         });
         if (recovery === "login_needed") {
-          options.stateStore.updateProvider("atmos", { status: "waiting_for_login" });
+          setProviderProgress("atmos", "Waiting for Alaska sign-in...", "waiting_for_login");
           overviewResult = await waitForAtmosLoginAndExtract(attemptId, tabId);
         } else {
           overview = waitForAtmosMessage(attemptId, "ATMOS_OVERVIEW_DONE");
@@ -403,7 +417,7 @@ export function createGenericSyncHandlers(options: GenericSyncDeps) {
         overviewResult.type === "STATUS_UPDATE"
         && overviewResult.status === "waiting_for_login"
       ) {
-        options.stateStore.updateProvider("atmos", { status: "waiting_for_login" });
+        setProviderProgress("atmos", "Waiting for Alaska sign-in...", "waiting_for_login");
         const loginResult = await waitForAtmosLoginAndExtract(attemptId, tabId);
         Object.assign(overviewResult, loginResult);
       }
@@ -411,6 +425,7 @@ export function createGenericSyncHandlers(options: GenericSyncDeps) {
       options.stateStore.assertRunActive("atmos", attemptId);
       const overviewData = (overviewResult.data ?? {}) as Partial<AtmosLoyaltyData>;
 
+      setProviderProgress("atmos", "Opening Alaska rewards...");
       await navigateAndWait(
         tabId,
         ATMOS_REWARDS_URL,
@@ -418,6 +433,7 @@ export function createGenericSyncHandlers(options: GenericSyncDeps) {
       );
       options.stateStore.assertRunActive("atmos", attemptId);
       let rewardsMessage = waitForAtmosMessage(attemptId, "ATMOS_REWARDS_DONE");
+      setProviderProgress("atmos", "Reading Alaska rewards...");
       await triggerExtraction({
         providerId: "atmos",
         attemptId,
@@ -443,6 +459,7 @@ export function createGenericSyncHandlers(options: GenericSyncDeps) {
       const rewards = (rewardsResult.rewards ?? []) as AtmosLoyaltyData["rewards"];
 
       options.stateStore.assertRunActive("atmos", attemptId);
+      setProviderProgress("atmos", "Opening Alaska discounts...");
       await chrome.scripting.executeScript({
         target: { tabId },
         func: (url: string) => {
@@ -458,6 +475,7 @@ export function createGenericSyncHandlers(options: GenericSyncDeps) {
         "ATMOS_DISCOUNTS_DONE",
         120000,
       );
+      setProviderProgress("atmos", "Reading Alaska discounts...");
       await triggerExtraction({
         providerId: "atmos",
         attemptId,
@@ -488,6 +506,7 @@ export function createGenericSyncHandlers(options: GenericSyncDeps) {
         (discountsResult.discounts ?? []) as AtmosLoyaltyData["discounts"];
 
       options.stateStore.assertRunActive("atmos", attemptId);
+      setProviderProgress("atmos", "Returning to Alaska overview...");
       chrome.tabs.update(tabId, { url: options.providerRegistry.atmos.syncUrl });
 
       const fullData: AtmosLoyaltyData = {
@@ -501,11 +520,13 @@ export function createGenericSyncHandlers(options: GenericSyncDeps) {
       };
 
       options.stateStore.assertRunActive("atmos", attemptId);
+      setProviderProgress("atmos", "Saving Alaska Atmos to nextcard...");
       options.stateStore.updateProvider("atmos", {
         status: "done",
         data: fullData,
         error: null,
         lastSyncedAt: new Date().toISOString(),
+        progressMessage: null,
       });
 
       options.stateStore.assertRunActive("atmos", attemptId);
@@ -525,6 +546,7 @@ export function createGenericSyncHandlers(options: GenericSyncDeps) {
       options.stateStore.updateProvider("atmos", {
         status: "error",
         error: errorMessage,
+        progressMessage: null,
       });
       console.error("[NextCard SW] Atmos sync error:", error);
     }
@@ -727,6 +749,7 @@ export function createGenericSyncHandlers(options: GenericSyncDeps) {
     options.stateStore.updateProvider(providerId, {
       status: "detecting_login",
       error: null,
+      progressMessage: `Opening ${definition.name}...`,
     });
 
     try {
@@ -758,6 +781,7 @@ export function createGenericSyncHandlers(options: GenericSyncDeps) {
       ) {
         const accountPattern = new RegExp(definition.accountUrlPattern.replace(/\*/g, ".*"));
         if (!accountPattern.test(landingUrl)) {
+          setProviderProgress(providerId, `Opening ${definition.name} account...`, "detecting_login");
           await navigateAndWait(tabId, definition.accountUrl, options.extensionNavigatingTabs);
           currentTab = await chrome.tabs.get(tabId);
           landingUrl = currentTab.url ?? "";
@@ -768,9 +792,7 @@ export function createGenericSyncHandlers(options: GenericSyncDeps) {
         landingUrl.includes("send-otp-challenge")
         || landingUrl.includes("otp-challenge")
       ) {
-        options.stateStore.updateProvider(providerId, {
-          status: "waiting_for_login",
-        });
+        setProviderProgress(providerId, `Waiting for ${definition.name} sign-in...`, "waiting_for_login");
 
         const result = providerId === "marriott"
           ? await waitForMarriottLoginAndExtract(attemptId, tabId)
@@ -787,11 +809,13 @@ export function createGenericSyncHandlers(options: GenericSyncDeps) {
             | HiltonLoyaltyData
             | FrontierLoyaltyData;
           options.stateStore.assertRunActive(providerId, attemptId);
+          setProviderProgress(providerId, `Saving ${definition.name} to nextcard...`);
           options.stateStore.updateProvider(providerId, {
             status: "done",
             data,
             error: null,
             lastSyncedAt: new Date().toISOString(),
+            progressMessage: null,
           });
           options.stateStore.assertRunActive(providerId, attemptId);
           void options.pushToNextCard(providerId, data).then((result) => {
@@ -808,6 +832,7 @@ export function createGenericSyncHandlers(options: GenericSyncDeps) {
           options.stateStore.updateProvider(providerId, {
             status: "error",
             error: "No data extracted",
+            progressMessage: null,
           });
         }
         return;
@@ -820,10 +845,11 @@ export function createGenericSyncHandlers(options: GenericSyncDeps) {
       const isOnAccount = accountPattern.test(landingUrl);
 
       if (!isOnSignIn && !isOnAccount && definition.accountUrl) {
+        setProviderProgress(providerId, `Opening ${definition.name} account...`, "detecting_login");
         await navigateAndWait(tabId, definition.accountUrl, options.extensionNavigatingTabs);
       }
 
-      options.stateStore.updateProvider(providerId, { status: "detecting_login" });
+      setProviderProgress(providerId, `Checking ${definition.name} sign-in...`, "detecting_login");
 
       const firstMessage = await new Promise<Record<string, unknown>>((resolve) => {
         const timeout = setTimeout(() => {
@@ -854,6 +880,7 @@ export function createGenericSyncHandlers(options: GenericSyncDeps) {
 
         chrome.runtime.onMessage.addListener(listener);
 
+        setProviderProgress(providerId, `Reading ${definition.name} account...`);
         void triggerExtraction({
           providerId,
           attemptId,
@@ -875,9 +902,7 @@ export function createGenericSyncHandlers(options: GenericSyncDeps) {
         firstMessage.type === "STATUS_UPDATE"
         && firstMessage.status === "waiting_for_login"
       ) {
-        options.stateStore.updateProvider(providerId, {
-          status: "waiting_for_login",
-        });
+        setProviderProgress(providerId, `Waiting for ${definition.name} sign-in...`, "waiting_for_login");
         result = providerId === "marriott"
           ? await waitForMarriottLoginAndExtract(attemptId, tabId)
           : await waitForGenericLoginAndExtract(providerId, attemptId, tabId);
@@ -899,9 +924,7 @@ export function createGenericSyncHandlers(options: GenericSyncDeps) {
             }),
         });
         if (recovery === "login_needed") {
-          options.stateStore.updateProvider(providerId, {
-            status: "waiting_for_login",
-          });
+          setProviderProgress(providerId, `Waiting for ${definition.name} sign-in...`, "waiting_for_login");
           result = providerId === "marriott"
             ? await waitForMarriottLoginAndExtract(attemptId, tabId)
             : await waitForGenericLoginAndExtract(providerId, attemptId, tabId);
@@ -956,11 +979,13 @@ export function createGenericSyncHandlers(options: GenericSyncDeps) {
           | HiltonLoyaltyData
           | FrontierLoyaltyData;
         options.stateStore.assertRunActive(providerId, attemptId);
+        setProviderProgress(providerId, `Saving ${definition.name} to nextcard...`);
         options.stateStore.updateProvider(providerId, {
           status: "done",
           data,
           error: null,
           lastSyncedAt: new Date().toISOString(),
+          progressMessage: null,
         });
 
         options.stateStore.assertRunActive(providerId, attemptId);
@@ -978,6 +1003,7 @@ export function createGenericSyncHandlers(options: GenericSyncDeps) {
         options.stateStore.updateProvider(providerId, {
           status: "error",
           error: "No data extracted",
+          progressMessage: null,
         });
       }
     } catch (error) {
@@ -989,6 +1015,7 @@ export function createGenericSyncHandlers(options: GenericSyncDeps) {
       options.stateStore.updateProvider(providerId, {
         status: "error",
         error: errorMessage,
+        progressMessage: null,
       });
       console.error(`[NextCard SW] ${definition.name} sync error:`, error);
     }
