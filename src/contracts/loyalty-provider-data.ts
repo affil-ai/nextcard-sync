@@ -135,6 +135,7 @@ export const amexBenefitSchema = z.object({
 
 export const amexProviderDataSchema = z.object({
   cardName: z.string().nullable(),
+  lastFourDigits: z.string().nullable().optional(),
   availablePoints: z.number().nullable(),
   pendingPoints: z.number().nullable(),
   benefits: z.array(amexBenefitSchema),
@@ -150,6 +151,7 @@ export const capitalOneBenefitSchema = z.object({
 
 export const capitalOneProviderDataSchema = z.object({
   cardName: z.string().nullable(),
+  lastFourDigits: z.string().nullable().optional(),
   availablePoints: z.number().nullable(),
   pendingPoints: z.number().nullable(),
   rewardsLabel: z.string().nullable().optional(),

@@ -489,7 +489,7 @@ function toStandardizedIssuerData(provider: ProviderId, data: AnyProviderData): 
       return {
         cards: d._allCards.map((card) => ({
           cardName: card.cardName,
-          lastFourDigits: extractLastFourDigits(card.cardName),
+          lastFourDigits: card.lastFourDigits ?? extractLastFourDigits(card.cardName),
           availablePoints: card.availablePoints,
           pendingPoints: card.pendingPoints,
           benefits: card.benefits.map((b) => ({
@@ -506,7 +506,7 @@ function toStandardizedIssuerData(provider: ProviderId, data: AnyProviderData): 
     return {
       cards: [{
         cardName: d.cardName,
-        lastFourDigits: extractLastFourDigits(d.cardName),
+        lastFourDigits: d.lastFourDigits ?? extractLastFourDigits(d.cardName),
         availablePoints: d.availablePoints,
         pendingPoints: d.pendingPoints,
         benefits: d.benefits.map((b) => ({
@@ -556,7 +556,7 @@ function toStandardizedIssuerData(provider: ProviderId, data: AnyProviderData): 
     return {
       cards: d._allCards.map((card) => ({
         cardName: card.cardName,
-        lastFourDigits: extractLastFourDigits(card.cardName),
+        lastFourDigits: card.lastFourDigits ?? extractLastFourDigits(card.cardName),
         availablePoints: card.availablePoints,
         pendingPoints: card.pendingPoints,
         rewardsLabel: card.rewardsLabel ?? d.rewardsLabel ?? null,
@@ -574,7 +574,7 @@ function toStandardizedIssuerData(provider: ProviderId, data: AnyProviderData): 
   return {
     cards: [{
       cardName: d.cardName,
-      lastFourDigits: extractLastFourDigits(d.cardName),
+      lastFourDigits: d.lastFourDigits ?? extractLastFourDigits(d.cardName),
       availablePoints: d.availablePoints,
       pendingPoints: d.pendingPoints,
       rewardsLabel: d.rewardsLabel ?? null,

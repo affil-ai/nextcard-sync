@@ -8,6 +8,7 @@ type RuntimeStateStore = ReturnType<typeof createRuntimeStateStore>;
 
 type AmexCardData = {
   cardName: string | null;
+  lastFourDigits?: string | null;
   availablePoints: number | null;
   pendingPoints: number | null;
   benefits: {
@@ -260,6 +261,7 @@ export function createAmexSync(options: AmexSyncDeps) {
       const primaryCard = allCards[0];
       const fullData: AmexLoyaltyData = {
         cardName: primaryCard.cardName,
+        lastFourDigits: primaryCard.lastFourDigits ?? null,
         availablePoints: primaryCard.availablePoints,
         pendingPoints: primaryCard.pendingPoints,
         benefits: primaryCard.benefits,

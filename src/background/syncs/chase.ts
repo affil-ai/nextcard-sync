@@ -22,6 +22,7 @@ type ChaseCardSummary = {
 type ChaseRoute =
   | { kind: "benefits_hub"; url: string }
   | { kind: "ur_portal"; url: string }
+  | { kind: "ur_exception"; url: string }
   | { kind: "loyalty_portal"; url: string }
   | { kind: "session_expired"; url: string };
 
@@ -46,18 +47,59 @@ interface ChaseSyncDeps {
   ) => Promise<{ ok: boolean; error?: string }>;
 }
 
-const CO_BRAND_KEYWORDS = [
-  "marriott",
-  "united",
-  "southwest",
-  "disney",
-  "aarp",
-  "amazon",
-  "hyatt",
-  "ihg",
-  "british",
-  "aer lingus",
+const ULTIMATE_REWARDS_CARD_KEYWORDS = [
+  "sapphire",
+  "freedom",
+  "ink business cash",
+  "ink business preferred",
+  "ink business premier",
+  "ink business unlimited",
+  "ink cash",
+  "ink preferred",
+  "ink premier",
+  "ink unlimited",
 ];
+
+function isChaseUrExceptionUrl(url: string) {
+  return (
+    url.includes("ultimaterewardspoints.chase.com")
+    && url.includes("/exception")
+  );
+}
+
+function isChaseUltimateRewardsCard(cardName: string) {
+  const normalized = cardName.toLowerCase();
+  return ULTIMATE_REWARDS_CARD_KEYWORDS.some((keyword) =>
+    normalized.includes(keyword)
+  );
+}
+
+function readChaseRouteFromUrl(url: string, accountId: string): ChaseRoute | null {
+  const accountQuery = `account=${accountId}`;
+  if (!url) {
+    return null;
+  }
+  if (isChaseUrExceptionUrl(url)) {
+    return { kind: "ur_exception", url };
+  }
+  if (url.includes("ultimaterewardspoints.chase.com")) {
+    return { kind: "ur_portal", url };
+  }
+  if (url.includes("chaseloyalty.chase.com")) {
+    return { kind: "loyalty_portal", url };
+  }
+  if (url.includes("logoff") || url.includes("logon")) {
+    return { kind: "session_expired", url };
+  }
+  if (
+    url.includes("secure.chase.com")
+    && url.includes("benefits/hub")
+    && url.includes(accountQuery)
+  ) {
+    return { kind: "benefits_hub", url };
+  }
+  return null;
+}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
@@ -109,6 +151,7 @@ function isChaseRoute(value: unknown): value is ChaseRoute {
     && (
       value.kind === "benefits_hub"
       || value.kind === "ur_portal"
+      || value.kind === "ur_exception"
       || value.kind === "loyalty_portal"
       || value.kind === "session_expired"
     )
@@ -358,15 +401,28 @@ export function createChaseSync(options: ChaseSyncDeps) {
         const cards: ChaseCardSummary[] = [];
 
         function parseLastFour(raw: string) {
-          const match = raw.match(/\(\.{3}(\d{4})\)/);
+          const match = raw.match(/\(\.{3}(\d{4})\)|\(…(\d{4})\)/);
           if (match) {
+            const lastFour = match[1] ?? match[2];
             return {
-              cardName: raw.replace(/\s*\(\.{3}\d{4}\)/, "").trim(),
-              lastFour: match[1],
+              cardName: raw
+                .replace(/\s*\(\.{3}\d{4}\)/, "")
+                .replace(/\s*\(…\d{4}\)/, "")
+                .trim(),
+              lastFour,
             };
           }
 
           return { cardName: raw.trim(), lastFour: "" };
+        }
+
+        function readAccountButtonText(button: Element) {
+          return (
+            button.getAttribute("text")
+            || button.getAttribute("aria-label")
+            || button.textContent
+            || ""
+          );
         }
 
         const tiles = document.querySelectorAll('[data-testid="customAccordion-tile"]');
@@ -389,7 +445,7 @@ export function createChaseSync(options: ChaseSyncDeps) {
               continue;
             }
 
-            const parsed = parseLastFour(button.getAttribute("text") ?? "");
+            const parsed = parseLastFour(readAccountButtonText(button));
             cards.push({
               accountId,
               cardName: parsed.cardName,
@@ -482,7 +538,6 @@ export function createChaseSync(options: ChaseSyncDeps) {
     accountId: string,
     timeoutMs = 15000,
   ) {
-    const accountQuery = `account=${accountId}`;
     return waitForChaseCondition(
       attemptId,
       tabId,
@@ -490,28 +545,7 @@ export function createChaseSync(options: ChaseSyncDeps) {
       async () => {
         const tab = await chrome.tabs.get(tabId).catch(() => null);
         const url = tab?.url ?? "";
-        if (!url) {
-          return null;
-        }
-
-        if (url.includes("ultimaterewardspoints.chase.com")) {
-          return { kind: "ur_portal", url };
-        }
-        if (url.includes("chaseloyalty.chase.com")) {
-          return { kind: "loyalty_portal", url };
-        }
-        if (url.includes("logoff") || url.includes("logon")) {
-          return { kind: "session_expired", url };
-        }
-        if (
-          url.includes("secure.chase.com")
-          && url.includes("benefits/hub")
-          && url.includes(accountQuery)
-        ) {
-          return { kind: "benefits_hub", url };
-        }
-
-        return null;
+        return readChaseRouteFromUrl(url, accountId);
       },
       timeoutMs,
       250,
@@ -606,12 +640,55 @@ export function createChaseSync(options: ChaseSyncDeps) {
     attemptId: string,
     tabId: number,
     timeoutMs = 15000,
+  ): Promise<ChasePoints | null> {
+    return chrome.tabs.get(tabId).then((tab) => {
+      if (isChaseUrExceptionUrl(tab.url ?? "")) {
+        return null;
+      }
+
+      return waitForChaseCondition(
+        attemptId,
+        tabId,
+        "Chase points",
+        async () => {
+          const currentTab = await chrome.tabs.get(tabId).catch(() => null);
+          if (isChaseUrExceptionUrl(currentTab?.url ?? "")) {
+            return { available: null, pending: null };
+          }
+          return scrapePointsFromCurrentPage(tabId);
+        },
+        timeoutMs,
+        500,
+      ).then((points) => (points.available == null ? null : points));
+    }).catch(() => null);
+  }
+
+  function waitForChaseTabToLeaveBenefitsHost(
+    attemptId: string,
+    tabId: number,
+    timeoutMs = 120000,
   ) {
     return waitForChaseCondition(
       attemptId,
       tabId,
-      "Chase points",
-      async () => scrapePointsFromCurrentPage(tabId),
+      "Chase navigation",
+      async () => {
+        const tab = await chrome.tabs.get(tabId).catch(() => null);
+        const url = tab?.url ?? "";
+        if (!url) {
+          return null;
+        }
+        if (
+          isChaseUrExceptionUrl(url)
+          || url.includes("chaseloyalty.chase.com")
+          || url.includes("logoff")
+          || url.includes("logon")
+          || !url.includes("secure.chase.com")
+        ) {
+          return url;
+        }
+        return null;
+      },
       timeoutMs,
       500,
     ).catch(() => null);
@@ -656,12 +733,20 @@ export function createChaseSync(options: ChaseSyncDeps) {
         await new Promise((r) => setTimeout(r, 2000));
         const recheckTab = await chrome.tabs.get(tabId).catch(() => null);
         const recheckUrl = recheckTab?.url ?? "";
-        if (recheckUrl.includes("ultimaterewardspoints.chase.com")) {
-          route = { kind: "ur_portal", url: recheckUrl };
-        } else if (recheckUrl.includes("chaseloyalty.chase.com")) {
-          route = { kind: "loyalty_portal", url: recheckUrl };
-        } else if (recheckUrl.includes("logoff") || recheckUrl.includes("logon")) {
-          route = { kind: "session_expired", url: recheckUrl };
+        route = readChaseRouteFromUrl(recheckUrl, accountId) ?? route;
+
+        if (
+          route.kind === "benefits_hub"
+          && isChaseUltimateRewardsCard(cardName)
+        ) {
+          const redirectUrl = await waitForChaseTabToLeaveBenefitsHost(
+            attemptId,
+            tabId,
+            8000,
+          );
+          route = redirectUrl
+            ? readChaseRouteFromUrl(redirectUrl, accountId) ?? route
+            : route;
         }
       }
 
@@ -681,12 +766,25 @@ export function createChaseSync(options: ChaseSyncDeps) {
               tabId,
               assertRunActive: options.stateStore.assertRunActive,
             });
-            const benefitsResult = await benefitsMessage.promise;
+            const benefitsResult = await Promise.race([
+              benefitsMessage.promise,
+              waitForChaseTabToLeaveBenefitsHost(attemptId, tabId).then((url) => {
+                if (url) {
+                  benefitsMessage.cancel();
+                  throw new Error(`Chase navigated away from benefits hub: ${url}`);
+                }
+                return benefitsMessage.promise;
+              }),
+            ]);
             benefits = readChaseBenefits(benefitsResult.benefits);
           } catch (error) {
             const postTab = await chrome.tabs.get(tabId);
             const postUrl = postTab.url ?? "";
-            if (!postUrl.includes("secure.chase.com")) {
+            if (isChaseUrExceptionUrl(postUrl)) {
+              console.warn(
+                `[NextCard SW] Chase: UR portal exception during benefits scrape for account ${accountId}; skipping`,
+              );
+            } else if (!postUrl.includes("secure.chase.com")) {
               setChaseProgress(`Reading points for ${cardName}...`);
               const points = await waitForChasePointsOnCurrentPage(attemptId, tabId);
               if (points) {
@@ -699,15 +797,16 @@ export function createChaseSync(options: ChaseSyncDeps) {
           }
         }
 
-        const isCoBrandCard = CO_BRAND_KEYWORDS.some((keyword) =>
-          cardName.toLowerCase().includes(keyword)
-        );
-        if (availablePoints == null && !isCoBrandCard) {
+        if (availablePoints == null && isChaseUltimateRewardsCard(cardName)) {
           try {
             const urUrl = `https://ultimaterewardspoints.chase.com/home?AI=${accountId}`;
             setChaseProgress(`Reading points for ${cardName}...`);
             await navigateChaseTabAndWaitForLoad(tabId, urUrl);
-            const points = await waitForChasePointsOnCurrentPage(attemptId, tabId);
+            const postNavigationTab = await chrome.tabs.get(tabId).catch(() => null);
+            const postNavigationUrl = postNavigationTab?.url ?? "";
+            const points = isChaseUrExceptionUrl(postNavigationUrl)
+              ? null
+              : await waitForChasePointsOnCurrentPage(attemptId, tabId);
             if (points) {
               availablePoints = points.available;
               pendingPoints = points.pending;
@@ -728,6 +827,10 @@ export function createChaseSync(options: ChaseSyncDeps) {
         if (points) {
           availablePoints = points.available;
         }
+      } else if (route.kind === "ur_exception") {
+        console.warn(
+          `[NextCard SW] Chase: UR portal exception for account ${accountId}; skipping points scrape`,
+        );
       } else if (route.kind === "session_expired") {
       } else {
       }
@@ -813,9 +916,7 @@ export function createChaseSync(options: ChaseSyncDeps) {
         throw new Error("No credit cards found on Chase dashboard");
       }
 
-      const isCoBrand = (name: string) =>
-        CO_BRAND_KEYWORDS.some((keyword) => name.toLowerCase().includes(keyword));
-      cardIds.sort((left, right) => Number(isCoBrand(left.cardName)) - Number(isCoBrand(right.cardName)));
+      cardIds.sort((left, right) => Number(isChaseUltimateRewardsCard(right.cardName)) - Number(isChaseUltimateRewardsCard(left.cardName)));
 
       const allCards: ChaseURData[] = [];
       for (let index = 0; index < cardIds.length; index += 1) {

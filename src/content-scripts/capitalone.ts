@@ -262,6 +262,7 @@ async function runExtraction(attemptId: string) {
           cardName: summaryData.cards[0]
             ? `${summaryData.cards[0].name} (${summaryData.cards[0].lastDigits})`
             : null,
+          lastFourDigits: summaryData.cards[0]?.lastDigits ?? null,
           availablePoints: summaryData.totalRewards,
           pendingPoints: null,
           benefits: [],

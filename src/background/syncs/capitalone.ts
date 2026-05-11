@@ -310,6 +310,7 @@ export function createCapitalOneSync(options: CapitalOneSyncDeps) {
             || (index === 0 && cards.length === 1);
           return {
             cardName: `${card.name} (${card.lastDigits})`,
+            lastFourDigits: card.lastDigits,
             availablePoints: index === 0 ? totalRewards : null,
             pendingPoints: null,
             rewardsLabel,
@@ -318,6 +319,7 @@ export function createCapitalOneSync(options: CapitalOneSyncDeps) {
         })
       : [{
           cardName: readString(data.cardName),
+          lastFourDigits: readString(data.lastFourDigits),
           availablePoints: totalRewards,
           pendingPoints: null,
           rewardsLabel,
@@ -327,6 +329,7 @@ export function createCapitalOneSync(options: CapitalOneSyncDeps) {
     const primaryCard = allCards[0];
     const fullData: CapitalOneLoyaltyData = {
       cardName: primaryCard.cardName,
+      lastFourDigits: primaryCard.lastFourDigits ?? null,
       availablePoints: totalRewards,
       pendingPoints: null,
       rewardsLabel,

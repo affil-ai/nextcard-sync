@@ -154,6 +154,7 @@ async function openSwitcherAndClickCard(cardIndex: number, attemptId: string): P
 function scrapeAmexPage() {
   const data = {
     cardName: null as string | null,
+    lastFourDigits: null as string | null,
     availablePoints: null as number | null,
     pendingPoints: null as number | null,
     benefits: [] as { name: string; amountUsed: number | null; totalAmount: number | null; remaining: number | null; period: string | null }[],
@@ -164,7 +165,9 @@ function scrapeAmexPage() {
   const cardNumberEl = document.querySelector('[data-testid="simple_switcher_display_number_val"]');
   if (cardNameEl) {
     const name = textOf(cardNameEl);
-    const number = cardNumberEl ? textOf(cardNumberEl).replace(/[^0-9•·.]/g, "") : "";
+    const rawNumber = cardNumberEl ? textOf(cardNumberEl) : "";
+    const number = rawNumber.replace(/[^0-9•·.]/g, "");
+    data.lastFourDigits = extractLastFourDigits(rawNumber);
     data.cardName = number ? `${name} (${number})` : name;
   }
 
