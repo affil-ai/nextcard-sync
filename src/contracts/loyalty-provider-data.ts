@@ -245,6 +245,11 @@ export const biltProviderDataSchema = z.object({
   availableCreditsCount: z.number().nullable(),
   biltCashBalance: z.number().nullable(),
   biltCashExpiration: z.string().nullable(),
+  biltCashRedeemableAmount: z.number().nullable().optional(),
+  biltCashEarningMethod: z.string().nullable().optional(),
+  biltCashEarningRate: z.string().nullable().optional(),
+  housingOnlyRewardsEnabled: z.boolean().nullable().optional(),
+  flexibleBiltCashEnabled: z.boolean().nullable().optional(),
   pointsToNextBiltCashReward: z.number().nullable(),
   nextBiltCashRewardAmount: z.number().nullable(),
   walletCredits: z.array(z.object({
@@ -329,6 +334,7 @@ export const cardDataSchema = z.object({
 
 export const standardizedIssuerDataSchema = z.object({
   cards: z.array(cardDataSchema),
+  raw: z.any().optional(),
 });
 
 export type StandardizedLoyaltyData = z.infer<typeof standardizedLoyaltyDataSchema>;

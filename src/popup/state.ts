@@ -1,4 +1,5 @@
 import type {
+  ExtensionProfile,
   NextCardAuth,
   ProviderId,
   ProviderStateMap,
@@ -24,6 +25,7 @@ import {
   citiProviderDataSchema,
 } from "../contracts/loyalty-provider-data";
 import { orderedProviderIds } from "../providers/provider-groups";
+import { normalizeExtensionProfile } from "../lib/extension-profile";
 
 export interface PopupOnboardingFlags {
   disclosureAccepted: boolean;
@@ -34,6 +36,7 @@ export interface PopupOnboardingFlags {
 export interface PopupSnapshot {
   auth: NextCardAuth | null;
   allStates: ProviderStateMap;
+  extensionProfile: ExtensionProfile | null;
 }
 
 function emptyProviderState<T>(): ProviderSyncState<T> {
@@ -189,22 +192,36 @@ export async function getAuthState() {
   return normalizeAuth(auth);
 }
 
+export async function getExtensionProfile() {
+  const profile = await chrome.runtime.sendMessage({ type: "GET_EXTENSION_PROFILE" });
+  return normalizeExtensionProfile(profile);
+}
+
+export async function refreshExtensionProfile() {
+  const profile = await chrome.runtime.sendMessage({ type: "REFRESH_EXTENSION_PROFILE" });
+  return normalizeExtensionProfile(profile);
+}
+
 export async function loadInitialPopupState(): Promise<PopupSnapshot> {
-  const [auth, allStates] = await Promise.all([
+  const [auth, allStates, extensionProfile] = await Promise.all([
     getAuthState(),
     loadStoredProviderStates(),
+    refreshExtensionProfile(),
   ]);
 
-  return { auth, allStates };
+  return { auth, allStates, extensionProfile };
 }
 
 export async function pollPopupSnapshot() {
   const auth = await getAuthState();
   if (!auth) {
-    return { auth, allStates: null };
+    return { auth, allStates: null, extensionProfile: null };
   }
 
-  const liveStates = await chrome.runtime.sendMessage({ type: "GET_ALL_STATUS" });
+  const [liveStates, extensionProfile] = await Promise.all([
+    chrome.runtime.sendMessage({ type: "GET_ALL_STATUS" }),
+    getExtensionProfile(),
+  ]);
   const record = isRecord(liveStates) ? liveStates : {};
   const allStates = {
     marriott: normalizeProviderState(marriottProviderDataSchema, record.marriott),
@@ -224,7 +241,7 @@ export async function pollPopupSnapshot() {
     discover: normalizeProviderState(discoverProviderDataSchema, record.discover),
     citi: normalizeProviderState(citiProviderDataSchema, record.citi),
   };
-  return { auth, allStates };
+  return { auth, allStates, extensionProfile };
 }
 
 export function startProviderSync(providerId: ProviderId) {
@@ -246,6 +263,9 @@ export function startProviderSync(providerId: ProviderId) {
             `[NextCard Popup] ${providerId} sync rejected:`,
             response.error ?? "Unknown error",
           );
+          if (response.error === "selection_locked") {
+            void refreshExtensionProfile();
+          }
           resolve(false);
           return;
         }

@@ -127,6 +127,17 @@ function parseDollarAmount(str: string): number | null {
   return Number.isNaN(amount) ? null : amount;
 }
 
+function normalizeWhitespace(str: string) {
+  return str.replace(/\s+/g, " ").trim();
+}
+
+function cleanBiltCashEarningRate(str: string) {
+  return normalizeWhitespace(str)
+    .replace(/\s*Redeem\s+your\s+Bilt\s+Cash.*$/i, "")
+    .replace(/\bspend\d+\b/i, "spend")
+    .trim();
+}
+
 function findLineValueNearLabel(
   lines: string[],
   label: RegExp,
@@ -263,30 +274,108 @@ function extractBiltCash(lines: string[], bodyText: string) {
   ) ?? bodyText.match(/Your\s+\d{4}\s+Bilt\s+Cash\s+balance\s*\n\s*(\$[\d,]+(?:\.\d{1,2})?)/i)?.[1]
     ?? bodyText.match(/Bilt\s+Cash\s+balance\s*\n\s*(\$[\d,]+(?:\.\d{1,2})?)/i)?.[1];
 
+  const expirationLine = lines.find((line) => /\bExpires\s+\S+/i.test(line));
+  const expirationFromLine = expirationLine?.match(
+    /\bExpires\s+(\d{1,2}\/\d{1,2}\/\d{2,4}|[A-Z][a-z]+\.?\s+\d{1,2},?\s+\d{4})/i,
+  )?.[1] ?? null;
   const expiration = findLineValueNearLabel(
     lines,
     /bilt\s+cash\s+balance|spend\s+your\s+bilt\s+cash/i,
     /^Expires\s+(.+)$/i,
-  ) ?? bodyText.match(/Bilt\s+Cash\s+balance[\s\S]{0,120}?Expires\s+([^\n]+)/i)?.[1]?.trim()
+  ) ?? expirationFromLine
+    ?? bodyText.match(/Bilt\s+Cash\s+balance[\s\S]{0,120}?Expires\s+(\d{1,2}\/\d{1,2}\/\d{2,4}|[A-Z][a-z]+\.?\s+\d{1,2},?\s+\d{4})/i)?.[1]?.trim()
     ?? null;
 
   const nextRewardMatch = bodyText.match(
     /(?:You're|You are)\s+([\d,]+)\s+points?\s+away\s+from\s+earning\s+\$([\d,]+(?:\.\d{1,2})?)\s+Bilt\s+Cash/i,
   );
 
+  const redeemableText = findLineValueNearLabel(
+    lines,
+    /redeem\s+your\s+bilt\s+cash/i,
+    /\$[\d,]+(?:\.\d{1,2})?/,
+  ) ?? bodyText.match(/Redeem\s+your\s+Bilt\s+Cash\s*(\$[\d,]+(?:\.\d{1,2})?)/i)?.[1]
+    ?? null;
+
   return {
     balance: balanceText ? parseDollarAmount(balanceText) : null,
     expiration,
+    redeemableAmount: redeemableText ? parseDollarAmount(redeemableText) : null,
     pointsToNextReward: nextRewardMatch ? parseIntSafe(nextRewardMatch[1]) : null,
     nextRewardAmount: nextRewardMatch ? parseDollarAmount(`$${nextRewardMatch[2]}`) : null,
+  };
+}
+
+function extractBiltCashEarning(lines: string[], bodyText: string) {
+  const normalizedBody = normalizeWhitespace(bodyText);
+  const hasHousingOnlyRewards = /housing\s+only\s+rewards/i.test(normalizedBody);
+  const hasFlexibleBiltCash = /flexible\s+bilt\s+cash/i.test(normalizedBody);
+  const thresholdRewardMatch = normalizedBody.match(
+    /How you earn Bilt Cash\s+(\$[\d,]+(?:\.\d{1,2})?\s+Bilt Cash)\s+(For every\s+[\d,]+\s+Bilt Points earned)/i,
+  );
+
+  const percentageRateLine = lines.find((line) =>
+    /\b\d+(?:\.\d+)?%\s+in\s+Bilt\s+Cash\b/i.test(line)
+  );
+  const earningRate =
+    percentageRateLine?.match(/\b\d+(?:\.\d+)?%\s+in\s+Bilt\s+Cash(?:\s+on\s+.*?spend\d*)?/i)?.[0]
+    ?? normalizedBody.match(/\b\d+(?:\.\d+)?%\s+in\s+Bilt\s+Cash(?:\s+on\s+.*?spend\d*)?/i)?.[0]
+    ?? (thresholdRewardMatch
+      ? `${thresholdRewardMatch[1]} ${thresholdRewardMatch[2].toLowerCase()}`
+      : null)
+    ?? null;
+
+  let earningMethod: string | null = null;
+  if (hasHousingOnlyRewards) {
+    earningMethod = "Housing Only Rewards";
+  }
+  if (
+    hasFlexibleBiltCash
+    && (earningRate || /Redeem\s+your\s+Bilt\s+Cash/i.test(bodyText))
+  ) {
+    earningMethod = "Flexible Bilt Cash";
+  }
+  if (!earningMethod && /bonus\s+rewards/i.test(normalizedBody)) {
+    earningMethod = "Bonus Rewards";
+  }
+  if (!earningMethod && thresholdRewardMatch) {
+    earningMethod = "Point Threshold";
+  }
+
+  return {
+    earningMethod,
+    earningRate: earningRate ? cleanBiltCashEarningRate(earningRate) : null,
+    housingOnlyRewardsEnabled: earningMethod === "Housing Only Rewards"
+      ? true
+      : hasHousingOnlyRewards
+        ? null
+        : false,
+    flexibleBiltCashEnabled: earningMethod === "Flexible Bilt Cash"
+      ? true
+      : hasFlexibleBiltCash
+        ? null
+        : false,
   };
 }
 
 function parseWalletLinkedCards(lines: string[]) {
   const cards: Array<{ cardName: string; lastFourDigits: string | null }> = [];
 
-  for (let i = 1; i < lines.length; i += 1) {
+  for (let i = 0; i < lines.length; i += 1) {
     const current = lines[i];
+    const sameLineMatch = current.match(/^(.+?)\s+•+\s*(\d{4})$/);
+    if (
+      sameLineMatch
+      && !/available|your credits|your wallet/i.test(sameLineMatch[1])
+    ) {
+      cards.push({
+        cardName: sameLineMatch[1].trim(),
+        lastFourDigits: sameLineMatch[2],
+      });
+      continue;
+    }
+
+    if (i === 0) continue;
     const previous = lines[i - 1];
     const digitsMatch = current.match(/^•+\s*(\d{4})$/);
     if (!digitsMatch) continue;
@@ -309,6 +398,7 @@ async function scrapeWalletPage() {
   // Scope credits to the dedicated panel so we don't confuse carousel copy with real wallet credits.
   const { availableCreditsCount, walletCredits } = parseWalletCredits(lines);
   const biltCash = extractBiltCash(lines, bodyText);
+  const biltCashEarning = extractBiltCashEarning(lines, bodyText);
 
   await expandWalletUserMenu();
   const exactPointsBalance = extractExactPointsFromMenu();
@@ -332,6 +422,11 @@ async function scrapeWalletPage() {
     availableCreditsCount,
     biltCashBalance: biltCash.balance,
     biltCashExpiration: biltCash.expiration,
+    biltCashRedeemableAmount: biltCash.redeemableAmount,
+    biltCashEarningMethod: biltCashEarning.earningMethod,
+    biltCashEarningRate: biltCashEarning.earningRate,
+    housingOnlyRewardsEnabled: biltCashEarning.housingOnlyRewardsEnabled,
+    flexibleBiltCashEnabled: biltCashEarning.flexibleBiltCashEnabled,
     pointsToNextBiltCashReward: biltCash.pointsToNextReward,
     nextBiltCashRewardAmount: biltCash.nextRewardAmount,
     walletCredits,
@@ -359,6 +454,11 @@ function scrapeNeighborhoodAccountPage(): BiltLoyaltyData {
     availableCreditsCount: null,
     biltCashBalance: null,
     biltCashExpiration: null,
+    biltCashRedeemableAmount: null,
+    biltCashEarningMethod: null,
+    biltCashEarningRate: null,
+    housingOnlyRewardsEnabled: null,
+    flexibleBiltCashEnabled: null,
     pointsToNextBiltCashReward: null,
     nextBiltCashRewardAmount: null,
     walletCredits: [],
@@ -492,6 +592,9 @@ async function runExtraction(attemptId: string) {
     data.linkedCardsCount != null ||
     data.availableCreditsCount != null ||
     data.biltCashBalance != null ||
+    data.biltCashRedeemableAmount != null ||
+    data.biltCashEarningMethod != null ||
+    data.biltCashEarningRate != null ||
     data.memberName != null ||
     data.memberNumber != null;
   if (!hasMeaningfulData) {

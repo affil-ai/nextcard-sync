@@ -1,6 +1,15 @@
 import type { NextCardAuth, ProviderId } from "../lib/types";
 import { clearAuth, getAuth, setAuth, startSignIn, verifyAuth } from "../lib/auth";
 import {
+  fetchExtensionProfile,
+  getBestAvailableExtensionProfile,
+  getStoredExtensionProfile,
+  getUpgradeUrl,
+  isProviderLocked,
+  selectExtensionSyncProvider,
+  setStoredExtensionProfile,
+} from "../lib/extension-profile";
+import {
   deleteFromNextCard,
   pullFromNextCard,
   pushToNextCard,
@@ -150,6 +159,15 @@ async function hydrateFromNextCard() {
   }
 }
 
+async function refreshExtensionProfile() {
+  try {
+    return await fetchExtensionProfile();
+  } catch (error) {
+    console.warn("[NextCard SW] Extension profile refresh failed:", error);
+    return getStoredExtensionProfile();
+  }
+}
+
 async function recordConsent(message: Record<string, unknown>) {
   const auth = await getCachedAuth();
   if (!auth?.token) {
@@ -180,6 +198,7 @@ async function recordConsent(message: Record<string, unknown>) {
 function onSignOut() {
   resetAuthCache();
   stateStore.resetAllStates();
+  void setStoredExtensionProfile(null);
 }
 
 async function pushScrapedData(providerId: ProviderId, data: unknown) {
@@ -188,7 +207,57 @@ async function pushScrapedData(providerId: ProviderId, data: unknown) {
     return { ok: false, error: validated.error };
   }
 
-  return pushToNextCard(providerId, validated.data);
+  const result = await pushToNextCard(providerId, validated.data);
+  if (!result.ok && result.error === "selection_locked") {
+    await refreshExtensionProfile();
+  }
+  return result;
+}
+
+let upgradeTabPromise: Promise<void> | null = null;
+
+function samePageUrl(left: string, right: string) {
+  try {
+    const leftUrl = new URL(left);
+    const rightUrl = new URL(right);
+    return (
+      leftUrl.origin === rightUrl.origin
+      && leftUrl.pathname === rightUrl.pathname
+      && leftUrl.search === rightUrl.search
+    );
+  } catch {
+    return false;
+  }
+}
+
+async function openUpgradeTab() {
+  if (upgradeTabPromise) {
+    return upgradeTabPromise;
+  }
+
+  upgradeTabPromise = (async () => {
+    const profile = await getStoredExtensionProfile();
+    const upgradeUrl = getUpgradeUrl(profile);
+    const existingTab = (await chrome.tabs.query({})).find((tab) =>
+      tab.url ? samePageUrl(tab.url, upgradeUrl) : false
+    );
+
+    if (existingTab?.id != null) {
+      if (existingTab.windowId != null) {
+        await chrome.windows.update(existingTab.windowId, { focused: true });
+      }
+      await chrome.tabs.update(existingTab.id, { active: true, url: upgradeUrl });
+      return;
+    }
+
+    await chrome.tabs.create({ url: upgradeUrl, active: true });
+  })();
+
+  try {
+    await upgradeTabPromise;
+  } finally {
+    upgradeTabPromise = null;
+  }
 }
 
 const genericHandlers = createGenericSyncHandlers({
@@ -269,6 +338,27 @@ chrome.runtime.onMessage.addListener(
     recordConsent,
     pushToNextCard: pushScrapedData,
     deleteFromNextCard,
+    isProviderLocked: async (providerId) => {
+      const profile = await getBestAvailableExtensionProfile();
+      if (isProviderLocked(profile, providerId)) {
+        return true;
+      }
+
+      if (profile?.accountLevel === "pro") {
+        return false;
+      }
+
+      try {
+        const selection = await selectExtensionSyncProvider(providerId);
+        return !selection.ok;
+      } catch (error) {
+        console.warn("[NextCard SW] Extension provider selection failed:", error);
+        return true;
+      }
+    },
+    getExtensionProfile: getStoredExtensionProfile,
+    refreshExtensionProfile,
+    openUpgrade: openUpgradeTab,
     syncEnrolledOffers: (issuer, message) => {
       // Reuse the sync payload shape so message handlers stay aligned with backend expectations.
       const enrolledOffers = message.enrolledOffers as EnrolledOfferSyncMessage[];
@@ -312,7 +402,9 @@ chrome.runtime.onMessageExternal.addListener(
     nextCardOrigin: new URL(__NEXTCARD_URL__).origin,
     setAuth,
     resetAuthCache,
-    hydrateFromNextCard,
+    hydrateFromNextCard: async () => {
+      await Promise.all([hydrateFromNextCard(), refreshExtensionProfile()]);
+    },
     pullOfferUrlCache,
   }),
 );
@@ -324,7 +416,7 @@ chrome.alarms.onAlarm.addListener((alarm) => {
 
 void getAuth().then((auth) => {
   if (auth) {
-    void hydrateFromNextCard().catch((error) => {
+    void Promise.all([hydrateFromNextCard(), refreshExtensionProfile()]).catch((error) => {
       console.warn("[NextCard SW] Startup hydrate failed:", error);
     });
     void retryPendingOfferSyncs();

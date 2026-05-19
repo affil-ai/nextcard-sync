@@ -1,4 +1,4 @@
-import type { NextCardAuth, ProviderId } from "../../lib/types";
+import type { ExtensionProfile, NextCardAuth, ProviderId } from "../../lib/types";
 import type { ProviderDefinition, ProviderSyncStrategy } from "../../providers/provider-registry";
 import type { createRuntimeStateStore } from "./runtime-state";
 
@@ -57,6 +57,10 @@ export function createMessageRouter(options: {
   recordConsent: (message: Record<string, unknown>) => Promise<void>;
   pushToNextCard: (providerId: ProviderId, data: unknown) => Promise<unknown>;
   deleteFromNextCard: (providerId: ProviderId) => Promise<{ ok: boolean; error?: string }>;
+  isProviderLocked?: (providerId: ProviderId) => Promise<boolean>;
+  getExtensionProfile?: () => Promise<ExtensionProfile | null>;
+  refreshExtensionProfile?: () => Promise<ExtensionProfile | null>;
+  openUpgrade?: () => Promise<void>;
   syncEnrolledOffers?: (issuer: string, message: Record<string, unknown>) => void | Promise<void>;
   syncDetectedOffers?: (issuer: string, message: Record<string, unknown>) => void | Promise<void>;
 }) {
@@ -69,46 +73,79 @@ export function createMessageRouter(options: {
           return true;
         }
 
-        const startSync = resolveSyncStarter(
-          providerId,
-          options.providerRegistry,
-          options.syncHandlers,
-        );
-        void startSync().catch((error) => {
-          const errorMessage = error instanceof Error ? error.message : "Sync failed";
-          options.stateStore.updateProvider(providerId, {
-            status: "error",
-            error: errorMessage,
-            progressMessage: null,
-          });
-          console.error(
-            `[NextCard SW] Unhandled ${providerId} sync error:`,
-            error,
+        void (async () => {
+          if (await options.isProviderLocked?.(providerId)) {
+            sendResponse({ ok: false, error: "selection_locked" });
+            return;
+          }
+
+          const startSync = resolveSyncStarter(
+            providerId,
+            options.providerRegistry,
+            options.syncHandlers,
           );
-        });
-
-        options.stateStore
-          .waitForSyncStart(providerId)
-          .then((started) => {
-            if (started) {
-              sendResponse({ ok: true });
-              return;
-            }
-
-            sendResponse({
-              ok: false,
-              error:
-                options.stateStore.states[providerId].error
-                ?? `Failed to open ${options.providerRegistry[providerId].name}`,
+          void startSync().catch((error) => {
+            const errorMessage = error instanceof Error ? error.message : "Sync failed";
+            options.stateStore.updateProvider(providerId, {
+              status: "error",
+              error: errorMessage,
+              progressMessage: null,
             });
-          })
-          .catch((error) => {
-            const errorMessage =
-              error instanceof Error ? error.message : "Failed to start sync";
-            sendResponse({ ok: false, error: errorMessage });
+            console.error(
+              `[NextCard SW] Unhandled ${providerId} sync error:`,
+              error,
+            );
           });
+
+          const started = await options.stateStore.waitForSyncStart(providerId);
+          if (started) {
+            sendResponse({ ok: true });
+            return;
+          }
+
+          sendResponse({
+            ok: false,
+            error:
+              options.stateStore.states[providerId].error
+              ?? `Failed to open ${options.providerRegistry[providerId].name}`,
+          });
+        })().catch((error) => {
+          const errorMessage =
+            error instanceof Error ? error.message : "Failed to start sync";
+          sendResponse({ ok: false, error: errorMessage });
+        });
         return true;
       }
+
+      case "GET_EXTENSION_PROFILE":
+        if (options.getExtensionProfile) {
+          void options.getExtensionProfile().then((profile) => sendResponse(profile));
+          return true;
+        }
+        sendResponse(null);
+        return true;
+
+      case "REFRESH_EXTENSION_PROFILE":
+        if (options.refreshExtensionProfile) {
+          void options.refreshExtensionProfile().then((profile) => sendResponse(profile));
+          return true;
+        }
+        sendResponse(null);
+        return true;
+
+      case "OPEN_UPGRADE":
+        if (options.openUpgrade) {
+          void options.openUpgrade()
+            .then(() => sendResponse({ ok: true }))
+            .catch((error) => {
+              const errorMessage =
+                error instanceof Error ? error.message : "Failed to open upgrade page";
+              sendResponse({ ok: false, error: errorMessage });
+            });
+          return true;
+        }
+        sendResponse({ ok: false });
+        return true;
 
       case "CANCEL_SYNC": {
         const providerId = message.provider;

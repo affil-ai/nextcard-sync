@@ -1,4 +1,4 @@
-import type { ProviderId, ProviderSyncState } from "../../lib/types";
+import type { ExtensionProfile, ProviderId, ProviderSyncState } from "../../lib/types";
 import { orderedProviderIds, providerGroups } from "../../providers/provider-groups";
 import {
   getProviderIconUrl,
@@ -9,6 +9,7 @@ import { escapeHtml, formatRelativeTime } from "../renderers/shared";
 export function buildHomeSnapshot(
   allStates: Record<ProviderId, ProviderSyncState>,
   firstSyncCompleted: boolean,
+  extensionProfile: ExtensionProfile | null,
 ) {
   return orderedProviderIds
     .map((providerId) => {
@@ -16,7 +17,7 @@ export function buildHomeSnapshot(
       return `${providerId}:${state?.status ?? "idle"}:${state?.lastSyncedAt ?? ""}`;
     })
     .join("|")
-    + `|tour:${firstSyncCompleted}`;
+    + `|tour:${firstSyncCompleted}|plan:${extensionProfile?.accountLevel ?? "unknown"}|locked:${extensionProfile?.lockedProviders.join(",") ?? ""}`;
 }
 
 export function populateOnboardingProviders(container: HTMLDivElement) {
@@ -37,14 +38,18 @@ export function createHomeRenderer(options: {
   providerList: HTMLDivElement;
   tourTooltip: HTMLDivElement;
   getFirstSyncCompleted: () => boolean;
+  getExtensionProfile: () => ExtensionProfile | null;
   markFirstSyncCompleted: () => void;
   onProviderSelected: (providerId: ProviderId) => void;
+  onLockedProviderSelected: (providerId: ProviderId) => void;
 }) {
   let lastHomeSnapshot = "";
 
   return (allStates: Record<ProviderId, ProviderSyncState>) => {
     const firstSyncCompleted = options.getFirstSyncCompleted();
-    const snapshot = buildHomeSnapshot(allStates, firstSyncCompleted);
+    const extensionProfile = options.getExtensionProfile();
+    const lockedProviders = new Set(extensionProfile?.lockedProviders ?? []);
+    const snapshot = buildHomeSnapshot(allStates, firstSyncCompleted, extensionProfile);
     if (snapshot === lastHomeSnapshot) return;
     lastHomeSnapshot = snapshot;
 
@@ -63,9 +68,16 @@ export function createHomeRenderer(options: {
       for (const providerId of group.ids) {
         const definition = providerRegistry[providerId];
         const state = allStates[providerId];
+        const locked = lockedProviders.has(providerId);
         const card = document.createElement("div");
-        card.className = "provider-card";
-        card.addEventListener("click", () => options.onProviderSelected(providerId));
+        card.className = locked ? "provider-card provider-card-locked" : "provider-card";
+        card.addEventListener("click", () => {
+          if (locked) {
+            options.onLockedProviderSelected(providerId);
+            return;
+          }
+          options.onProviderSelected(providerId);
+        });
 
         const isSyncing =
           state?.status === "extracting"
@@ -83,14 +95,16 @@ export function createHomeRenderer(options: {
           : null;
 
         card.innerHTML = `
-          <div class="provider-icon"><img src="${getProviderIconUrl(providerId)}" alt="${escapeHtml(definition.name)}" /></div>
-          <div class="provider-info">
-            <div class="provider-name">${escapeHtml(definition.name)}</div>
-            <div class="provider-desc">${escapeHtml(definition.description)}</div>
-            ${lastSync ? `<div class="provider-last-sync">Synced ${lastSync}</div>` : ""}
+          <div class="provider-card-content">
+            <div class="provider-icon"><img src="${getProviderIconUrl(providerId)}" alt="${escapeHtml(definition.name)}" /></div>
+            <div class="provider-info">
+              <div class="provider-name">${escapeHtml(definition.name)}</div>
+              <div class="provider-desc">${escapeHtml(definition.description)}</div>
+              ${lastSync ? `<div class="provider-last-sync">Synced ${lastSync}</div>` : ""}
+            </div>
+            ${locked ? `<div class="provider-lock-badge">Pro</div>` : `<div class="provider-status-dot ${dotClass}"></div>`}
+            <div class="provider-arrow">&rsaquo;</div>
           </div>
-          <div class="provider-status-dot ${dotClass}"></div>
-          <div class="provider-arrow">&rsaquo;</div>
         `;
 
         if (group.label === "Banks") {

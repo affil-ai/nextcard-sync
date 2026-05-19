@@ -91,6 +91,9 @@ export function createBankRenderers(
     memberNumberCard: document.getElementById("biltMemberNumberCard") as HTMLDivElement,
     cashBalance: document.getElementById("biltCashBalance") as HTMLDivElement,
     cashExpiration: document.getElementById("biltCashExpiration") as HTMLDivElement,
+    cashRedeemableAmount: document.getElementById("biltCashRedeemableAmount") as HTMLDivElement,
+    cashEarningMethod: document.getElementById("biltCashEarningMethod") as HTMLDivElement,
+    cashEarningRate: document.getElementById("biltCashEarningRate") as HTMLDivElement,
     nextCashReward: document.getElementById("biltNextCashReward") as HTMLDivElement,
     progressSection: document.getElementById("biltProgressSection") as HTMLDivElement,
     progressCards: document.getElementById("biltProgressCards") as HTMLDivElement,
@@ -578,16 +581,29 @@ export function createBankRenderers(
     biltEls.dataSection.style.display = "block";
     renderValue(biltEls.pointsBalance, data.pointsBalance?.toLocaleString() ?? null);
     renderValue(biltEls.eliteStatus, data.eliteStatus);
+    const flexibleBiltCashEnabled = data.flexibleBiltCashEnabled === true;
+    const biltCashDisplayAmount = data.biltCashBalance ?? data.biltCashRedeemableAmount;
     renderValue(
       biltEls.cashBalance,
-      data.biltCashBalance != null ? `$${data.biltCashBalance.toFixed(2)}` : null,
+      biltCashDisplayAmount != null ? `$${biltCashDisplayAmount.toFixed(2)}` : null,
     );
-    renderValue(biltEls.cashExpiration, data.biltCashExpiration);
+    renderValue(
+      biltEls.cashExpiration,
+      data.biltCashExpiration ?? (flexibleBiltCashEnabled ? "No expiration shown" : null),
+    );
+    renderValue(
+      biltEls.cashRedeemableAmount,
+      data.biltCashRedeemableAmount != null ? `$${data.biltCashRedeemableAmount.toFixed(2)}` : null,
+    );
+    renderValue(biltEls.cashEarningMethod, data.biltCashEarningMethod ?? null);
+    renderValue(biltEls.cashEarningRate, data.biltCashEarningRate ?? null);
     renderValue(
       biltEls.nextCashReward,
       data.pointsToNextBiltCashReward != null && data.nextBiltCashRewardAmount != null
         ? `${data.pointsToNextBiltCashReward.toLocaleString()} points to $${data.nextBiltCashRewardAmount.toFixed(2)}`
-        : null,
+        : flexibleBiltCashEnabled
+          ? "Not threshold-based"
+          : null,
     );
 
     if (data.memberName) {

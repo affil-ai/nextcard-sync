@@ -168,6 +168,41 @@
           0 1px 2px rgba(0, 0, 0, 0.02);
       }
 
+      .provider-card-content {
+        display: flex;
+        align-items: center;
+        gap: 14px;
+        width: 100%;
+        min-width: 0;
+      }
+
+      .provider-card-locked {
+        position: relative;
+        border-color: #eadfd6;
+        background: #fbfaf8;
+      }
+
+      .provider-card-locked:hover {
+        border-color: #decfc0;
+      }
+
+      .provider-card-locked .provider-card-content {
+        opacity: 0.72;
+      }
+
+      .provider-lock-badge {
+        border: 1px solid #eadfd6;
+        border-radius: 999px;
+        color: #6f5b4f;
+        background: #fffaf5;
+        font-size: 11px;
+        font-weight: 700;
+        line-height: 1;
+        padding: 5px 8px;
+        white-space: nowrap;
+        flex-shrink: 0;
+      }
+
       .provider-icon {
         width: 40px;
         height: 40px;
@@ -1279,6 +1314,25 @@
         white-space: nowrap;
         overflow: hidden;
         text-overflow: ellipsis;
+      }
+
+      .user-plan-badge {
+        display: inline-flex;
+        align-items: center;
+        width: fit-content;
+        margin-top: 4px;
+        border-radius: 999px;
+        background: #f5ede6;
+        color: #6b3f25;
+        font-size: 10px;
+        font-weight: 800;
+        line-height: 1;
+        padding: 4px 7px;
+      }
+
+      .user-plan-badge.pro {
+        background: #e7f5ee;
+        color: #17643b;
       }
 
       .user-sign-out {

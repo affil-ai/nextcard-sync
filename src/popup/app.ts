@@ -1,4 +1,5 @@
 import type {
+  ExtensionProfile,
   NextCardAuth,
   ProviderId,
   ProviderStateMap,
@@ -1091,6 +1092,7 @@ let consentGiven = false;
 let firstSyncCompleted = false;
 let flagsLoaded = false;
 let tourSyncProvider: ProviderId | null = null;
+let extensionProfile: ExtensionProfile | null = null;
 
 const iconUrl = chrome.runtime.getURL("src/icons/icon128.png");
 authElements.authLogo.src = iconUrl;
@@ -1235,6 +1237,14 @@ const consentController = createConsentController({
 });
 
 async function requestSync(providerId: ProviderId) {
+  if (
+    extensionProfile?.accountLevel === "free"
+    && extensionProfile.lockedProviders.includes(providerId)
+  ) {
+    handleLockedProviderSelected(providerId);
+    return false;
+  }
+
   if (!consentGiven) {
     consentController.request(providerId);
     return false;
@@ -1244,6 +1254,14 @@ async function requestSync(providerId: ProviderId) {
 }
 
 function handleProviderSelected(providerId: ProviderId) {
+  if (
+    extensionProfile?.accountLevel === "free"
+    && extensionProfile.lockedProviders.includes(providerId)
+  ) {
+    handleLockedProviderSelected(providerId);
+    return;
+  }
+
   if (!firstSyncCompleted) {
     void requestSync(providerId);
     return;
@@ -1252,15 +1270,36 @@ function handleProviderSelected(providerId: ProviderId) {
   showView(providerId);
 }
 
+let upgradeRequestInFlight = false;
+let lastUpgradeRequestAt = 0;
+
+function handleLockedProviderSelected(_providerId: ProviderId) {
+  const now = Date.now();
+  if (upgradeRequestInFlight || now - lastUpgradeRequestAt < 1000) {
+    return;
+  }
+
+  upgradeRequestInFlight = true;
+  lastUpgradeRequestAt = now;
+  chrome.runtime.sendMessage({ type: "OPEN_UPGRADE" }, () => {
+    upgradeRequestInFlight = false;
+  });
+  setTimeout(() => {
+    upgradeRequestInFlight = false;
+  }, 2500);
+}
+
 const renderHome = createHomeRenderer({
   providerList: homeElements.providerList,
   tourTooltip: homeElements.tourTooltip,
   getFirstSyncCompleted: () => firstSyncCompleted,
+  getExtensionProfile: () => extensionProfile,
   markFirstSyncCompleted: () => {
     firstSyncCompleted = true;
     chrome.storage.local.set({ firstSyncCompleted: true });
   },
   onProviderSelected: handleProviderSelected,
+  onLockedProviderSelected: handleLockedProviderSelected,
 });
 
 populateOnboardingProviders(homeElements.onboardingProviders);
@@ -1276,6 +1315,20 @@ function getInitials(name: string | null) {
 }
 
 let authConfirmed = false;
+
+function renderPlanBadge() {
+  let badge = document.getElementById("userPlanBadge") as HTMLSpanElement | null;
+  if (!badge) {
+    badge = document.createElement("span");
+    badge.id = "userPlanBadge";
+    badge.className = "user-plan-badge";
+    authElements.userEmail.insertAdjacentElement("afterend", badge);
+  }
+
+  const isPro = extensionProfile?.accountLevel === "pro";
+  badge.textContent = isPro ? "Pro" : "Free";
+  badge.classList.toggle("pro", isPro);
+}
 
 function renderAuthState(auth: NextCardAuth | null) {
   if (!flagsLoaded) return;
@@ -1301,6 +1354,7 @@ function renderAuthState(auth: NextCardAuth | null) {
   authElements.userAvatar.textContent = getInitials(auth.name);
   authElements.userName.textContent = auth.name ?? "nextcard user";
   authElements.userEmail.textContent = auth.email ?? "";
+  renderPlanBadge();
 
   // Show tab bar when signed in
   if (tabBar) tabBar.classList.remove("hidden");
@@ -1319,6 +1373,7 @@ authElements.userSignOutBtn.addEventListener("click", () => {
     disclosureAccepted = false;
     consentGiven = false;
     firstSyncCompleted = false;
+    extensionProfile = null;
     chrome.storage.local.remove([
       "disclosureAccepted",
       "consentGiven",
@@ -1377,6 +1432,7 @@ async function refreshPopupState() {
   try {
     const snapshot = await pollPopupSnapshot();
     authConfirmed = true;
+    extensionProfile = snapshot.extensionProfile;
     renderAuthState(snapshot.auth);
     if (!snapshot.auth || !snapshot.allStates) return;
 
@@ -1398,6 +1454,7 @@ async function initializePopup() {
   disclosureAccepted = flags.disclosureAccepted;
   consentGiven = flags.consentGiven;
   firstSyncCompleted = flags.firstSyncCompleted;
+  extensionProfile = initialSnapshot.extensionProfile;
   flagsLoaded = true;
 
   subscribeToOnboardingFlags((patch) => {

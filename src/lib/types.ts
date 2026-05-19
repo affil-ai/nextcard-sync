@@ -88,6 +88,13 @@ export interface NextCardAuth {
   signedInAt: string;
 }
 
+export interface ExtensionProfile {
+  accountLevel: "free" | "pro";
+  allowedProviders: ProviderId[];
+  lockedProviders: ProviderId[];
+  upgradeUrl: string;
+}
+
 export interface ProviderDataMap {
   marriott: MarriottLoyaltyData;
   atmos: AtmosLoyaltyData;
@@ -149,4 +156,13 @@ export type ExtensionMessage =
   | { type: "SIGN_IN_NEXTCARD" }
   | { type: "SIGN_OUT_NEXTCARD" }
   | { type: "GET_AUTH_STATE" }
+  | { type: "GET_EXTENSION_PROFILE" }
+  | { type: "REFRESH_EXTENSION_PROFILE" }
+  | { type: "OPEN_UPGRADE" }
+  | {
+      type: "RECORD_CONSENT";
+      consentType: string;
+      extensionVersion: string;
+      userAgent: string;
+    }
   | { type: "PUSH_TO_NEXTCARD"; provider: ProviderId };

@@ -394,6 +394,9 @@ function toStandardizedLoyaltyData(provider: ProviderId, data: AnyProviderData):
     if (d.availableCreditsCount != null) stats.push({ label: "Available Credits", value: formatNumber(d.availableCreditsCount) });
     if (d.biltCashBalance != null) stats.push({ label: "Bilt Cash Balance", value: `$${d.biltCashBalance.toFixed(2)}` });
     if (d.biltCashExpiration) stats.push({ label: "Bilt Cash Expires", value: d.biltCashExpiration });
+    if (d.biltCashRedeemableAmount != null) stats.push({ label: "Redeemable Bilt Cash", value: `$${d.biltCashRedeemableAmount.toFixed(2)}` });
+    if (d.biltCashEarningMethod) stats.push({ label: "Bilt Earning Method", value: d.biltCashEarningMethod });
+    if (d.biltCashEarningRate) stats.push({ label: "Bilt Cash Rate", value: d.biltCashEarningRate });
     if (d.walletCredits.length > 0) stats.push({ label: "Wallet Credit Types", value: d.walletCredits.map((credit) => credit.name).join(", ") });
     if (d.pointsToNextBiltCashReward != null && d.nextBiltCashRewardAmount != null) {
       stats.push({
