@@ -50,6 +50,31 @@ export function createHotelRenderers(
     certsList: document.getElementById("marriottCertsList") as HTMLUListElement,
   };
 
+  function normalizeMarriottMemberName(value: string | null) {
+    let normalized = (value ?? "").replace(/\s+/g, " ").trim();
+    if (!normalized) return null;
+
+    normalized = normalized.replace(/^(?:Hi|Hello|Hey|Welcome),?\s*/i, "");
+
+    const stopPatterns = [
+      /Marriott\s+Bonvoy(?:\u00ae|\(r\))?\s*Cardmember/i,
+      /Cardmember/i,
+      /Member\s+Since/i,
+      /\d+\s+Nights?\s+To/i,
+      /Expires\s+\w+/i,
+    ];
+
+    for (const pattern of stopPatterns) {
+      const index = normalized.search(pattern);
+      if (index >= 0) {
+        normalized = normalized.slice(0, index).trim();
+      }
+    }
+
+    normalized = normalized.replace(/[,\s]+$/g, "");
+    return normalized || null;
+  }
+
   const ihgEls = {
     statusDot: document.getElementById("ihgStatusDot") as HTMLDivElement,
     statusText: document.getElementById("ihgStatusText") as HTMLSpanElement,
@@ -190,7 +215,10 @@ export function createHotelRenderers(
     renderValue(marriottEls.qualifiedSpend, data.totalQualifiedSpend);
     renderValue(marriottEls.nextTier, data.nextTierTarget);
 
-    const memberParts = [data.memberName, data.memberNumber].filter(Boolean);
+    const memberParts = [
+      normalizeMarriottMemberName(data.memberName),
+      data.memberNumber,
+    ].filter(Boolean);
     renderValue(
       marriottEls.memberInfo,
       memberParts.length > 0 ? memberParts.join(" - ") : null,

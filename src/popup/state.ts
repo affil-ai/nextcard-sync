@@ -272,11 +272,21 @@ export async function pollPopupSnapshot() {
   return { auth, allStates, extensionProfile };
 }
 
+const syncStartRequestsInFlight = new Set<ProviderId>();
+
 export function startProviderSync(providerId: ProviderId) {
+  if (syncStartRequestsInFlight.has(providerId)) {
+    return Promise.resolve(true);
+  }
+
+  syncStartRequestsInFlight.add(providerId);
+
   return new Promise<boolean>((resolve) => {
     chrome.runtime.sendMessage(
       { type: "REQUEST_SYNC", provider: providerId },
       (response: { ok?: boolean; error?: string } | undefined) => {
+        syncStartRequestsInFlight.delete(providerId);
+
         if (chrome.runtime.lastError) {
           console.error(
             `[NextCard Popup] Failed to start ${providerId} sync:`,

@@ -96,9 +96,10 @@ export const providerRegistry = {
     iconPath: "src/icons/delta-36.png",
     syncStrategy: "generic",
     syncUrl: "https://www.delta.com/myskymiles/overview",
-    tabUrlPattern: "https://www.delta.com/*",
-    accountUrlPattern: "https://www.delta.com/myskymiles/*",
-    manifestMatches: ["https://www.delta.com/*"],
+    tabUrlPattern: "https://delta.com/*",
+    accountUrlPattern: "https://(www\\.)?delta.com/myskymiles/*",
+    allowedUrlPatterns: ["https://www.delta.com/*"],
+    manifestMatches: ["https://delta.com/*", "https://www.delta.com/*"],
     contentScriptPath: "src/content-scripts/delta.ts",
   },
   united: {

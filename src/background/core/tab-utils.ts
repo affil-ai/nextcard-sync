@@ -210,6 +210,7 @@ export async function getTabLoginState(tabId: number): Promise<LoginState> {
     && "state" in response
     && (response.state === "logged_in"
       || response.state === "logged_out"
+      || response.state === "mfa_challenge"
       || response.state === "unknown")
   ) {
     return response.state;

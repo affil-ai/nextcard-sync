@@ -623,14 +623,23 @@ export function createGenericSyncHandlers(options: GenericSyncDeps) {
               if (loginState === "logged_in") {
                 redirectPending = false;
                 handleAccountArrival(updatedTabId);
-              } else {
+              } else if (
+                loginState === "logged_out"
+                || loginState === "mfa_challenge"
+              ) {
                 options.stateStore.updateProvider(providerId, {
                   status: "waiting_for_login",
+                });
+              } else {
+                options.stateStore.updateProvider(providerId, {
+                  status: "detecting_login",
+                  progressMessage: `Checking ${definition.name} sign-in...`,
                 });
               }
             } catch {
               options.stateStore.updateProvider(providerId, {
-                status: "waiting_for_login",
+                status: "detecting_login",
+                progressMessage: `Checking ${definition.name} sign-in...`,
               });
             } finally {
               loginCheckInFlight = false;
@@ -767,6 +776,12 @@ export function createGenericSyncHandlers(options: GenericSyncDeps) {
         landingUrl = currentTab.url ?? "";
       }
 
+      if (providerId === "delta" && !landingUrl.match(/sign.?in|login/i)) {
+        await new Promise((r) => setTimeout(r, 3000));
+        currentTab = await chrome.tabs.get(tabId);
+        landingUrl = currentTab.url ?? "";
+      }
+
       // If syncUrl was a sign-in page but we landed elsewhere (user already logged in),
       // navigate to the account page so the content script can extract data.
       if (
@@ -845,51 +860,60 @@ export function createGenericSyncHandlers(options: GenericSyncDeps) {
 
       setProviderProgress(providerId, `Checking ${definition.name} sign-in...`, "detecting_login");
 
-      const firstMessage = await new Promise<Record<string, unknown>>((resolve) => {
-        const timeout = setTimeout(() => {
-          chrome.runtime.onMessage.removeListener(listener);
-          resolve({
-            type: "ERROR",
-            provider: providerId,
-            error: "Extraction timed out",
-          });
-        }, 60000);
+      let firstMessage: Record<string, unknown>;
+      if (isOnSignIn) {
+        firstMessage = {
+          type: "STATUS_UPDATE",
+          provider: providerId,
+          status: "waiting_for_login",
+        };
+      } else {
+        firstMessage = await new Promise<Record<string, unknown>>((resolve) => {
+          const timeout = setTimeout(() => {
+            chrome.runtime.onMessage.removeListener(listener);
+            resolve({
+              type: "ERROR",
+              provider: providerId,
+              error: "Extraction timed out",
+            });
+          }, 60000);
 
-        function listener(
-          message: Record<string, unknown>,
-          _sender: chrome.runtime.MessageSender,
-          sendResponse: (response?: unknown) => void,
-        ) {
-          if (
-            (message.type === "EXTRACTION_DONE" || message.type === "STATUS_UPDATE")
-            && options.isProviderAttemptMessage(message, providerId, attemptId)
+          function listener(
+            message: Record<string, unknown>,
+            _sender: chrome.runtime.MessageSender,
+            sendResponse: (response?: unknown) => void,
           ) {
+            if (
+              (message.type === "EXTRACTION_DONE" || message.type === "STATUS_UPDATE")
+              && options.isProviderAttemptMessage(message, providerId, attemptId)
+            ) {
+              chrome.runtime.onMessage.removeListener(listener);
+              clearTimeout(timeout);
+              sendResponse({ ok: true });
+              resolve(message);
+              return true;
+            }
+          }
+
+          chrome.runtime.onMessage.addListener(listener);
+
+          setProviderProgress(providerId, `Reading ${definition.name} account...`);
+          void triggerExtraction({
+            providerId,
+            attemptId,
+            tabId,
+            assertRunActive: options.stateStore.assertRunActive,
+          }).catch(() => {
             chrome.runtime.onMessage.removeListener(listener);
             clearTimeout(timeout);
-            sendResponse({ ok: true });
-            resolve(message);
-            return true;
-          }
-        }
-
-        chrome.runtime.onMessage.addListener(listener);
-
-        setProviderProgress(providerId, `Reading ${definition.name} account...`);
-        void triggerExtraction({
-          providerId,
-          attemptId,
-          tabId,
-          assertRunActive: options.stateStore.assertRunActive,
-        }).catch(() => {
-          chrome.runtime.onMessage.removeListener(listener);
-          clearTimeout(timeout);
-          resolve({
-            type: "ERROR",
-            provider: providerId,
-            error: "Content script not available",
+            resolve({
+              type: "ERROR",
+              provider: providerId,
+              error: "Content script not available",
+            });
           });
         });
-      });
+      }
 
       let result: Record<string, unknown>;
       if (
@@ -897,6 +921,12 @@ export function createGenericSyncHandlers(options: GenericSyncDeps) {
         && firstMessage.status === "waiting_for_login"
       ) {
         setProviderProgress(providerId, `Waiting for ${definition.name} sign-in...`, "waiting_for_login");
+        void triggerExtraction({
+          providerId,
+          attemptId,
+          tabId,
+          assertRunActive: options.stateStore.assertRunActive,
+        }).catch(() => {});
         result = providerId === "marriott"
           ? await waitForMarriottLoginAndExtract(attemptId, tabId)
           : await waitForGenericLoginAndExtract(providerId, attemptId, tabId);

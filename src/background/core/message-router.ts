@@ -45,6 +45,14 @@ export function resolveSyncStarter(
   return () => startStrategy(providerRegistry[providerId].syncStrategy, providerId, syncHandlers);
 }
 
+function isSyncStartInProgress(status: string) {
+  return (
+    status === "detecting_login"
+    || status === "waiting_for_login"
+    || status === "extracting"
+  );
+}
+
 export function createMessageRouter(options: {
   providerRegistry: Record<ProviderId, ProviderDefinition>;
   stateStore: RuntimeStateStore;
@@ -74,6 +82,14 @@ export function createMessageRouter(options: {
         }
 
         void (async () => {
+          if (
+            options.stateStore.getRun(providerId)
+            || isSyncStartInProgress(options.stateStore.states[providerId].status)
+          ) {
+            sendResponse({ ok: true, alreadyRunning: true });
+            return;
+          }
+
           if (await options.isProviderLocked?.(providerId)) {
             sendResponse({ ok: false, error: "selection_locked" });
             return;

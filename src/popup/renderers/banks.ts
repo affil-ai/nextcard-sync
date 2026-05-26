@@ -237,6 +237,14 @@ export function createBankRenderers(
       : "Show raw captured data";
   });
 
+  function isGenericAmexBenefitName(value: string) {
+    const normalized = value.trim().toLowerCase().replace(/\u2019/g, "'").replace(/[.!]+$/g, "");
+    return (
+      normalized === "congratulations"
+      || normalized === "you're all set"
+    );
+  }
+
   function renderAmexCardHtml(card: {
     cardName: string | null;
     availablePoints: number | null;
@@ -248,7 +256,10 @@ export function createBankRenderers(
       ? `<div class="data-grid"><div class="data-card"><div class="data-label">Points</div><div class="data-value">${card.availablePoints.toLocaleString()}</div></div>${card.pendingPoints != null ? `<div class="data-card"><div class="data-label">Pending</div><div class="data-value">${card.pendingPoints.toLocaleString()}</div></div>` : ""}</div>`
       : "";
     const trackableBenefits = card.benefits.filter((benefit) => {
-      return benefit.amountUsed != null || benefit.totalAmount != null;
+      return (
+        !isGenericAmexBenefitName(benefit.name)
+        && (benefit.amountUsed != null || benefit.totalAmount != null)
+      );
     });
     const benefitsHtml = trackableBenefits.length > 0
       ? `<ul class="certs-list" style="margin-top:8px">${trackableBenefits

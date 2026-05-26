@@ -226,7 +226,7 @@ monitor.start();
 const initialState = monitor.getState();
 chrome.runtime.sendMessage({ type: "GET_PROVIDER_STATUS", provider: "delta" }, (r) => {
   const s = r?.status;
-  if (s === "extracting" || (s === "detecting_login" && initialState === "logged_in")) {
+  if ((s === "extracting" || s === "detecting_login") && initialState === "logged_in") {
     syncActive = true;
     showOverlay("extracting", "delta");
   } else if ((s === "waiting_for_login" || s === "detecting_login") && initialState !== "logged_in") {

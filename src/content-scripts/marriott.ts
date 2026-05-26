@@ -129,6 +129,41 @@ function collectTextElements(maxLength = 100): Array<{ el: Element; text: string
   return results;
 }
 
+function getDirectText(el: Element) {
+  return Array.from(el.childNodes)
+    .filter((node) => node.nodeType === Node.TEXT_NODE)
+    .map((node) => node.textContent?.trim() ?? "")
+    .filter(Boolean)
+    .join(" ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function normalizeMarriottMemberName(value: string | null | undefined) {
+  let normalized = (value ?? "").replace(/\s+/g, " ").trim();
+  if (!normalized) return null;
+
+  normalized = normalized.replace(/^(?:Hi|Hello|Hey|Welcome),?\s*/i, "");
+
+  const stopPatterns = [
+    /Marriott\s+Bonvoy(?:\u00ae|\(r\))?\s*Cardmember/i,
+    /Cardmember/i,
+    /Member\s+Since/i,
+    /\d+\s+Nights?\s+To/i,
+    /Expires\s+\w+/i,
+  ];
+
+  for (const pattern of stopPatterns) {
+    const index = normalized.search(pattern);
+    if (index >= 0) {
+      normalized = normalized.slice(0, index).trim();
+    }
+  }
+
+  normalized = normalized.replace(/[,\s]+$/g, "");
+  return normalized || null;
+}
+
 
 // ── Status tiers ─────────────────────────────────────────────
 
@@ -165,7 +200,9 @@ function scrapeActivityPage(): Partial<MarriottLoyaltyData> {
   // Name: <div class="mp__member-name t-title-s">Vishal</div>
   const nameEl = document.querySelector(".mp__member-name");
   if (nameEl) {
-    data.memberName = nameEl.textContent?.trim() ?? null;
+    data.memberName = normalizeMarriottMemberName(
+      getDirectText(nameEl) || nameEl.textContent,
+    );
   }
 
   // Nights: H3 elements matching "NN Nights"
@@ -236,7 +273,7 @@ function scrapeActivityPage(): Partial<MarriottLoyaltyData> {
     for (const { text } of collectTextElements()) {
       const greetingMatch = text.match(/^(?:Hi|Hello|Hey|Welcome),?\s+(.+)$/i);
       if (greetingMatch) {
-        data.memberName = greetingMatch[1].trim();
+        data.memberName = normalizeMarriottMemberName(greetingMatch[1]);
         break;
       }
     }

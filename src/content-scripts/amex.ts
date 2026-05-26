@@ -75,6 +75,14 @@ function textOf(el: Element | null): string {
   return el?.textContent?.trim() ?? "";
 }
 
+function isGenericBenefitHeading(value: string) {
+  const normalized = value.trim().toLowerCase().replace(/\u2019/g, "'").replace(/[.!]+$/g, "");
+  return (
+    normalized === "congratulations"
+    || normalized === "you're all set"
+  );
+}
+
 // ── Context switcher (multi-card) ────────────────────────────
 
 interface CardOption {
@@ -227,6 +235,7 @@ function scrapeAmexPage() {
     if (!heading) continue;
     const name = textOf(heading);
     if (!name) continue;
+    if (isGenericBenefitHeading(name)) continue;
 
     const progress = comp.querySelector("progress");
     if (progress) {
@@ -295,7 +304,7 @@ function scrapeAmexPage() {
     const heading = group.querySelector("h3");
     if (!heading) continue;
     const name = textOf(heading);
-    if (!name || benefitMap.has(name)) continue;
+    if (!name || benefitMap.has(name) || isGenericBenefitHeading(name)) continue;
 
     // Look for progressbar ARIA role
     const progressbar = group.querySelector('[role="progressbar"]');
@@ -376,7 +385,7 @@ function scrapeAmexPage() {
       const headingEl = tile.querySelector("h3");
       if (!headingEl) continue;
       const name = textOf(headingEl);
-      if (!name || benefitMap.has(name)) continue;
+      if (!name || benefitMap.has(name) || isGenericBenefitHeading(name)) continue;
       benefitMap.set(name, { amountUsed: null, totalAmount: null, remaining: null, period: null });
       const statusEl = tile.querySelector('[data-testid="enroll-status"] [data-status] p');
       data.benefits.push({ name, amountUsed: null, totalAmount: null, remaining: null, period: statusEl ? textOf(statusEl) : null });
