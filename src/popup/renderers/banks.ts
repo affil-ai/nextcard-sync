@@ -11,11 +11,11 @@ import type {
 import {
   escapeHtml,
   formatRelativeTime,
+  getProviderStatusDotClass,
+  getProviderStatusLabel,
   renderIssueReportHtml,
   renderValue,
   showConfirmDelete,
-  STATUS_DOT_CLASS,
-  STATUS_LABELS,
   STATUS_SUBTITLES,
 } from "./shared";
 
@@ -160,8 +160,8 @@ export function createBankRenderers(
     lastChaseJson = json;
     const { status, data, error, lastSyncedAt, progressMessage } = state;
 
-    chaseEls.statusDot.className = `status-dot ${STATUS_DOT_CLASS[status]}`;
-    chaseEls.statusText.textContent = STATUS_LABELS[status];
+    chaseEls.statusDot.className = `status-dot ${getProviderStatusDotClass(state)}`;
+    chaseEls.statusText.textContent = getProviderStatusLabel(state);
     const isBusy =
       status === "extracting"
       || status === "detecting_login"
@@ -180,7 +180,7 @@ export function createBankRenderers(
     chaseEls.clearBtn.style.display = data && !isBusy ? "block" : "none";
     chaseEls.loginPrompt.classList.toggle("visible", status === "waiting_for_login");
 
-    const relative = formatRelativeTime(lastSyncedAt);
+    const relative = state.pendingBackendPush ? null : formatRelativeTime(lastSyncedAt);
     if (relative) {
       chaseEls.lastSynced.textContent = `Last synced ${relative}`;
       chaseEls.lastSynced.style.display = "block";
@@ -296,8 +296,8 @@ export function createBankRenderers(
     lastAmexJson = json;
     const { status, data, error, lastSyncedAt, progressMessage } = state;
 
-    amexEls.statusDot.className = `status-dot ${STATUS_DOT_CLASS[status]}`;
-    amexEls.statusText.textContent = STATUS_LABELS[status];
+    amexEls.statusDot.className = `status-dot ${getProviderStatusDotClass(state)}`;
+    amexEls.statusText.textContent = getProviderStatusLabel(state);
 
     const isBusy =
       status === "extracting"
@@ -315,7 +315,7 @@ export function createBankRenderers(
     amexEls.clearBtn.style.display = data && !isBusy ? "block" : "none";
     amexEls.loginPrompt.classList.toggle("visible", status === "waiting_for_login");
 
-    const relative = formatRelativeTime(lastSyncedAt);
+    const relative = state.pendingBackendPush ? null : formatRelativeTime(lastSyncedAt);
     if (relative) {
       amexEls.lastSynced.textContent = `Last synced ${relative}`;
       amexEls.lastSynced.style.display = "block";
@@ -448,8 +448,8 @@ export function createBankRenderers(
     lastCapitalOneJson = json;
     const { status, data, error, lastSyncedAt, progressMessage } = state;
 
-    capitaloneEls.statusDot.className = `status-dot ${STATUS_DOT_CLASS[status]}`;
-    capitaloneEls.statusText.textContent = STATUS_LABELS[status];
+    capitaloneEls.statusDot.className = `status-dot ${getProviderStatusDotClass(state)}`;
+    capitaloneEls.statusText.textContent = getProviderStatusLabel(state);
 
     const isBusy =
       status === "extracting"
@@ -467,7 +467,7 @@ export function createBankRenderers(
     capitaloneEls.clearBtn.style.display = data && !isBusy ? "block" : "none";
     capitaloneEls.loginPrompt.classList.toggle("visible", status === "waiting_for_login");
 
-    const relative = formatRelativeTime(lastSyncedAt);
+    const relative = state.pendingBackendPush ? null : formatRelativeTime(lastSyncedAt);
     if (relative) {
       capitaloneEls.lastSynced.textContent = `Last synced ${relative}`;
       capitaloneEls.lastSynced.style.display = "block";
@@ -541,8 +541,8 @@ export function createBankRenderers(
     lastBiltJson = json;
     const { status, data, error, lastSyncedAt, progressMessage } = state;
 
-    biltEls.statusDot.className = `status-dot ${STATUS_DOT_CLASS[status]}`;
-    biltEls.statusText.textContent = STATUS_LABELS[status];
+    biltEls.statusDot.className = `status-dot ${getProviderStatusDotClass(state)}`;
+    biltEls.statusText.textContent = getProviderStatusLabel(state);
 
     const isBusy =
       status === "extracting"
@@ -560,7 +560,7 @@ export function createBankRenderers(
     biltEls.clearBtn.style.display = data && !isBusy ? "block" : "none";
     biltEls.loginPrompt.classList.toggle("visible", status === "waiting_for_login");
 
-    const relative = formatRelativeTime(lastSyncedAt);
+    const relative = state.pendingBackendPush ? null : formatRelativeTime(lastSyncedAt);
     if (relative) {
       biltEls.lastSynced.textContent = `Last synced ${relative}`;
       biltEls.lastSynced.style.display = "block";
@@ -719,8 +719,8 @@ export function createBankRenderers(
     if (json === lastDiscoverJson) return;
     lastDiscoverJson = json;
     const s = state.status;
-    discoverEls.statusDot.className = `status-dot ${STATUS_DOT_CLASS[s] ?? "idle"}`;
-    discoverEls.statusText.textContent = STATUS_LABELS[s] ?? "Ready to sync";
+    discoverEls.statusDot.className = `status-dot ${getProviderStatusDotClass(state)}`;
+    discoverEls.statusText.textContent = getProviderStatusLabel(state);
     const busy = s === "detecting_login" || s === "waiting_for_login" || s === "extracting";
     discoverEls.statusSubtitle.textContent =
       busy && state.progressMessage
@@ -730,12 +730,13 @@ export function createBankRenderers(
     discoverEls.syncBtn.textContent = s === "done" ? "Sync Again" : busy ? "Syncing..." : "Sync Discover";
     discoverEls.cancelBtn.style.display = busy ? "" : "none";
     discoverEls.loginPrompt.style.display = s === "waiting_for_login" ? "" : "none";
+    const discoverError = state.backendSyncError ?? state.error;
     discoverEls.errorMsg.style.display =
-      s === "error" || s === "cancelled" ? "" : "none";
-    discoverEls.errorMsg.innerHTML = s === "error"
-      ? `${escapeHtml(state.error ?? "Unknown error")}${renderIssueReportHtml("Discover", "discover", s, state.error)}`
+      discoverError || s === "cancelled" ? "" : "none";
+    discoverEls.errorMsg.innerHTML = discoverError
+      ? `${escapeHtml(discoverError)}${renderIssueReportHtml("Discover", "discover", s, discoverError)}`
       : renderIssueReportHtml("Discover", "discover", s, null);
-    if (state.lastSyncedAt) {
+    if (state.lastSyncedAt && !state.pendingBackendPush) {
       discoverEls.lastSynced.style.display = "";
       discoverEls.lastSyncedTime.textContent = formatRelativeTime(state.lastSyncedAt);
     } else {
@@ -795,8 +796,8 @@ export function createBankRenderers(
     if (json === lastCitiJson) return;
     lastCitiJson = json;
     const s = state.status;
-    citiEls.statusDot.className = `status-dot ${STATUS_DOT_CLASS[s] ?? "idle"}`;
-    citiEls.statusText.textContent = STATUS_LABELS[s] ?? "Ready to sync";
+    citiEls.statusDot.className = `status-dot ${getProviderStatusDotClass(state)}`;
+    citiEls.statusText.textContent = getProviderStatusLabel(state);
     const busy = s === "detecting_login" || s === "waiting_for_login" || s === "extracting";
     citiEls.statusSubtitle.textContent =
       busy && state.progressMessage
@@ -806,12 +807,13 @@ export function createBankRenderers(
     citiEls.syncBtn.textContent = s === "done" ? "Sync Again" : busy ? "Syncing..." : "Sync Citi";
     citiEls.cancelBtn.style.display = busy ? "" : "none";
     citiEls.loginPrompt.style.display = s === "waiting_for_login" ? "" : "none";
+    const citiError = state.backendSyncError ?? state.error;
     citiEls.errorMsg.style.display =
-      s === "error" || s === "cancelled" ? "" : "none";
-    citiEls.errorMsg.innerHTML = s === "error"
-      ? `${escapeHtml(state.error ?? "Unknown error")}${renderIssueReportHtml("Citi", "citi", s, state.error)}`
+      citiError || s === "cancelled" ? "" : "none";
+    citiEls.errorMsg.innerHTML = citiError
+      ? `${escapeHtml(citiError)}${renderIssueReportHtml("Citi", "citi", s, citiError)}`
       : renderIssueReportHtml("Citi", "citi", s, null);
-    if (state.lastSyncedAt) {
+    if (state.lastSyncedAt && !state.pendingBackendPush) {
       citiEls.lastSynced.style.display = "";
       citiEls.lastSyncedTime.textContent = formatRelativeTime(state.lastSyncedAt);
     } else {

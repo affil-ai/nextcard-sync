@@ -522,20 +522,17 @@ export function createGenericSyncHandlers(options: GenericSyncDeps) {
       options.stateStore.assertRunActive("atmos", attemptId);
       setProviderProgress("atmos", "Saving Alaska Atmos to nextcard...");
       options.stateStore.updateProvider("atmos", {
-        status: "done",
+        status: "extracting",
         data: fullData,
         error: null,
-        lastSyncedAt: new Date().toISOString(),
-        progressMessage: null,
+        progressMessage: "Saving Alaska Atmos to nextcard...",
       });
 
       options.stateStore.assertRunActive("atmos", attemptId);
-      void options.pushToNextCard("atmos", fullData).then((result) => {
-        if (result.ok) {
-        } else {
-          console.warn("[NextCard SW] Atmos push failed:", result.error);
-        }
-      });
+      const result = await options.pushToNextCard("atmos", fullData);
+      if (!result.ok) {
+        console.warn("[NextCard SW] Atmos push failed:", result.error);
+      }
       options.stateStore.finishSyncRun("atmos", attemptId);
     } catch (error) {
       if (options.stateStore.wasRunCancelled("atmos", attemptId, error)) {
@@ -811,22 +808,19 @@ export function createGenericSyncHandlers(options: GenericSyncDeps) {
           options.stateStore.assertRunActive(providerId, attemptId);
           setProviderProgress(providerId, `Saving ${definition.name} to nextcard...`);
           options.stateStore.updateProvider(providerId, {
-            status: "done",
+            status: "extracting",
             data,
             error: null,
-            lastSyncedAt: new Date().toISOString(),
-            progressMessage: null,
+            progressMessage: `Saving ${definition.name} to nextcard...`,
           });
           options.stateStore.assertRunActive(providerId, attemptId);
-          void options.pushToNextCard(providerId, data).then((result) => {
-            if (result.ok) {
-            } else {
-              console.warn(
-                `[NextCard SW] ${definition.name} push failed:`,
-                result.error,
-              );
-            }
-          });
+          const pushResult = await options.pushToNextCard(providerId, data);
+          if (!pushResult.ok) {
+            console.warn(
+              `[NextCard SW] ${definition.name} push failed:`,
+              pushResult.error,
+            );
+          }
           options.stateStore.finishSyncRun(providerId, attemptId);
         } else {
           options.stateStore.updateProvider(providerId, {
@@ -981,23 +975,20 @@ export function createGenericSyncHandlers(options: GenericSyncDeps) {
         options.stateStore.assertRunActive(providerId, attemptId);
         setProviderProgress(providerId, `Saving ${definition.name} to nextcard...`);
         options.stateStore.updateProvider(providerId, {
-          status: "done",
+          status: "extracting",
           data,
           error: null,
-          lastSyncedAt: new Date().toISOString(),
-          progressMessage: null,
+          progressMessage: `Saving ${definition.name} to nextcard...`,
         });
 
         options.stateStore.assertRunActive(providerId, attemptId);
-        void options.pushToNextCard(providerId, data).then((pushResult) => {
-          if (pushResult.ok) {
-          } else {
-            console.warn(
-              `[NextCard SW] ${definition.name} push failed:`,
-              pushResult.error,
-            );
-          }
-        });
+        const pushResult = await options.pushToNextCard(providerId, data);
+        if (!pushResult.ok) {
+          console.warn(
+            `[NextCard SW] ${definition.name} push failed:`,
+            pushResult.error,
+          );
+        }
         options.stateStore.finishSyncRun(providerId, attemptId);
       } else {
         options.stateStore.updateProvider(providerId, {

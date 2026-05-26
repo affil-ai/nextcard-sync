@@ -60,8 +60,28 @@ function waitForSelector(selector: string, maxWaitMs = 10000): Promise<Element |
 // ── Helpers ──────────────────────────────────────────────────
 
 function parseIntSafe(str: string): number | null {
-  const n = parseInt(str.replace(/,/g, ""), 10);
+  const n = Number.parseInt(str.replace(/,/g, ""), 10);
   return Number.isNaN(n) ? null : n;
+}
+
+function normalizeText(str: string | null | undefined): string {
+  return (str ?? "").replace(/\s+/g, " ").trim();
+}
+
+function getText(selector: string): string | null {
+  const text = normalizeText(document.querySelector(selector)?.textContent);
+  return text || null;
+}
+
+function parseNumberAfterVisibleLabel(label: string): number | null {
+  const text = normalizeText(document.body.innerText);
+  const escapedLabel = label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const match = text.match(new RegExp(`${escapedLabel}\\s+([\\d,]+)`, "i"));
+  return match ? parseIntSafe(match[1]) : null;
+}
+
+function parseMemberNumberFromText(text: string): string | null {
+  return text.match(/Rewards\s+No\.\s*([\d ]+)/i)?.[1]?.replace(/\s+/g, "") ?? null;
 }
 
 // ── Scrape overview page ────────────────────────────────────
@@ -70,39 +90,58 @@ function scrapeOverviewPage(): Partial<AtmosLoyaltyData> {
   const data: Partial<AtmosLoyaltyData> = {};
 
   // Member name
-  const nameEl = document.querySelector(".member-info .display-md");
-  if (nameEl) data.memberName = nameEl.textContent?.trim() ?? null;
+  const memberName = [
+    getText("[aria-label='Member Information'] .display-name"),
+    getText(".member-info .display-sm"),
+    getText(".member-info .display-md"),
+  ].find((text) => text != null && !/^[\d,\s]+$/.test(text));
+  if (memberName) data.memberName = memberName;
 
   // Status level
   const tierRow = document.querySelector(".member-tier-row");
-  if (tierRow) {
-    const tierDiv = tierRow.querySelector("div");
-    if (tierDiv) data.statusLevel = tierDiv.textContent?.trim() ?? null;
-  }
+  const oldTier = normalizeText(tierRow?.querySelector("div")?.textContent);
+  const newTier = Array.from(document.querySelectorAll(".loyalty-header-row .info-row, .guest-information-container .info-row"))
+    .map((el) => normalizeText(el.textContent))
+    .find((text) => /member/i.test(text) && !/rewards\s+no/i.test(text));
+  data.statusLevel = oldTier || newTier || null;
 
   // Member number
-  const numberEl = document.querySelector(".loyalty-number .display-xs");
-  if (numberEl) data.memberNumber = numberEl.textContent?.trim() ?? null;
+  data.memberNumber =
+    getText(".loyalty-number .display-xs")
+    ?? parseMemberNumberFromText(normalizeText(document.querySelector(".loyalty-header-row")?.textContent))
+    ?? parseMemberNumberFromText(normalizeText(document.body.textContent));
 
   // Available points (note: Alaska's typo "availible")
-  const pointsEl = document.querySelector(".availible-points .display-xs");
-  if (pointsEl) data.availablePoints = parseIntSafe(pointsEl.textContent?.trim() ?? "");
+  const availablePointsText =
+    getText("[data-test-id='available-points-section'] .points-value")
+    ?? getText(".available-points-section .points-value")
+    ?? getText(".available-points-container .points-value")
+    ?? getText(".availible-points .display-xs");
+  data.availablePoints = availablePointsText != null
+    ? parseIntSafe(availablePointsText)
+    : parseNumberAfterVisibleLabel("AVAILABLE POINTS");
 
   // Status points — multiple approaches
-  // 1. span.status-points-info
+  // 1. New Atmos overview hero
+  const statusPointsText =
+    getText(".loyalty-info-row .display-md")
+    ?? getText("[data-test-id='account-overview-hero-banner'] .loyalty-info-row .display-md");
+  if (statusPointsText) data.statusPoints = parseIntSafe(statusPointsText);
+
+  // 2. span.status-points-info
   const spEl = document.querySelector("span.status-points-info");
-  if (spEl) {
+  if (data.statusPoints == null && spEl) {
     const m = spEl.textContent?.match(/([\d,]+)\s*\//);
     if (m) data.statusPoints = parseIntSafe(m[1]);
   }
 
-  // 2. borealis-progress-bar attribute
+  // 3. borealis-progress-bar attribute
   if (data.statusPoints == null) {
     const bar = document.querySelector("borealis-progress-bar[currentpoints]");
     if (bar) data.statusPoints = parseIntSafe(bar.getAttribute("currentpoints") ?? "");
   }
 
-  // 3. data-test-id
+  // 4. data-test-id
   if (data.statusPoints == null) {
     const testEl = document.querySelector("[data-test-id='status-points-info']");
     if (testEl?.parentElement) {
@@ -111,7 +150,7 @@ function scrapeOverviewPage(): Partial<AtmosLoyaltyData> {
     }
   }
 
-  // 4. Shadow DOM walk
+  // 5. Shadow DOM walk
   if (data.statusPoints == null) {
     const walkShadows = (root: Document | ShadowRoot): Element | null => {
       const el = root.querySelector("span.status-points-info, [data-test-id='status-points-info']");
@@ -131,7 +170,12 @@ function scrapeOverviewPage(): Partial<AtmosLoyaltyData> {
     }
   }
 
-  // 5. Broad text search
+  // 6. Broad text search
+  if (data.statusPoints == null) {
+    data.statusPoints = parseNumberAfterVisibleLabel("STATUS POINTS EARNED THIS YEAR");
+  }
+
+  // 7. Legacy milestone text search
   if (data.statusPoints == null) {
     for (const el of document.querySelectorAll("span, div, p")) {
       const t = el.textContent?.trim() ?? "";
@@ -332,7 +376,7 @@ async function runOverviewExtraction(attemptId: string) {
 
   updateOverlay("extracting", "atmos");
   updateOverlayProgress("Reading miles and status...");
-  await waitForSelector(".member-info .display-md");
+  await waitForSelector(".member-info, [data-test-id='account-overview-hero-banner'], [data-test-id='available-points-section']");
   await runControl.sleep(2000, attemptId);
 
   runControl.throwIfCancelled(attemptId);

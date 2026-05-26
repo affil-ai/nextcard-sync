@@ -45,6 +45,7 @@ interface ChaseSyncDeps {
     providerId: "chase",
     data: unknown,
   ) => Promise<{ ok: boolean; error?: string }>;
+  refreshOfferUrlCache: () => Promise<void>;
 }
 
 const ULTIMATE_REWARDS_CARD_KEYWORDS = [
@@ -862,20 +863,27 @@ export function createChaseSync(options: ChaseSyncDeps) {
     setChaseProgress("Saving Chase rewards to nextcard...");
     options.stateStore.assertRunActive("chase", attemptId);
     options.stateStore.updateProvider("chase", {
-      status: "done",
+      status: "extracting",
       data: multiCardData,
       error: null,
-      lastSyncedAt: new Date().toISOString(),
-      progressMessage: null,
+      progressMessage: "Saving Chase rewards to nextcard...",
     });
 
     options.stateStore.assertRunActive("chase", attemptId);
-    void options.pushToNextCard("chase", multiCardData).then((pushResult) => {
+    try {
+      const pushResult = await options.pushToNextCard("chase", multiCardData);
       if (pushResult.ok) {
+        try {
+          await options.refreshOfferUrlCache();
+        } catch (error) {
+          console.warn("[NextCard SW] Chase offer cache refresh failed:", error);
+        }
       } else {
         console.warn("[NextCard SW] Chase push failed:", pushResult.error);
       }
-    });
+    } catch (error) {
+      console.warn("[NextCard SW] Chase push failed:", error);
+    }
     options.stateStore.finishSyncRun("chase", attemptId);
   }
 

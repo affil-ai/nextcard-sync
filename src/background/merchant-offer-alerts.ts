@@ -335,6 +335,5 @@ function injectOfferToast(
     });
   }
 
-  setTimeout(dismiss, 8000);
   document.body.appendChild(host);
 }

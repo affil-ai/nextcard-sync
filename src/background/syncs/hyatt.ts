@@ -219,20 +219,17 @@ export function createHyattSync(options: HyattSyncDeps) {
       options.stateStore.assertRunActive("hyatt", attemptId);
       setHyattProgress("Saving Hyatt rewards to nextcard...");
       options.stateStore.updateProvider("hyatt", {
-        status: "done",
+        status: "extracting",
         data: overviewData,
         error: null,
-        lastSyncedAt: new Date().toISOString(),
-        progressMessage: null,
+        progressMessage: "Saving Hyatt rewards to nextcard...",
       });
 
       options.stateStore.assertRunActive("hyatt", attemptId);
-      void options.pushToNextCard("hyatt", overviewData).then((pushResult) => {
-        if (pushResult.ok) {
-        } else {
-          console.warn("[NextCard SW] Hyatt push failed:", pushResult.error);
-        }
-      });
+      const pushResult = await options.pushToNextCard("hyatt", overviewData);
+      if (!pushResult.ok) {
+        console.warn("[NextCard SW] Hyatt push failed:", pushResult.error);
+      }
       options.stateStore.finishSyncRun("hyatt", attemptId);
     } catch (error) {
       if (options.stateStore.wasRunCancelled("hyatt", attemptId, error)) {

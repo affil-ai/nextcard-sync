@@ -106,10 +106,13 @@ function splitOfferMapByStatus(offerMap: OfferUrlCache): { enrolled: OfferUrlCac
   const detected: OfferUrlCache = {};
 
   for (const [host, offers] of Object.entries(offerMap)) {
+    const normalizedHost = normalizeHostname(host);
+    if (!normalizedHost) continue;
+
     for (const offer of offers) {
       const target = offer.status === "detected" ? detected : enrolled;
-      if (!target[host]) target[host] = [];
-      target[host].push(offer);
+      if (!target[normalizedHost]) target[normalizedHost] = [];
+      target[normalizedHost].push(offer);
     }
   }
 

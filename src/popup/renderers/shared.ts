@@ -42,6 +42,18 @@ export const STATUS_DOT_CLASS: Record<SyncStatus, string> = {
   error: "error",
 };
 
+export function getProviderStatusDotClass(state: ProviderSyncState) {
+  if (state.pendingBackendPush || state.backendSyncStatus === "partial") return "error";
+  return STATUS_DOT_CLASS[state.status];
+}
+
+export function getProviderStatusLabel(state: ProviderSyncState) {
+  if (state.backendSyncStatus === "partial") return "Partially saved";
+  if (state.backendSyncStatus === "blocked") return "Save blocked";
+  if (state.backendSyncStatus === "failed") return "Save failed";
+  return STATUS_LABELS[state.status];
+}
+
 // Shared modal wiring keeps every detail renderer using the same delete confirmation flow.
 export function showConfirmDelete(providerName: string) {
   return new Promise<boolean>((resolve) => {
@@ -246,8 +258,8 @@ export function renderAirline<T extends Record<string, unknown>>(
   lastJson.value = json;
 
   const { status, data, error, lastSyncedAt, progressMessage } = state;
-  els.statusDot.className = `status-dot ${STATUS_DOT_CLASS[status]}`;
-  els.statusText.textContent = STATUS_LABELS[status];
+  els.statusDot.className = `status-dot ${getProviderStatusDotClass(state)}`;
+  els.statusText.textContent = getProviderStatusLabel(state);
 
   const isBusy =
     status === "extracting"
@@ -265,7 +277,7 @@ export function renderAirline<T extends Record<string, unknown>>(
   els.clearBtn.style.display = data && !isBusy ? "block" : "none";
   els.loginPrompt.classList.toggle("visible", status === "waiting_for_login");
 
-  const relative = formatRelativeTime(lastSyncedAt);
+  const relative = state.pendingBackendPush ? null : formatRelativeTime(lastSyncedAt);
   if (relative) {
     els.lastSynced.textContent = `Last synced ${relative}`;
     els.lastSynced.style.display = "block";

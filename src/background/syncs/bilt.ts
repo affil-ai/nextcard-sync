@@ -220,20 +220,17 @@ export function createBiltSync(options: BiltSyncDeps) {
       options.stateStore.assertRunActive("bilt", attemptId);
       setBiltProgress("Saving Bilt rewards to nextcard...");
       options.stateStore.updateProvider("bilt", {
-        status: "done",
+        status: "extracting",
         data: accountData,
         error: null,
-        lastSyncedAt: new Date().toISOString(),
-        progressMessage: null,
+        progressMessage: "Saving Bilt rewards to nextcard...",
       });
 
       options.stateStore.assertRunActive("bilt", attemptId);
-      void options.pushToNextCard("bilt", accountData).then((pushResult) => {
-        if (pushResult.ok) {
-        } else {
-          console.warn("[NextCard SW] Bilt push failed:", pushResult.error);
-        }
-      });
+      const pushResult = await options.pushToNextCard("bilt", accountData);
+      if (!pushResult.ok) {
+        console.warn("[NextCard SW] Bilt push failed:", pushResult.error);
+      }
       options.stateStore.finishSyncRun("bilt", attemptId);
     } catch (error) {
       if (options.stateStore.wasRunCancelled("bilt", attemptId, error)) {

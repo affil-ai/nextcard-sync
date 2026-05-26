@@ -5,6 +5,7 @@ import type {
   ProviderStateMap,
   ProviderSyncState,
   SyncStatus,
+  BackendSyncStatus,
 } from "../lib/types";
 import {
   aaProviderDataSchema,
@@ -46,6 +47,10 @@ function emptyProviderState<T>(): ProviderSyncState<T> {
     error: null,
     lastSyncedAt: null,
     progressMessage: null,
+    backendSyncStatus: null,
+    backendSyncError: null,
+    pendingBackendPush: false,
+    lastBackendPushAttemptAt: null,
   };
 }
 
@@ -65,6 +70,15 @@ function isSyncStatus(value: unknown): value is SyncStatus {
   );
 }
 
+function isBackendSyncStatus(value: unknown): value is BackendSyncStatus {
+  return (
+    value === "saved"
+    || value === "partial"
+    || value === "blocked"
+    || value === "failed"
+  );
+}
+
 function normalizeProviderState<T>(
   schema: { safeParse: (value: unknown) => { success: true; data: T } | { success: false } },
   value: unknown,
@@ -81,6 +95,16 @@ function normalizeProviderState<T>(
     typeof value.lastSyncedAt === "string" ? value.lastSyncedAt : null;
   const progressMessage =
     typeof value.progressMessage === "string" ? value.progressMessage : null;
+  const backendSyncStatus = isBackendSyncStatus(value.backendSyncStatus)
+    ? value.backendSyncStatus
+    : null;
+  const backendSyncError =
+    typeof value.backendSyncError === "string" ? value.backendSyncError : null;
+  const pendingBackendPush = Boolean(value.pendingBackendPush);
+  const lastBackendPushAttemptAt =
+    typeof value.lastBackendPushAttemptAt === "string"
+      ? value.lastBackendPushAttemptAt
+      : null;
 
   const parsed = "data" in value ? schema.safeParse(value.data) : { success: false as const };
 
@@ -90,6 +114,10 @@ function normalizeProviderState<T>(
     error,
     lastSyncedAt,
     progressMessage,
+    backendSyncStatus,
+    backendSyncError,
+    pendingBackendPush,
+    lastBackendPushAttemptAt,
   };
 }
 

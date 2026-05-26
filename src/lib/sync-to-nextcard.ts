@@ -9,7 +9,7 @@
  *   - Credit card issuers (Chase/Amex/CapitalOne) → StandardizedIssuerData
  */
 
-import type { ProviderId, MarriottLoyaltyData, AtmosLoyaltyData, ChaseURData, AALoyaltyData, DeltaLoyaltyData, UnitedLoyaltyData, SouthwestLoyaltyData, IHGLoyaltyData, HyattLoyaltyData, AmexLoyaltyData, CapitalOneLoyaltyData, HiltonLoyaltyData, FrontierLoyaltyData, BiltLoyaltyData, DiscoverLoyaltyData, CitiLoyaltyData } from "./types";
+import type { ProviderId, MarriottLoyaltyData, AtmosLoyaltyData, ChaseURData, AALoyaltyData, DeltaLoyaltyData, UnitedLoyaltyData, SouthwestLoyaltyData, IHGLoyaltyData, HyattLoyaltyData, AmexLoyaltyData, CapitalOneLoyaltyData, HiltonLoyaltyData, FrontierLoyaltyData, BiltLoyaltyData, DiscoverLoyaltyData, CitiLoyaltyData, PushToNextCardResult } from "./types";
 import { extractLastFourDigits } from "./card-digits";
 import {
   atmosProviderDataSchema,
@@ -658,7 +658,7 @@ export async function pullFromNextCard(): Promise<{ ok: boolean; accounts?: Pull
 export async function pushToNextCard(
   provider: ProviderId,
   data: AnyProviderData
-): Promise<{ ok: boolean; error?: string }> {
+): Promise<PushToNextCardResult> {
   const auth = await getAuth();
   if (!auth) {
     return { ok: false, error: "Not signed in to NextCard" };
@@ -690,12 +690,27 @@ export async function pushToNextCard(
       body: JSON.stringify(body),
     });
 
+    const result = await response.json().catch(() => ({}));
+    const metadata = {
+      isLimited:
+        typeof result.isLimited === "boolean" ? result.isLimited : undefined,
+      syncedRewardsPrograms: Array.isArray(result.syncedRewardsPrograms)
+        ? result.syncedRewardsPrograms
+        : undefined,
+      skippedRewardsPrograms: Array.isArray(result.skippedRewardsPrograms)
+        ? result.skippedRewardsPrograms
+        : undefined,
+    };
+
     if (!response.ok) {
-      const result = await response.json().catch(() => ({}));
-      return { ok: false, error: result.error ?? `HTTP ${response.status}` };
+      return {
+        ok: false,
+        error: typeof result.error === "string" ? result.error : `HTTP ${response.status}`,
+        ...metadata,
+      };
     }
 
-    return { ok: true };
+    return { ok: true, ...metadata };
   } catch (err) {
     return { ok: false, error: err instanceof Error ? err.message : "Network error" };
   }

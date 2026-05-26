@@ -177,6 +177,10 @@ export function createMessageRouter(options: {
             error: null,
             lastSyncedAt: null,
             progressMessage: null,
+            backendSyncStatus: null,
+            backendSyncError: null,
+            pendingBackendPush: false,
+            lastBackendPushAttemptAt: null,
           });
           options.stateStore.setTabId(providerId, null);
           void options.deleteFromNextCard(providerId).then((result) => {

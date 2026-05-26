@@ -27,6 +27,33 @@ const tabBar = document.getElementById("tabBar");
 const syncTabPanel = document.getElementById("syncTabPanel");
 const toolsTabPanel = document.getElementById("toolsTabPanel");
 
+type OfferToolCard = {
+  id: string;
+  name: string;
+  lastDigits: string | null;
+};
+
+function pluralize(count: number, singular: string, plural = `${singular}s`) {
+  return `${count} ${count === 1 ? singular : plural}`;
+}
+
+function formatCardDisplayName(card: OfferToolCard | undefined) {
+  if (!card) return "this card";
+  return `${card.name}${card.lastDigits ? ` ···· ${card.lastDigits}` : ""}`;
+}
+
+function formatAvailableToActivate(count: number) {
+  return `${count} available to activate`;
+}
+
+function escapeHtml(value: string) {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
 if (tabBar) {
   tabBar.addEventListener("click", (e) => {
     const btn = (e.target as HTMLElement).closest("[data-tab]") as HTMLElement | null;
@@ -152,8 +179,8 @@ function initAmexOffers() {
       if (amexCards.length > 0 && cardSelect && cardSelectWrap) {
         cardSelect.innerHTML = amexCards.map((c) => {
           const n = amexOfferCounts[c.id] ?? 0;
-          const suffix = n > 0 ? ` (${n} offers)` : "";
-          return `<option value="${c.id}" data-locale="${c.locale}">${c.name}${suffix}</option>`;
+          const suffix = n > 0 ? ` (${formatAvailableToActivate(n)})` : "";
+          return `<option value="${escapeHtml(c.id)}" data-locale="${escapeHtml(c.locale)}">${escapeHtml(`${formatCardDisplayName(c)}${suffix}`)}</option>`;
         }).join("");
         cardSelectWrap.style.display = "";
       }
@@ -192,8 +219,8 @@ function initAmexOffers() {
     if (!offerCountEl) return;
     const count = amexOfferCounts[selectedCardId] ?? 0;
     offerCountEl.textContent = count > 0
-      ? `${count} eligible offer${count === 1 ? "" : "s"}`
-      : "No unenrolled offers for this card";
+      ? `${formatAvailableToActivate(count)} on this card`
+      : "No new offers to activate for this card";
   }
 
   cardSelect?.addEventListener("change", () => {
@@ -248,16 +275,17 @@ function initAmexOffers() {
         if (progressDetail) progressDetail.textContent = round > 1 ? `Round ${round}: checking for new offers...` : "Fetching offers...";
       } else if (msg.status === "checking_new") {
         if (progressBar) progressBar.style.width = "100%";
-        if (progressDetail) progressDetail.textContent = `${added} added so far — checking for new offers...`;
+        if (progressDetail) progressDetail.textContent = `${added} activated so far - checking for new offers...`;
       } else {
         if (progressBar) progressBar.style.width = `${pct}%`;
-        if (progressDetail) progressDetail.textContent = `${added} of ${total} added`;
+        if (progressDetail) progressDetail.textContent = `${added} of ${total} activated`;
       }
     }
     if (msg.type === "AMEX_OFFERS_COMPLETE") {
+      const cardLabel = formatCardDisplayName(amexCards.find((c) => c.id === selectedCardId));
       const parts: string[] = [];
-      if (msg.added > 0) parts.push(`${msg.added} offer${msg.added === 1 ? "" : "s"} added`);
-      if (msg.added === 0) parts.push("No new offers to add");
+      if (msg.added > 0) parts.push(`${pluralize(msg.added, "offer")} activated for ${cardLabel}`);
+      if (msg.added === 0) parts.push(`No new offers to activate for ${cardLabel}`);
       if (msg.rounds > 1) parts.push(`${msg.rounds} rounds`);
       if (summaryEl) summaryEl.textContent = parts.join(" · ");
       showState("Done");
@@ -363,8 +391,8 @@ function initChaseOffers() {
       if (chaseCards.length > 1 && cardSelect && cardSelectWrap) {
         cardSelect.innerHTML = chaseCards.map((c) => {
           const n = chaseOfferCounts[c.id] ?? 0;
-          const suffix = n > 0 ? ` (${n} offers)` : "";
-          return `<option value="${c.id}">${c.name}${c.lastDigits ? ` ···· ${c.lastDigits}` : ""}${suffix}</option>`;
+          const suffix = n > 0 ? ` (${formatAvailableToActivate(n)})` : "";
+          return `<option value="${escapeHtml(c.id)}">${escapeHtml(`${formatCardDisplayName(c)}${suffix}`)}</option>`;
         }).join("");
         cardSelectWrap.style.display = "";
       }
@@ -401,8 +429,8 @@ function initChaseOffers() {
     if (!offerCountEl) return;
     const count = chaseOfferCounts[selectedCardId] ?? 0;
     offerCountEl.textContent = count > 0
-      ? `${count} eligible offer${count === 1 ? "" : "s"}`
-      : "No unenrolled offers for this card";
+      ? `${formatAvailableToActivate(count)} on this card`
+      : "No new offers to activate for this card";
   }
 
   cardSelect?.addEventListener("change", () => {
@@ -442,12 +470,13 @@ function initChaseOffers() {
       const total = msg.total ?? 0;
       const pct = total > 0 ? Math.min(100, Math.round((added / total) * 100)) : 0;
       if (progressBar) progressBar.style.width = `${pct}%`;
-      if (progressDetail) progressDetail.textContent = `${added} added`;
+      if (progressDetail) progressDetail.textContent = total > 0 ? `${added} of ${total} activated` : `${added} activated`;
     }
     if (msg.type === "CHASE_OFFERS_COMPLETE") {
+      const cardLabel = formatCardDisplayName(chaseCards.find((c) => c.id === selectedCardId));
       const parts: string[] = [];
-      if (msg.added > 0) parts.push(`${msg.added} offer${msg.added === 1 ? "" : "s"} added`);
-      if (msg.added === 0) parts.push("No new offers to add");
+      if (msg.added > 0) parts.push(`${pluralize(msg.added, "offer")} activated for ${cardLabel}`);
+      if (msg.added === 0) parts.push(`No new offers to activate for ${cardLabel}`);
       if (summaryEl) summaryEl.textContent = parts.join(" · ");
       showState("Done");
     }
@@ -549,8 +578,8 @@ function initCitiOffers() {
       if (citiCards.length > 1 && cardSelect && cardSelectWrap) {
         cardSelect.innerHTML = citiCards.map((c) => {
           const n = citiOfferCounts[c.id] ?? 0;
-          const suffix = n > 0 ? ` (${n} offers)` : "";
-          return `<option value="${c.id}">${c.name}${c.lastDigits ? ` ···· ${c.lastDigits}` : ""}${suffix}</option>`;
+          const suffix = n > 0 ? ` (${formatAvailableToActivate(n)})` : "";
+          return `<option value="${escapeHtml(c.id)}">${escapeHtml(`${formatCardDisplayName(c)}${suffix}`)}</option>`;
         }).join("");
         cardSelectWrap.style.display = "";
       }
@@ -583,8 +612,8 @@ function initCitiOffers() {
     if (!offerCountEl) return;
     const count = citiOfferCounts[selectedAccountId] ?? 0;
     offerCountEl.textContent = count > 0
-      ? `${count} eligible offer${count === 1 ? "" : "s"}`
-      : "No unenrolled offers for this card";
+      ? `${formatAvailableToActivate(count)} on this card`
+      : "No new offers to activate for this card";
   }
 
   cardSelect?.addEventListener("change", () => {
@@ -622,12 +651,13 @@ function initCitiOffers() {
       const total = msg.total ?? 0;
       const pct = total > 0 ? Math.min(100, Math.round((added / total) * 100)) : 0;
       if (progressBar) progressBar.style.width = `${pct}%`;
-      if (progressDetail) progressDetail.textContent = `${added} added`;
+      if (progressDetail) progressDetail.textContent = total > 0 ? `${added} of ${total} activated` : `${added} activated`;
     }
     if (msg.type === "CITI_OFFERS_COMPLETE") {
+      const cardLabel = formatCardDisplayName(citiCards.find((c) => c.id === selectedAccountId));
       const parts: string[] = [];
-      if (msg.added > 0) parts.push(`${msg.added} offer${msg.added === 1 ? "" : "s"} added`);
-      if (msg.added === 0) parts.push("No new offers to add");
+      if (msg.added > 0) parts.push(`${pluralize(msg.added, "offer")} activated for ${cardLabel}`);
+      if (msg.added === 0) parts.push(`No new offers to activate for ${cardLabel}`);
       if (summaryEl) summaryEl.textContent = parts.join(" · ");
       showState("Done");
     }
@@ -671,14 +701,6 @@ function initCapitalOneOffers() {
     for (const [key, el] of Object.entries(states)) {
       if (el) el.style.display = key === state ? "" : "none";
     }
-  }
-
-  function escapeHtml(value: string) {
-    return value
-      .replace(/&/g, "&amp;")
-      .replace(/</g, "&lt;")
-      .replace(/>/g, "&gt;")
-      .replace(/"/g, "&quot;");
   }
 
   function waitForCapitalOneTabLoad(tabId: number, callback: (tabId: number) => void) {
@@ -726,7 +748,7 @@ function initCapitalOneOffers() {
     const total = totalOfferCount();
     const cardCount = capitalOneCards.length;
     offerCountEl.textContent = total > 0
-      ? `${total} offer${total === 1 ? "" : "s"} across ${cardCount} card${cardCount === 1 ? "" : "s"}`
+      ? `${pluralize(total, "offer")} found across ${pluralize(cardCount, "card")}`
       : "No shopping offers found";
   }
 
@@ -735,7 +757,7 @@ function initCapitalOneOffers() {
     const total = totalOfferCount();
     const cardCount = capitalOneCards.length;
     summaryEl.textContent = total > 0
-      ? `${total} offer${total === 1 ? "" : "s"} saved across ${cardCount} card${cardCount === 1 ? "" : "s"}`
+      ? `${pluralize(total, "offer")} saved across ${pluralize(cardCount, "card")}`
       : "No shopping offers found";
   }
 
@@ -773,8 +795,8 @@ function initCapitalOneOffers() {
       if (capitalOneCards.length > 1 && cardSelect && cardSelectWrap) {
         cardSelect.innerHTML = capitalOneCards.map((card) => {
           const count = capitalOneOfferCounts[card.id] ?? 0;
-          const suffix = count > 0 ? ` (${count} offers)` : "";
-          const label = `${card.name}${card.lastDigits ? ` ···· ${card.lastDigits}` : ""}${suffix}`;
+          const suffix = count > 0 ? ` (${pluralize(count, "offer")} found)` : "";
+          const label = `${formatCardDisplayName(card)}${suffix}`;
           return `<option value="${escapeHtml(card.id)}">${escapeHtml(label)}</option>`;
         }).join("");
         cardSelectWrap.style.display = "";
@@ -878,12 +900,12 @@ function initCapitalOneOffers() {
       const total = msg.total ?? totalOfferCount();
       const pct = total > 0 ? Math.min(100, Math.round((synced / total) * 100)) : 0;
       if (progressBar) progressBar.style.width = `${pct}%`;
-      if (progressDetail) progressDetail.textContent = `${synced} synced`;
+      if (progressDetail) progressDetail.textContent = total > 0 ? `${synced} of ${total} synced` : `${synced} synced`;
     }
     if (msg.type === "CAPITALONE_OFFERS_COMPLETE") {
       const synced = msg.synced ?? 0;
       if (summaryEl) summaryEl.textContent = synced > 0
-        ? `${synced} offer${synced === 1 ? "" : "s"} synced`
+        ? `${pluralize(synced, "offer")} synced`
         : "No shopping offers found";
       showState("Done");
     }

@@ -9,11 +9,11 @@ import type {
 import {
   escapeHtml,
   formatRelativeTime,
+  getProviderStatusDotClass,
+  getProviderStatusLabel,
   renderIssueReportHtml,
   renderValue,
   showConfirmDelete,
-  STATUS_DOT_CLASS,
-  STATUS_LABELS,
   STATUS_SUBTITLES,
 } from "./shared";
 
@@ -137,8 +137,8 @@ export function createHotelRenderers(
     lastMarriottJson = json;
     const { status, data, error, lastSyncedAt, progressMessage } = state;
 
-    marriottEls.statusDot.className = `status-dot ${STATUS_DOT_CLASS[status]}`;
-    marriottEls.statusText.textContent = STATUS_LABELS[status];
+    marriottEls.statusDot.className = `status-dot ${getProviderStatusDotClass(state)}`;
+    marriottEls.statusText.textContent = getProviderStatusLabel(state);
 
     const isBusy =
       status === "extracting"
@@ -156,7 +156,7 @@ export function createHotelRenderers(
     marriottEls.clearBtn.style.display = data && !isBusy ? "block" : "none";
     marriottEls.loginPrompt.classList.toggle("visible", status === "waiting_for_login");
 
-    const relative = formatRelativeTime(lastSyncedAt);
+    const relative = state.pendingBackendPush ? null : formatRelativeTime(lastSyncedAt);
     if (relative) {
       marriottEls.lastSynced.textContent = `Last synced ${relative}`;
       marriottEls.lastSynced.style.display = "block";
@@ -264,8 +264,8 @@ export function createHotelRenderers(
     lastIhgJson = json;
     const { status, data, error, lastSyncedAt, progressMessage } = state;
 
-    ihgEls.statusDot.className = `status-dot ${STATUS_DOT_CLASS[status]}`;
-    ihgEls.statusText.textContent = STATUS_LABELS[status];
+    ihgEls.statusDot.className = `status-dot ${getProviderStatusDotClass(state)}`;
+    ihgEls.statusText.textContent = getProviderStatusLabel(state);
 
     const isBusy =
       status === "extracting"
@@ -283,7 +283,7 @@ export function createHotelRenderers(
     ihgEls.clearBtn.style.display = data && !isBusy ? "block" : "none";
     ihgEls.loginPrompt.classList.toggle("visible", status === "waiting_for_login");
 
-    const relative = formatRelativeTime(lastSyncedAt);
+    const relative = state.pendingBackendPush ? null : formatRelativeTime(lastSyncedAt);
     if (relative) {
       ihgEls.lastSynced.textContent = `Last synced ${relative}`;
       ihgEls.lastSynced.style.display = "block";
@@ -385,8 +385,8 @@ export function createHotelRenderers(
     lastHyattJson = json;
     const { status, data, error, lastSyncedAt, progressMessage } = state;
 
-    hyattEls.statusDot.className = `status-dot ${STATUS_DOT_CLASS[status]}`;
-    hyattEls.statusText.textContent = STATUS_LABELS[status];
+    hyattEls.statusDot.className = `status-dot ${getProviderStatusDotClass(state)}`;
+    hyattEls.statusText.textContent = getProviderStatusLabel(state);
 
     const isBusy =
       status === "extracting"
@@ -404,7 +404,7 @@ export function createHotelRenderers(
     hyattEls.clearBtn.style.display = data && !isBusy ? "block" : "none";
     hyattEls.loginPrompt.classList.toggle("visible", status === "waiting_for_login");
 
-    const relative = formatRelativeTime(lastSyncedAt);
+    const relative = state.pendingBackendPush ? null : formatRelativeTime(lastSyncedAt);
     if (relative) {
       hyattEls.lastSynced.textContent = `Last synced ${relative}`;
       hyattEls.lastSynced.style.display = "block";
@@ -523,8 +523,8 @@ export function createHotelRenderers(
     lastHiltonJson = json;
     const { status, data, error, lastSyncedAt, progressMessage } = state;
 
-    hiltonEls.statusDot.className = `status-dot ${STATUS_DOT_CLASS[status]}`;
-    hiltonEls.statusText.textContent = STATUS_LABELS[status];
+    hiltonEls.statusDot.className = `status-dot ${getProviderStatusDotClass(state)}`;
+    hiltonEls.statusText.textContent = getProviderStatusLabel(state);
 
     const isBusy =
       status === "extracting"
@@ -542,7 +542,7 @@ export function createHotelRenderers(
     hiltonEls.clearBtn.style.display = data && !isBusy ? "block" : "none";
     hiltonEls.loginPrompt.classList.toggle("visible", status === "waiting_for_login");
 
-    const relative = formatRelativeTime(lastSyncedAt);
+    const relative = state.pendingBackendPush ? null : formatRelativeTime(lastSyncedAt);
     if (relative) {
       hiltonEls.lastSynced.textContent = `Last synced ${relative}`;
       hiltonEls.lastSynced.style.display = "block";

@@ -85,12 +85,14 @@ export function createHomeRenderer(options: {
           || state?.status === "waiting_for_login";
         const dotClass = isSyncing
           ? "syncing"
-          : state?.status === "done"
+          : state?.pendingBackendPush
+            ? "error"
+            : state?.status === "done"
             ? "done"
             : state?.status === "error"
               ? "error"
               : "idle";
-        const lastSync = state?.lastSyncedAt
+        const lastSync = state?.lastSyncedAt && !state.pendingBackendPush
           ? formatRelativeTime(state.lastSyncedAt)
           : null;
 

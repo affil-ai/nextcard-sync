@@ -22,6 +22,21 @@ import type {
 export type ProviderId = "marriott" | "atmos" | "chase" | "aa" | "delta" | "united" | "southwest" | "ihg" | "hyatt" | "amex" | "capitalone" | "hilton" | "frontier" | "bilt" | "discover" | "citi";
 
 export type SyncStatus = "idle" | "detecting_login" | "waiting_for_login" | "extracting" | "done" | "cancelled" | "error";
+export type BackendSyncStatus = "saved" | "partial" | "blocked" | "failed";
+
+export interface RewardsProgramSyncSummary {
+  id: string;
+  slug: string;
+  name: string;
+}
+
+export interface PushToNextCardResult {
+  ok: boolean;
+  error?: string;
+  isLimited?: boolean;
+  syncedRewardsPrograms?: RewardsProgramSyncSummary[];
+  skippedRewardsPrograms?: RewardsProgramSyncSummary[];
+}
 
 export type LoginState = "logged_in" | "logged_out" | "mfa_challenge" | "unknown";
 
@@ -31,6 +46,10 @@ export interface ProviderSyncState<T = unknown> {
   error: string | null;
   lastSyncedAt: string | null;
   progressMessage: string | null;
+  backendSyncStatus?: BackendSyncStatus | null;
+  backendSyncError?: string | null;
+  pendingBackendPush?: boolean;
+  lastBackendPushAttemptAt?: string | null;
 }
 
 // ── Provider data types ─────────────────────────────────────

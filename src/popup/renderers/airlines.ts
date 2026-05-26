@@ -14,12 +14,12 @@ import {
   formatRelativeTime,
   formatTerms,
   getAirlineEls,
+  getProviderStatusDotClass,
+  getProviderStatusLabel,
   renderAirline,
   renderIssueReportHtml,
   renderValue,
   showConfirmDelete,
-  STATUS_DOT_CLASS,
-  STATUS_LABELS,
   STATUS_SUBTITLES,
   wireAirlineEvents,
 } from "./shared";
@@ -59,8 +59,8 @@ export function createAirlineRenderers(
     lastAtmosJson = json;
     const { status, data, error, lastSyncedAt, progressMessage } = state;
 
-    atmosEls.statusDot.className = `status-dot ${STATUS_DOT_CLASS[status]}`;
-    atmosEls.statusText.textContent = STATUS_LABELS[status];
+    atmosEls.statusDot.className = `status-dot ${getProviderStatusDotClass(state)}`;
+    atmosEls.statusText.textContent = getProviderStatusLabel(state);
 
     const isBusy =
       status === "extracting"
@@ -78,7 +78,7 @@ export function createAirlineRenderers(
     atmosEls.clearBtn.style.display = data && !isBusy ? "block" : "none";
     atmosEls.loginPrompt.classList.toggle("visible", status === "waiting_for_login");
 
-    const relative = formatRelativeTime(lastSyncedAt);
+    const relative = state.pendingBackendPush ? null : formatRelativeTime(lastSyncedAt);
     if (relative) {
       atmosEls.lastSynced.textContent = `Last synced ${relative}`;
       atmosEls.lastSynced.style.display = "block";

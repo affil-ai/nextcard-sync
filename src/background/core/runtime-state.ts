@@ -18,6 +18,10 @@ function defaultState(): RuntimeState {
     error: null,
     lastSyncedAt: null,
     progressMessage: null,
+    backendSyncStatus: null,
+    backendSyncError: null,
+    pendingBackendPush: false,
+    lastBackendPushAttemptAt: null,
     tabId: null,
   };
 }
@@ -49,17 +53,32 @@ export function createRuntimeStateStore() {
   const runRegistry = createSyncRunRegistry();
   const runCancelListeners = new Map<string, Set<() => void>>();
 
-  function hydratePersistedState() {
-    for (const providerId of Object.keys(states) as ProviderId[]) {
-      chrome.storage.local.get(`provider_${providerId}`, (result) => {
+  async function hydratePersistedState() {
+    await Promise.all(
+      (Object.keys(states) as ProviderId[]).map(async (providerId) => {
+        const result = await chrome.storage.local.get(`provider_${providerId}`);
         const savedState = result[`provider_${providerId}`];
-        if (!savedState?.lastSyncedAt) return;
+        if (!savedState?.lastSyncedAt && !savedState?.pendingBackendPush) return;
 
         states[providerId].lastSyncedAt = savedState.lastSyncedAt;
         states[providerId].data = savedState.data ?? null;
-        states[providerId].status = "done";
-      });
-    }
+        states[providerId].backendSyncStatus = savedState.backendSyncStatus ?? null;
+        states[providerId].backendSyncError = savedState.backendSyncError ?? null;
+        states[providerId].pendingBackendPush = Boolean(savedState.pendingBackendPush);
+        states[providerId].lastBackendPushAttemptAt =
+          typeof savedState.lastBackendPushAttemptAt === "string"
+            ? savedState.lastBackendPushAttemptAt
+            : null;
+        states[providerId].status = savedState.pendingBackendPush
+          ? savedState.status === "done"
+            ? "done"
+            : "error"
+          : "done";
+        states[providerId].error = savedState.pendingBackendPush
+          ? savedState.backendSyncError ?? savedState.error ?? null
+          : savedState.error ?? null;
+      })
+    );
   }
 
   function isProviderId(value: unknown): value is ProviderId {
@@ -77,9 +96,27 @@ export function createRuntimeStateStore() {
     ) {
       states[providerId].progressMessage = null;
     }
-    const { status, data, error, lastSyncedAt } = states[providerId];
+    const {
+      status,
+      data,
+      error,
+      lastSyncedAt,
+      backendSyncStatus,
+      backendSyncError,
+      pendingBackendPush,
+      lastBackendPushAttemptAt,
+    } = states[providerId];
     chrome.storage.local.set({
-      [`provider_${providerId}`]: { status, data, error, lastSyncedAt },
+      [`provider_${providerId}`]: {
+        status,
+        data,
+        error,
+        lastSyncedAt,
+        backendSyncStatus,
+        backendSyncError,
+        pendingBackendPush,
+        lastBackendPushAttemptAt,
+      },
     });
   }
 
@@ -105,8 +142,28 @@ export function createRuntimeStateStore() {
   }
 
   function getPublicState(providerId: ProviderId) {
-    const { status, data, error, lastSyncedAt, progressMessage } = states[providerId];
-    return { status, data, error, lastSyncedAt, progressMessage };
+    const {
+      status,
+      data,
+      error,
+      lastSyncedAt,
+      progressMessage,
+      backendSyncStatus,
+      backendSyncError,
+      pendingBackendPush,
+      lastBackendPushAttemptAt,
+    } = states[providerId];
+    return {
+      status,
+      data,
+      error,
+      lastSyncedAt,
+      progressMessage,
+      backendSyncStatus,
+      backendSyncError,
+      pendingBackendPush,
+      lastBackendPushAttemptAt,
+    };
   }
 
   function getAllPublicStates() {

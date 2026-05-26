@@ -343,20 +343,17 @@ export function createCapitalOneSync(options: CapitalOneSyncDeps) {
     options.stateStore.assertRunActive("capitalone", attemptId);
     setCapitalOneProgress("Saving Capital One rewards to nextcard...");
     options.stateStore.updateProvider("capitalone", {
-      status: "done",
+      status: "extracting",
       data: multiCardData,
       error: null,
-      lastSyncedAt: new Date().toISOString(),
-      progressMessage: null,
+      progressMessage: "Saving Capital One rewards to nextcard...",
     });
 
     options.stateStore.assertRunActive("capitalone", attemptId);
-    void options.pushToNextCard("capitalone", multiCardData).then((pushResult) => {
-      if (pushResult.ok) {
-      } else {
-        console.warn("[NextCard SW] CapitalOne push failed:", pushResult.error);
-      }
-    });
+    const pushResult = await options.pushToNextCard("capitalone", multiCardData);
+    if (!pushResult.ok) {
+      console.warn("[NextCard SW] CapitalOne push failed:", pushResult.error);
+    }
     options.stateStore.finishSyncRun("capitalone", attemptId);
   }
 

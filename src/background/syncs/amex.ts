@@ -274,10 +274,10 @@ export function createAmexSync(options: AmexSyncDeps) {
 
       options.stateStore.assertRunActive("amex", attemptId);
       options.stateStore.updateProvider("amex", {
-        status: "done",
+        status: "extracting",
         data: multiCardData,
         error: null,
-        lastSyncedAt: new Date().toISOString(),
+        progressMessage: "Saving American Express rewards to nextcard...",
       });
 
       void sendRunMessageToTab(
@@ -289,12 +289,10 @@ export function createAmexSync(options: AmexSyncDeps) {
       ).catch(() => {});
 
       options.stateStore.assertRunActive("amex", attemptId);
-      void options.pushToNextCard("amex", multiCardData).then((result) => {
-        if (result.ok) {
-        } else {
-          console.warn("[NextCard SW] Amex push failed:", result.error);
-        }
-      });
+      const result = await options.pushToNextCard("amex", multiCardData);
+      if (!result.ok) {
+        console.warn("[NextCard SW] Amex push failed:", result.error);
+      }
       options.stateStore.finishSyncRun("amex", attemptId);
     } catch (error) {
       if (options.stateStore.wasRunCancelled("amex", attemptId, error)) {
