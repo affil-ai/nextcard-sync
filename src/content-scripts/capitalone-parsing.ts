@@ -102,6 +102,17 @@ function parseWholeDollarAmount(value: string) {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
+function parseCurrencyAmount(value: string) {
+  const match = value.match(/\$?\s*(\d[\d,]*)(?:\.(\d{1,2}))?/);
+  if (!match) return null;
+
+  const whole = Number.parseInt(match[1].replace(/,/g, ""), 10);
+  if (!Number.isFinite(whole)) return null;
+
+  const cents = match[2] ? Number.parseInt(match[2].padEnd(2, "0"), 10) : 0;
+  return Number.parseFloat(`${whole}.${String(cents).padStart(2, "0")}`);
+}
+
 function parseCentAmount(value: string) {
   const match = value.match(/\b(\d{1,2})\b/);
   if (!match) return null;
@@ -113,6 +124,7 @@ function parseCentAmount(value: string) {
 export function normalizeCapitalOneRewardsLabel(label: string | null | undefined) {
   const normalized = compactWhitespace(label).toLowerCase();
   if (!normalized) return null;
+  if (/^[\s$.,\d]+$/.test(normalized)) return null;
   if (normalized.includes("cash")) return "Cash Back";
   if (normalized.includes("mile")) return "Miles";
   if (normalized.includes("point")) return "Points";
@@ -125,10 +137,13 @@ export function parseCapitalOneRewardsSummary(input: {
   centText?: string | null;
   labelText?: string | null;
 }) {
-  const label = normalizeCapitalOneRewardsLabel(input.labelText);
   const rawBalanceText = compactWhitespace(input.balanceText);
   const rawDollarText = compactWhitespace(input.dollarText);
   const rawCentText = compactWhitespace(input.centText);
+  const label =
+    normalizeCapitalOneRewardsLabel(input.labelText) ??
+    normalizeCapitalOneRewardsLabel(rawBalanceText) ??
+    (rawBalanceText.includes("$") || rawDollarText.includes("$") ? "Cash Back" : null);
 
   const wholeDollars = parseWholeDollarAmount(rawDollarText || rawBalanceText);
   if (wholeDollars == null) {
@@ -145,7 +160,8 @@ export function parseCapitalOneRewardsSummary(input: {
     return { amount: wholeDollars, rewardsLabel: label };
   }
 
-  const cents = parseCentAmount(rawCentText) ?? 0;
-  const amount = Number.parseFloat(`${wholeDollars}.${String(cents).padStart(2, "0")}`);
+  const amount = rawCentText
+    ? Number.parseFloat(`${wholeDollars}.${String(parseCentAmount(rawCentText) ?? 0).padStart(2, "0")}`)
+    : parseCurrencyAmount(rawBalanceText || rawDollarText) ?? wholeDollars;
   return { amount, rewardsLabel: label };
 }

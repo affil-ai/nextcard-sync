@@ -163,7 +163,7 @@ export type ExtensionMessage =
   | (ProviderMessageBase & { type: "ATMOS_DISCOUNTS_DONE"; discounts: AtmosLoyaltyData["discounts"] })
   | (ProviderMessageBase & { type: "CHASE_DASHBOARD_DONE"; data: ChaseURData })
   | (ProviderMessageBase & { type: "CHASE_BENEFITS_DONE"; benefits: ChaseBenefit[] })
-  | (ProviderMessageBase & { type: "CAPITALONE_REWARDS_DONE"; cardName: string | null; miles: number | null })
+  | (ProviderMessageBase & { type: "CAPITALONE_REWARDS_DONE"; cardName: string | null; miles: number | null; rewardsLabel?: string | null })
   | (ProviderMessageBase & { type: "CAPITALONE_BENEFITS_DONE"; benefits: CapitalOneLoyaltyData["benefits"] })
   | (ProviderMessageBase & { type: "AMEX_CARD_DONE"; data: AmexLoyaltyData })
   | (ProviderMessageBase & { type: "AMEX_ALL_DONE" })

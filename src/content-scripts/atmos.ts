@@ -74,14 +74,62 @@ function getText(selector: string): string | null {
 }
 
 function parseNumberAfterVisibleLabel(label: string): number | null {
-  const text = normalizeText(document.body.innerText);
+  const text = getSearchablePageText();
   const escapedLabel = label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const match = text.match(new RegExp(`${escapedLabel}\\s+([\\d,]+)`, "i"));
-  return match ? parseIntSafe(match[1]) : null;
+  const afterMatch = text.match(new RegExp(`${escapedLabel}\\s*:?\\s*([\\d,]+)`, "i"));
+  if (afterMatch) {
+    return parseIntSafe(afterMatch[1]);
+  }
+
+  const beforeMatch = text.match(new RegExp(`([\\d,]+)\\s+${escapedLabel}`, "i"));
+  return beforeMatch ? parseIntSafe(beforeMatch[1]) : null;
 }
 
 function parseMemberNumberFromText(text: string): string | null {
   return text.match(/Rewards\s+No\.\s*([\d ]+)/i)?.[1]?.replace(/\s+/g, "") ?? null;
+}
+
+function getSearchablePageText() {
+  const textParts = [document.body.innerText, document.body.textContent ?? ""];
+  const pendingRoots: ShadowRoot[] = [];
+
+  for (const element of document.querySelectorAll("*")) {
+    if (element.shadowRoot) {
+      pendingRoots.push(element.shadowRoot);
+    }
+  }
+
+  while (pendingRoots.length > 0) {
+    const root = pendingRoots.pop();
+    if (!root) continue;
+
+    textParts.push(root.textContent ?? "");
+    for (const element of root.querySelectorAll("*")) {
+      if (element.shadowRoot) {
+        pendingRoots.push(element.shadowRoot);
+      }
+    }
+  }
+
+  return normalizeText(textParts.join(" "));
+}
+
+function parseAvailablePointsFromPageText() {
+  const labels = [
+    "AVAILABLE POINTS",
+    "AVAILABLE MILES",
+    "REDEEMABLE MILES",
+    "MILES BALANCE",
+  ];
+
+  for (const label of labels) {
+    const value = parseNumberAfterVisibleLabel(label);
+    if (value != null) {
+      return value;
+    }
+  }
+
+  return null;
 }
 
 // ── Scrape overview page ────────────────────────────────────
@@ -119,7 +167,7 @@ function scrapeOverviewPage(): Partial<AtmosLoyaltyData> {
     ?? getText(".availible-points .display-xs");
   data.availablePoints = availablePointsText != null
     ? parseIntSafe(availablePointsText)
-    : parseNumberAfterVisibleLabel("AVAILABLE POINTS");
+    : parseAvailablePointsFromPageText();
 
   // Status points — multiple approaches
   // 1. New Atmos overview hero
@@ -377,10 +425,15 @@ async function runOverviewExtraction(attemptId: string) {
   updateOverlay("extracting", "atmos");
   updateOverlayProgress("Reading miles and status...");
   await waitForSelector(".member-info, [data-test-id='account-overview-hero-banner'], [data-test-id='available-points-section']");
-  await runControl.sleep(2000, attemptId);
+  await runControl.sleep(1000, attemptId);
 
   runControl.throwIfCancelled(attemptId);
-  const data = scrapeOverviewPage();
+  let data = scrapeOverviewPage();
+  for (let attempt = 0; attempt < 8 && data.availablePoints == null; attempt += 1) {
+    await runControl.sleep(1000, attemptId);
+    runControl.throwIfCancelled(attemptId);
+    data = scrapeOverviewPage();
+  }
   await runControl.sendMessage(attemptId, { type: "ATMOS_OVERVIEW_DONE", data });
 }
 

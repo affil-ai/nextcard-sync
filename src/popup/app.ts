@@ -746,18 +746,18 @@ function initCapitalOneOffers() {
   function updateOfferCountLabel() {
     if (!offerCountEl) return;
     const total = totalOfferCount();
-    const cardCount = capitalOneCards.length;
+    const accountCount = capitalOneCards.length;
     offerCountEl.textContent = total > 0
-      ? `${pluralize(total, "offer")} found across ${pluralize(cardCount, "card")}`
+      ? `${pluralize(total, "offer")} found across ${pluralize(accountCount, "account")}`
       : "No shopping offers found";
   }
 
   function updateDoneSummary() {
     if (!summaryEl) return;
     const total = totalOfferCount();
-    const cardCount = capitalOneCards.length;
+    const accountCount = capitalOneCards.length;
     summaryEl.textContent = total > 0
-      ? `${pluralize(total, "offer")} saved across ${pluralize(cardCount, "card")}`
+      ? `${pluralize(total, "offer")} saved across ${pluralize(accountCount, "account")}`
       : "No shopping offers found";
   }
 
@@ -777,9 +777,9 @@ function initCapitalOneOffers() {
         });
         return;
       }
-      if (resp.error === "no_cards") {
+      if (resp.error === "no_cards" || resp.error === "no_accounts") {
         if (retriesLeft > 0) { setTimeout(() => tryDiscover(tabId, gen, retriesLeft - 1), 3000); return; }
-        if (errorMsgEl) errorMsgEl.textContent = "No eligible Capital One cards found. Sign in and try again.";
+        if (errorMsgEl) errorMsgEl.textContent = "No eligible Capital One accounts found. Sign in and try again.";
         showState("Error");
         return;
       }
@@ -862,7 +862,7 @@ function initCapitalOneOffers() {
     if (!capitalOneTabId) return;
     showState("Running");
     if (progressBar) progressBar.style.width = "0%";
-    if (progressDetail) progressDetail.textContent = "Syncing all cards...";
+    if (progressDetail) progressDetail.textContent = "Syncing all accounts...";
     chrome.tabs.sendMessage(capitalOneTabId, { type: "CAPITALONE_OFFERS_RUN" });
   });
 
@@ -892,7 +892,7 @@ function initCapitalOneOffers() {
           loadingProgressDetail.textContent = typeof msg.statusText === "string"
             ? msg.statusText
             : page > 0
-            ? `Card ${Number(cardIndex) + 1} of ${cardTotal} · page ${page} · ${offersFound} offers`
+            ? `Account ${Number(cardIndex) + 1} of ${cardTotal} · page ${page} · ${offersFound} offers`
             : "Opening full offers feed...";
         }
       }

@@ -359,13 +359,16 @@ export function createGenericSyncHandlers(options: GenericSyncDeps) {
       setProviderProgress("atmos", "Reading Alaska Atmos overview...");
 
       let overview = waitForAtmosMessage(attemptId, "ATMOS_OVERVIEW_DONE");
+      let overviewResult: Record<string, unknown> | null = null;
 
       if (await checkIfLoginPage(tabId)) {
         overview.cancel();
         setProviderProgress("atmos", "Waiting for Alaska sign-in...", "waiting_for_login");
         const loginResult = await waitForAtmosLoginAndExtract(attemptId, tabId);
-        overview = waitForAtmosMessage(attemptId, "ATMOS_OVERVIEW_DONE");
-        if (loginResult.type !== "ATMOS_OVERVIEW_DONE") {
+        if (loginResult.type === "ATMOS_OVERVIEW_DONE") {
+          overviewResult = loginResult;
+        } else {
+          overview = waitForAtmosMessage(attemptId, "ATMOS_OVERVIEW_DONE");
           setProviderProgress("atmos", "Reading Alaska Atmos overview...");
           await triggerExtraction({
             providerId: "atmos",
@@ -385,31 +388,32 @@ export function createGenericSyncHandlers(options: GenericSyncDeps) {
         });
       }
 
-      let overviewResult: Record<string, unknown>;
-      try {
-        overviewResult = await overview.promise;
-      } catch {
-        overview.cancel();
-        const recovery = await recoverFromStall({
-          providerId: "atmos",
-          attemptId,
-          tabId,
-          isFirstPhase: true,
-          assertRunActive: options.stateStore.assertRunActive,
-          triggerExtraction: () =>
-            triggerExtraction({
-              providerId: "atmos",
-              attemptId,
-              tabId,
-              assertRunActive: options.stateStore.assertRunActive,
-            }),
-        });
-        if (recovery === "login_needed") {
-          setProviderProgress("atmos", "Waiting for Alaska sign-in...", "waiting_for_login");
-          overviewResult = await waitForAtmosLoginAndExtract(attemptId, tabId);
-        } else {
-          overview = waitForAtmosMessage(attemptId, "ATMOS_OVERVIEW_DONE");
+      if (overviewResult === null) {
+        try {
           overviewResult = await overview.promise;
+        } catch {
+          overview.cancel();
+          const recovery = await recoverFromStall({
+            providerId: "atmos",
+            attemptId,
+            tabId,
+            isFirstPhase: true,
+            assertRunActive: options.stateStore.assertRunActive,
+            triggerExtraction: () =>
+              triggerExtraction({
+                providerId: "atmos",
+                attemptId,
+                tabId,
+                assertRunActive: options.stateStore.assertRunActive,
+              }),
+          });
+          if (recovery === "login_needed") {
+            setProviderProgress("atmos", "Waiting for Alaska sign-in...", "waiting_for_login");
+            overviewResult = await waitForAtmosLoginAndExtract(attemptId, tabId);
+          } else {
+            overview = waitForAtmosMessage(attemptId, "ATMOS_OVERVIEW_DONE");
+            overviewResult = await overview.promise;
+          }
         }
       }
 

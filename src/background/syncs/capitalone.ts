@@ -130,6 +130,11 @@ export function createCapitalOneSync(options: CapitalOneSyncDeps) {
     return { promise, cancel: () => cleanup() };
   }
 
+  function getCapitalOneTotalRewards(result: Record<string, unknown>) {
+    const data = isRecord(result.data) ? result.data : {};
+    return readNumber(result.totalRewards) ?? readNumber(data.availablePoints);
+  }
+
   async function scrapeCapitalOneTravelCredits(tabId: number) {
     // The annual credit balance lives in Capital One Travel, so we read it there.
     setCapitalOneProgress("Opening Capital One Travel credits...");
@@ -429,6 +434,61 @@ export function createCapitalOneSync(options: CapitalOneSyncDeps) {
           attemptId,
           tabId,
         );
+      }
+
+      if (getCapitalOneTotalRewards(summaryResult) == null) {
+        try {
+          setCapitalOneProgress("Opening Capital One rewards balance...");
+          await navigateAndWait(
+            tabId,
+            "https://myaccounts.capitalone.com/rewards",
+            options.extensionNavigatingTabs,
+          );
+          await new Promise((resolve) => setTimeout(resolve, 3000));
+          const rewardsMessage = waitForCapitalOneMessage(
+            attemptId,
+            "CAPITALONE_REWARDS_DONE",
+          );
+          setCapitalOneProgress("Reading Capital One rewards balance...");
+          try {
+            await triggerExtraction({
+              providerId: "capitalone",
+              attemptId,
+              tabId,
+              assertRunActive: options.stateStore.assertRunActive,
+            });
+          } catch (error) {
+            rewardsMessage.cancel();
+            throw error;
+          }
+          const rewardsResult = await rewardsMessage.promise;
+          const miles = readNumber(rewardsResult.miles);
+          if (miles != null) {
+            const summaryData = isRecord(summaryResult.data)
+              ? summaryResult.data
+              : {};
+            summaryResult = {
+              ...summaryResult,
+              data: {
+                ...summaryData,
+                availablePoints: miles,
+                cardName:
+                  readString(summaryData.cardName) ??
+                  readString(rewardsResult.cardName),
+              },
+              totalRewards: miles,
+              rewardsLabel:
+                readString(summaryResult.rewardsLabel) ??
+                readString(rewardsResult.rewardsLabel) ??
+                "Miles",
+            };
+          }
+        } catch (error) {
+          console.warn(
+            "[NextCard SW] CapitalOne: failed to scrape rewards page balance:",
+            error,
+          );
+        }
       }
 
       let travelCredit: TravelCreditData | null = null;

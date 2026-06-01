@@ -197,6 +197,37 @@ function scrapeBenefits() {
   return benefits;
 }
 
+async function scrapeRewardsPageSummary(attemptId: string) {
+  for (let attempt = 0; attempt < 10; attempt += 1) {
+    const cardTextEl = document.querySelector(".c1-ease-rewards-header-container__card-text");
+    const balanceEl = document.querySelector(".c1-ease-card-rewards-display__balance");
+    const labelEl = document.querySelector(".c1-ease-card-rewards-display__balance-label, .labels__balance");
+
+    const cardText = cardTextEl ? textOf(cardTextEl).replace(/\s*>\s*$/, "") : null;
+    const rewardsSummary = parseCapitalOneRewardsSummary({
+      balanceText: balanceEl ? textOf(balanceEl) : "",
+      labelText: labelEl ? textOf(labelEl) : null,
+    });
+
+    if (rewardsSummary.amount != null) {
+      return {
+        cardText,
+        rewardsSummary,
+      };
+    }
+
+    await runControl.sleep(1000, attemptId);
+  }
+
+  return {
+    cardText: null,
+    rewardsSummary: {
+      amount: null,
+      rewardsLabel: null,
+    },
+  };
+}
+
 // ── Orchestration ────────────────────────────────────────────
 
 async function runExtraction(attemptId: string) {
@@ -233,19 +264,15 @@ async function runExtraction(attemptId: string) {
 
   if (url.includes("/rewards")) {
     await waitForSelector(".c1-ease-card-rewards-display__balance, .c1-ease-card-rewards-tabs");
-    await runControl.sleep(2000, attemptId);
+    await runControl.sleep(1000, attemptId);
 
-    const cardTextEl = document.querySelector(".c1-ease-rewards-header-container__card-text");
-    const balanceEl = document.querySelector(".c1-ease-card-rewards-display__balance");
-
-    const cardText = cardTextEl ? textOf(cardTextEl).replace(/\s*>\s*$/, "") : null;
-    const balanceText = balanceEl ? textOf(balanceEl) : "";
-    const miles = parseIntSafe(balanceText.replace(/[^0-9,]/g, ""));
+    const { cardText, rewardsSummary } = await scrapeRewardsPageSummary(attemptId);
 
     await runControl.sendMessage(attemptId, {
       type: "CAPITALONE_REWARDS_DONE",
       cardName: cardText,
-      miles,
+      miles: rewardsSummary.amount,
+      rewardsLabel: rewardsSummary.rewardsLabel,
     });
     return;
   }

@@ -43,6 +43,7 @@ const FEED_PAGE_DELAY_MS = 650;
 const FEED_CARD_DELAY_MS = 1_500;
 const FEED_RATE_LIMIT_RETRY_BASE_MS = 8_000;
 const FEED_RATE_LIMIT_RETRY_MAX_MS = 30_000;
+const CAPITAL_ONE_CREDIT_CARD_CATEGORIES = new Set(["CC", "CREDIT_CARD", "CREDITCARD"]);
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
@@ -50,6 +51,23 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function readString(value: unknown): string | null {
   return typeof value === "string" && value.trim() ? value : null;
+}
+
+function readAccountCategory(entry: Record<string, unknown>, product: Record<string, unknown>): string | null {
+  return readString(product.productSubCategory)
+    ?? readString(product.productTypeCode)
+    ?? readString(entry.category)
+    ?? readString(entry.accountType)
+    ?? readString(entry.productTypeCode);
+}
+
+function isCapitalOneCreditCardCategory(category: string | null): boolean {
+  return CAPITAL_ONE_CREDIT_CARD_CATEGORIES.has(category?.toUpperCase() ?? "");
+}
+
+function isClosedCapitalOneAccount(entry: Record<string, unknown>): boolean {
+  const status = readString(entry.accountStatus)?.toLowerCase();
+  return status === "closed" || status === "charged off";
 }
 
 function getOptionMap(value: unknown): Record<string, string> {
@@ -485,55 +503,56 @@ async function fetchJson(url: string, options: RequestInit = {}): Promise<unknow
   }
 }
 
-async function discoverCards(): Promise<CapitalOneCard[]> {
+function accountFromSummaryEntry(entry: Record<string, unknown>): CapitalOneCard | null {
+  const product = isRecord(entry.product) ? entry.product : {};
+  const category = readAccountCategory(entry, product);
+  const name =
+    readString(entry.accountNickname)
+    ?? readString(product.productName)
+    ?? readString(entry.displayName)
+    ?? "Capital One Account";
+  const displayNumber = readString(entry.displayAccountNumber) ?? readString(entry.accountNumber);
+  const id = readString(entry.accountReferenceId) ?? "";
+
+  if (!id || isClosedCapitalOneAccount(entry)) return null;
+
+  return {
+    id,
+    name,
+    lastDigits: displayNumber ? displayNumber.replace(/\D/g, "").slice(-4) || null : null,
+    productId: readString(product.productId),
+    category,
+    currency: isCapitalOneCreditCardCategory(category) ? "miles" : null,
+  };
+}
+
+async function discoverAccounts(options: { creditCardsOnly?: boolean } = {}): Promise<CapitalOneCard[]> {
   const data = await fetchJson("/web-api/protected/636178/customer-accounts?density=4&retrieveBusinessName=false&versionUpgrade=true");
   if (!isRecord(data) || !Array.isArray(data.entries)) return [];
 
   return data.entries
-    .filter((entry): entry is Record<string, unknown> => {
-      if (!isRecord(entry)) return false;
-      const product = isRecord(entry.product) ? entry.product : {};
-      const category = (
-        readString(product.productSubCategory)
-        ?? readString(product.productTypeCode)
-        ?? readString(entry.category)
-      )?.toUpperCase();
-      const status = readString(entry.accountStatus)?.toLowerCase();
-      return ["CC", "CREDIT_CARD", "CREDITCARD"].includes(category ?? "") && status !== "closed" && status !== "charged off";
-    })
-    .map((entry) => {
-      const product = isRecord(entry.product) ? entry.product : {};
-      const category = readString(product.productSubCategory)
-        ?? readString(product.productTypeCode)
-        ?? readString(entry.category);
-      const name =
-        readString(entry.accountNickname)
-        ?? readString(product.productName)
-        ?? readString(entry.displayName)
-        ?? "Capital One Card";
-      const displayNumber = readString(entry.displayAccountNumber) ?? readString(entry.accountNumber);
-      return {
-        id: readString(entry.accountReferenceId) ?? "",
-        name,
-        lastDigits: displayNumber ? displayNumber.replace(/\D/g, "").slice(-4) || null : null,
-        productId: readString(product.productId),
-        category,
-        currency: "miles",
-      };
-    })
-    .filter((card) => card.id);
+    .filter(isRecord)
+    .map(accountFromSummaryEntry)
+    .filter((account): account is CapitalOneCard => {
+      if (!account) return false;
+      return !options.creditCardsOnly || isCapitalOneCreditCardCategory(account.category);
+    });
 }
 
-async function discoverEligibleCards(): Promise<CapitalOneCard[]> {
-  const [cards, eligibility] = await Promise.all([
-    discoverCards(),
+async function discoverCards(): Promise<CapitalOneCard[]> {
+  return discoverAccounts({ creditCardsOnly: true });
+}
+
+async function discoverEligibleAccounts(options: { creditCardsOnly?: boolean } = {}): Promise<CapitalOneCard[]> {
+  const [accounts, eligibility] = await Promise.all([
+    discoverAccounts(options),
     fetchJson("/web-api/private/2151863/shopping/eligibility", {
       headers: { Accept: "application/json;v=1" },
     }),
   ]);
 
   if (!isRecord(eligibility) || !Array.isArray(eligibility.eligibleAccounts)) {
-    return cards;
+    return accounts;
   }
 
   const eligible = new Set(
@@ -547,7 +566,12 @@ async function discoverEligibleCards(): Promise<CapitalOneCard[]> {
       .filter((id): id is string => !!id),
   );
 
-  return cards.filter((card) => eligible.has(card.id));
+  const eligibleAccounts = accounts.filter((account) => eligible.has(account.id));
+  return eligibleAccounts.length > 0 ? eligibleAccounts : accounts;
+}
+
+async function discoverEligibleCards(): Promise<CapitalOneCard[]> {
+  return discoverEligibleAccounts({ creditCardsOnly: true });
 }
 
 function buildTileRequest(card: CapitalOneCard) {
@@ -622,16 +646,37 @@ function findCapitalOneOffersUrl(payload: unknown): string | null {
   return found;
 }
 
+function findCapitalOneOffersUrlInDocument(): string | null {
+  for (const element of Array.from(document.querySelectorAll("*"))) {
+    for (const attribute of Array.from(element.attributes)) {
+      const value = attribute.value;
+      if (!value.includes("capitaloneoffers.com/")) continue;
+
+      try {
+        const url = new URL(value, window.location.href);
+        if (url.hostname === "capitaloneoffers.com") return url.toString();
+      } catch {
+        continue;
+      }
+    }
+  }
+
+  return null;
+}
+
 async function getOffersFeedUrl(): Promise<string | null> {
-  const cards = await discoverEligibleCards();
-  const card = cards[0];
-  if (!card) return null;
+  const documentUrl = findCapitalOneOffersUrlInDocument();
+  if (documentUrl) return documentUrl;
+
+  const accounts = await discoverEligibleAccounts();
+  const account = accounts[0];
+  if (!account) return null;
 
   const data = await fetchJson(
     "/web-api/protected/223473/enterprise/dynamic-experiences/experience-hub/retrieve-tile-definition/shopping_offers",
     {
       method: "POST",
-      body: JSON.stringify(buildHomeTileRequest(card)),
+      body: JSON.stringify(buildHomeTileRequest(account)),
       headers: {
         Accept: "application/json;v=1",
         "Content-Type": "application/json",
@@ -641,7 +686,7 @@ async function getOffersFeedUrl(): Promise<string | null> {
     },
   );
 
-  return findCapitalOneOffersUrl(data);
+  return findCapitalOneOffersUrl(data) ?? findCapitalOneOffersUrlInDocument();
 }
 
 async function listOffers(card: CapitalOneCard): Promise<CapitalOneOffer[]> {
@@ -667,10 +712,10 @@ async function discoverFeedCards(): Promise<CapitalOneCard[]> {
     .filter(isRecord)
     .map((entry) => ({
       id: readString(entry.accountReferenceId) ?? "",
-      name: readString(entry.productName) ?? "Capital One Card",
+      name: readString(entry.productName) ?? "Capital One Account",
       lastDigits: readString(entry.last4),
       productId: readString(entry.productId),
-      category: "CC",
+      category: readString(entry.productCategory) ?? readString(entry.productTypeCode) ?? readString(entry.accountType),
       currency: readString(entry.accountCurrency),
     }))
     .filter((card) => card.id);
@@ -865,7 +910,7 @@ if (!capitalOneOffersWindow[CAPITALONE_OFFERS_BOOTSTRAPPED_KEY]) {
         }
 
         if (cards.length === 0) {
-          sendResponse({ type: "CAPITALONE_OFFERS_READY", cards: [], offerCounts: {}, error: "no_cards" });
+          sendResponse({ type: "CAPITALONE_OFFERS_READY", cards: [], offerCounts: {}, error: "no_accounts" });
           return;
         }
 
