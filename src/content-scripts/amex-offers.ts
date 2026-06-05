@@ -2,8 +2,8 @@
  * Amex Offers — discover cards and enroll all eligible merchant offers.
  *
  * Card discovery: parses the dashboard HTML for the Transit-encoded productsList.
- * Offer listing: uses ReadOffersHubPresentation.web.v1 via executeScript (MAIN world).
- * Enrollment: batched via executeScript in MAIN world (chunks of 10).
+ * Offer listing: uses Offers Hub APIs via executeScript (MAIN world).
+ * Enrollment: uses CreateOffersHubEnrollment.web.v1 via executeScript (MAIN world).
  *
  * All API calls run in MAIN world via the service worker's chrome.scripting.executeScript
  * to avoid CORS issues (same-site origin, session cookies included).
@@ -30,6 +30,26 @@ interface AmexOffer {
   redemptionChannel: "online" | "in_store" | "both" | null;
 }
 
+interface AmexOfferList {
+  offers: AmexOffer[];
+  eligibleCount: number | null;
+}
+
+interface AmexApiResult {
+  status: number;
+  data: unknown;
+  error?: string;
+}
+
+interface AmexEnrollResult {
+  result: "added" | "skipped" | "failed";
+  status?: number;
+  purpose?: unknown;
+  message?: unknown;
+  explanationCode?: unknown;
+  error?: string;
+}
+
 // ── Helpers ────────────────────────────────────────────────
 
 function delay(ms: number): Promise<void> {
@@ -38,6 +58,42 @@ function delay(ms: number): Promise<void> {
 
 function readString(value: unknown): string | null {
   return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
+}
+
+function normalizeLocale(locale: unknown): string {
+  const value = readString(locale)?.replace("_", "-") ?? "en-US";
+  return value.toLowerCase() === "en-us" ? "en-US" : value;
+}
+
+function randomCorrelationId(): string {
+  return crypto.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
+function getUserOffset(date = new Date()): string {
+  const offsetMinutes = -date.getTimezoneOffset();
+  const sign = offsetMinutes >= 0 ? "+" : "-";
+  const abs = Math.abs(offsetMinutes);
+  const hours = String(Math.floor(abs / 60)).padStart(2, "0");
+  const minutes = String(abs % 60).padStart(2, "0");
+  return `${sign}${hours}:${minutes}`;
+}
+
+function formatRequestDateTime(date = new Date()): string {
+  const pad = (value: number) => String(value).padStart(2, "0");
+  return [
+    date.getFullYear(),
+    "-",
+    pad(date.getMonth() + 1),
+    "_",
+    pad(date.getDate()),
+    "T",
+    pad(date.getHours()),
+    ":",
+    pad(date.getMinutes()),
+    ":",
+    pad(date.getSeconds()),
+    getUserOffset(date),
+  ].join("");
 }
 
 function readLastDigits(product: Record<string, unknown>): string | null {
@@ -60,6 +116,108 @@ function readLastDigits(product: Record<string, unknown>): string | null {
   return null;
 }
 
+function readProductId(product: Record<string, unknown>): string | null {
+  const candidates = [
+    product.id,
+    product.accountToken,
+    product.opaqueAccountId,
+    product.accountNumberProxy,
+  ];
+
+  for (const candidate of candidates) {
+    const id = readString(candidate);
+    if (id) return id;
+  }
+
+  return null;
+}
+
+function readProductName(product: Record<string, unknown>): string {
+  const candidates = [
+    product.description,
+    product.productDescription,
+    product.displayName,
+    product.productName,
+    product.name,
+    product.shortName,
+  ];
+
+  for (const candidate of candidates) {
+    const name = readString(candidate);
+    if (name) return name;
+  }
+
+  return "Unknown Card";
+}
+
+function readAccountKey(product: Record<string, unknown>): string | null {
+  const candidates = [
+    product.accountKey,
+    product.account_key,
+    product.accountKeyValue,
+    product.account_key_value,
+  ];
+
+  for (const candidate of candidates) {
+    const key = readString(candidate);
+    if (key) return key;
+  }
+
+  return null;
+}
+
+function isCancelledProduct(product: Record<string, unknown>): boolean {
+  const rawStatuses = [
+    product.status,
+    product.accountStatus,
+    product.account_status,
+    product.cardStatus,
+    product.card_status,
+  ];
+
+  return rawStatuses
+    .flatMap((status) => Array.isArray(status) ? status : [status])
+    .some((status) => {
+      const text = readString(status)?.toLowerCase();
+      return Boolean(text && (text.includes("cancel") || text.includes("closed")));
+    });
+}
+
+function normalizeProductRecords(value: unknown): Array<Record<string, unknown>> {
+  if (Array.isArray(value)) {
+    return value.filter((item): item is Record<string, unknown> => (
+      typeof item === "object" && item !== null
+    ));
+  }
+
+  if (!value || typeof value !== "object") return [];
+  const root = value as Record<string, unknown>;
+  const registry = root.registry as Record<string, unknown> | undefined;
+  const registryTypes = registry?.types as Record<string, unknown> | undefined;
+  const directTypes = root.types as Record<string, unknown> | undefined;
+  const cardProducts = registryTypes?.CARD_PRODUCT ?? directTypes?.CARD_PRODUCT;
+
+  if (Array.isArray(cardProducts)) {
+    return cardProducts.filter((item): item is Record<string, unknown> => (
+      typeof item === "object" && item !== null
+    ));
+  }
+
+  const details = root.details as Record<string, unknown> | undefined;
+  const detailTypes = details?.types as Record<string, unknown> | undefined;
+  const detailCardProduct = detailTypes?.CARD_PRODUCT as Record<string, unknown> | undefined;
+  const productsList = detailCardProduct?.productsList as Record<string, unknown> | undefined;
+
+  if (productsList && typeof productsList === "object") {
+    return Object.entries(productsList).flatMap(([id, product]) => {
+      if (!product || typeof product !== "object") return [];
+      return [{ id, ...(product as Record<string, unknown>) }];
+    });
+  }
+
+  return [];
+}
+
 function isGenericAmexCardName(name: string | null | undefined): boolean {
   if (!name) return true;
   const normalized = name.trim().toLowerCase();
@@ -78,7 +236,7 @@ function mergeDiscoveredCards(
   if (productCards.length === 0) return dashboardCards;
   if (dashboardCards.length === 0) return productCards;
 
-  return productCards.map((card, index) => {
+  const merged = productCards.map((card, index) => {
     const match =
       dashboardCards.find((candidate) => candidate.id === card.id)
       ?? dashboardCards.find((candidate) => candidate.accountKey && candidate.accountKey === card.accountKey)
@@ -94,14 +252,35 @@ function mergeDiscoveredCards(
       accountKey: card.accountKey ?? match.accountKey,
     };
   });
+
+  for (const dashboardCard of dashboardCards) {
+    const alreadyMerged = merged.some((card) => (
+      card.id === dashboardCard.id
+      || Boolean(card.accountKey && card.accountKey === dashboardCard.accountKey)
+      || Boolean(card.lastDigits && card.lastDigits === dashboardCard.lastDigits)
+    ));
+    if (!alreadyMerged) merged.push(dashboardCard);
+  }
+
+  return merged;
 }
 
 /** Route an API call through the service worker's executeScript (MAIN world) */
-function amexApiFetch(url: string, options: { method: string; headers: Record<string, string>; body?: string }): Promise<{ status: number; data: unknown }> {
+function amexApiFetch(url: string, options: { method: string; headers: Record<string, string>; body?: string }): Promise<AmexApiResult> {
   return new Promise((resolve) => {
+    let settled = false;
+    const timeout = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      resolve({ status: 0, data: null, error: "Timed out waiting for Amex API response" });
+    }, 25000);
+
     chrome.runtime.sendMessage(
       { type: "AMEX_OFFERS_FETCH", url, method: options.method, headers: options.headers, body: options.body },
       (resp) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timeout);
         if (chrome.runtime.lastError || !resp) resolve({ status: 0, data: null });
         else resolve(resp);
       },
@@ -115,19 +294,16 @@ function injectAndReadProducts(): Promise<AmexCard[]> {
     chrome.runtime.sendMessage({ type: "AMEX_OFFERS_READ_PRODUCTS" }, (resp) => {
       if (chrome.runtime.lastError || !resp || !resp.products) resolve([]);
       else {
-        const products = resp.products as Array<Record<string, unknown>>;
+        const products = normalizeProductRecords(resp.products);
         const cards: AmexCard[] = products
           .filter((p) => {
-            const status = p.status as string[] | undefined;
-            const first = status?.length ? status[0] : null;
-            const lob = p.lineOfBusiness as string | undefined;
-            return first !== "Canceled" && (lob === "CONSUMER" || lob === "COMPANY_CARD");
+            return Boolean(readProductId(p)) && !isCancelledProduct(p);
           })
           .map((p) => ({
-            id: (p.id ?? "") as string,
-            name: readString(p.description) ?? "Unknown Card",
+            id: readProductId(p) ?? "",
+            name: readProductName(p),
             lastDigits: readLastDigits(p),
-            accountKey: readString(p.accountKey),
+            accountKey: readAccountKey(p),
           }));
         resolve(cards);
       }
@@ -150,10 +326,14 @@ async function discoverCardsFromProducts(): Promise<AmexCard[]> {
 
 /** Fallback: parse the dashboard HTML for Transit-encoded productsList */
 async function discoverCardsFromDashboard(): Promise<AmexCard[]> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 15000);
   try {
     const resp = await fetch("https://global.americanexpress.com/dashboard", {
       credentials: "include",
       headers: { accept: "text/html" },
+      cache: "no-store",
+      signal: controller.signal,
     });
     if (!resp.ok || resp.url.includes("/login")) return [];
 
@@ -204,32 +384,85 @@ async function discoverCardsFromDashboard(): Promise<AmexCard[]> {
   } catch (e) {
     console.error("[NextCard Amex Offers] discoverCardsFromDashboard error:", e);
     return [];
+  } finally {
+    clearTimeout(timeout);
   }
 }
 
 /** Try digitalData.products first, fall back to dashboard HTML parsing */
 async function discoverCards(): Promise<AmexCard[]> {
   const productCards = await discoverCardsFromProducts();
-  const needsDashboardEnrichment = productCards.some(
-    (card) => isGenericAmexCardName(card.name) || !card.lastDigits,
-  );
-
-  if (productCards.length > 0 && !needsDashboardEnrichment) return productCards;
-
   const dashboardCards = await discoverCardsFromDashboard();
   return mergeDiscoveredCards(productCards, dashboardCards);
 }
 
 // ── Offer Listing ──────────────────────────────────────────
 
-async function listOffers(cardId: string): Promise<AmexOffer[] | null> {
+function parseModernOffer(o: Record<string, unknown>): AmexOffer {
+  return {
+    offerId: (o.id ?? o.source_id ?? "") as string,
+    name: (o.name ?? "Unknown") as string,
+    status: (o.status ?? "ELIGIBLE") as string,
+    shortDescription: (o.short_description ?? null) as string | null,
+    category: (o.category ?? null) as string | null,
+    expirationText: (o.expiry_date ?? null) as string | null,
+    merchantUrl: ((o.cta as Record<string, unknown> | undefined)?.url ?? null) as string | null,
+    merchantLogoUrl: (o.logo_url ?? null) as string | null,
+    redemptionChannel: (() => {
+      const types = (o.redemption_types as string[] | undefined) ?? [];
+      const hasOnline = types.includes("ONLINE");
+      const hasInStore = types.includes("IN_STORE");
+      if (hasOnline && hasInStore) return "both" as const;
+      if (hasOnline) return "online" as const;
+      if (hasInStore) return "in_store" as const;
+      return null;
+    })(),
+  };
+}
+
+function parseLegacyOffer(o: Record<string, unknown>): AmexOffer {
+  return {
+    offerId: (o.offerId ?? o.id ?? "") as string,
+    name: (o.title ?? o.merchantName ?? "Unknown") as string,
+    status: ((o.enrollmentDetails as Record<string, unknown> | undefined)?.status ?? "NOT_ENROLLED") as string,
+    shortDescription: (o.shortDescription ?? null) as string | null,
+    category: ((o.applicableCategories as Array<{ text: string }> | undefined)?.[0]?.text ?? null) as string | null,
+    expirationText: ((o.expiration as { text: string } | undefined)?.text ?? null) as string | null,
+    merchantUrl: ((o.longDescription as string | undefined)?.match(/(?:at|website)\s+(?:[\w.-]+\.(?:com|net|org|co|io|shop|store)\b)/i)?.[0]?.replace(/^(?:at|website)\s+/i, "") ?? null) as string | null,
+    merchantLogoUrl: (o.image ?? null) as string | null,
+    redemptionChannel: (() => {
+      const filters = (o.applicableFilters as Array<{ optionType: string }> | undefined) ?? [];
+      const types = filters.map((f) => f.optionType);
+      const hasOnline = types.includes("ONLINE");
+      const hasInStore = types.includes("IN_STORE");
+      if (hasOnline && hasInStore) return "both" as const;
+      if (hasOnline) return "online" as const;
+      if (hasInStore) return "in_store" as const;
+      return null;
+    })(),
+  };
+}
+
+function normalizeAmexOfferStatus(status: string | null | undefined): string {
+  return (status ?? "").trim().toUpperCase();
+}
+
+function isAmexIssuerEnrolledStatus(status: string | null | undefined): boolean {
+  return ["ENROLLED", "ADDED"].includes(normalizeAmexOfferStatus(status));
+}
+
+function isUnenrolledOffer(offer: AmexOffer): boolean {
+  return !isAmexIssuerEnrolledStatus(offer.status);
+}
+
+async function listOffersLegacy(cardId: string, locale: string): Promise<AmexOfferList | null> {
   try {
     const resp = await amexApiFetch("https://functions.americanexpress.com/ReadOffersHubPresentation.web.v1", {
       method: "POST",
       headers: { accept: "application/json", "ce-source": "WEB", "content-type": "application/json" },
       body: JSON.stringify({
         accountNumberProxy: cardId,
-        locale: "en-US",
+        locale,
         offerPage: "page1",
         requestType: "OFFERSHUB_LANDING",
       }),
@@ -238,36 +471,101 @@ async function listOffers(cardId: string): Promise<AmexOffer[] | null> {
     if (resp.status !== 200 || !resp.data) return null;
 
     const data = resp.data as Record<string, unknown>;
-    const recList = ((data.recommendedOffers as Record<string, Record<string, unknown[]>>)?.offersList?.page1) ?? [];
-    const addedList = ((data.addedToCard as Record<string, Record<string, unknown[]>>)?.offersList?.page1) ?? [];
+    const recList = ((data.recommendedOffers as Record<string, Record<string, unknown[]>> | undefined)?.offersList?.page1) ?? [];
+    const addedList = ((data.addedToCard as Record<string, Record<string, unknown[]>> | undefined)?.offersList?.page1) ?? [];
     const all = [...recList, ...addedList] as Record<string, unknown>[];
-
-    if (all.length === 0) return null;
-
-    return all
+    const offers = all
       .filter((o) => o.offerType === "MERCHANT")
-      .map((o) => ({
-        offerId: (o.offerId ?? o.id ?? "") as string,
-        name: (o.title ?? o.merchantName ?? "Unknown") as string,
-        status: ((o.enrollmentDetails as Record<string, unknown>)?.status ?? "NOT_ENROLLED") as string,
-        shortDescription: (o.shortDescription ?? null) as string | null,
-        category: ((o.applicableCategories as Array<{ text: string }> | undefined)?.[0]?.text ?? null) as string | null,
-        expirationText: ((o.expiration as { text: string } | undefined)?.text ?? null) as string | null,
-        merchantUrl: ((o.longDescription as string)?.match(/(?:at|website)\s+(?:[\w.-]+\.(?:com|net|org|co|io|shop|store)\b)/i)?.[0]?.replace(/^(?:at|website)\s+/i, "") ?? null) as string | null,
-        merchantLogoUrl: (o.image ?? null) as string | null,
-        redemptionChannel: (() => {
-          const filters = (o.applicableFilters as Array<{ optionType: string }> | undefined) ?? [];
-          const types = filters.map((f) => f.optionType);
-          const hasOnline = types.includes("ONLINE");
-          const hasInStore = types.includes("IN_STORE");
-          if (hasOnline && hasInStore) return "both" as const;
-          if (hasOnline) return "online" as const;
-          if (hasInStore) return "in_store" as const;
-          return null;
-        })(),
-      }));
+      .map(parseLegacyOffer);
+
+    if (offers.length === 0) return null;
+
+    return {
+      offers,
+      eligibleCount: offers.filter(isUnenrolledOffer).length,
+    };
   } catch (e) {
-    console.error("[NextCard Amex Offers] listOffers error:", e);
+    console.error("[NextCard Amex Offers] listOffersLegacy error:", e);
+    return null;
+  }
+}
+
+async function listOffersModern(cardId: string, locale: string): Promise<AmexOfferList | null> {
+  try {
+    const resp = await amexApiFetch("https://functions.americanexpress.com/ReadCardAccountOffersList.v1", {
+      method: "POST",
+      headers: {
+        accept: "application/json",
+        "ce-source": "offers.list",
+        "content-type": "application/json",
+        "one-data-correlation-id": randomCorrelationId(),
+      },
+      body: JSON.stringify({
+        accountNumberProxy: cardId,
+        locale,
+        source: "STANDARD",
+        typeOf: "MERCHANT",
+        status: ["ELIGIBLE"],
+        offerRequestType: "LIST",
+        userOffset: getUserOffset(),
+      }),
+    });
+
+    if (resp.status !== 200 || !resp.data) return null;
+
+    const data = resp.data as Record<string, unknown>;
+    const all = (data.offers ?? []) as Record<string, unknown>[];
+    const eligibleCount = (data.count as Record<string, unknown> | undefined)?.eligible;
+
+    if (all.length === 0) {
+      return {
+        offers: [],
+        eligibleCount: typeof eligibleCount === "number" ? eligibleCount : null,
+      };
+    }
+
+    return {
+      offers: all
+        .filter((o) => o.type === "MERCHANT")
+        .map(parseModernOffer),
+      eligibleCount: typeof eligibleCount === "number" ? eligibleCount : null,
+    };
+  } catch (e) {
+    console.error("[NextCard Amex Offers] listOffersModern error:", e);
+    return null;
+  }
+}
+
+async function listOffers(cardId: string, locale = "en-US"): Promise<AmexOfferList | null> {
+  return await listOffersLegacy(cardId, locale) ?? await listOffersModern(cardId, locale);
+}
+
+async function readOfferDetails(cardId: string, offerId: string, locale: string): Promise<AmexOffer | null> {
+  try {
+    const resp = await amexApiFetch("https://functions.americanexpress.com/ReadCardAccountOffersList.v1", {
+      method: "POST",
+      headers: {
+        accept: "application/json",
+        "ce-source": "offers.details",
+        "content-type": "application/json",
+        "one-data-correlation-id": randomCorrelationId(),
+      },
+      body: JSON.stringify({
+        accountNumberProxy: cardId,
+        identifier: offerId,
+        locale,
+        source: "STANDARD",
+        identifierType: "OFFER",
+        offerRequestType: "DETAILS",
+        userOffset: getUserOffset(),
+        requestDateTimeWithOffset: formatRequestDateTime(),
+      }),
+    });
+
+    if (resp.status !== 200 || !resp.data) return null;
+    return parseModernOffer(resp.data as Record<string, unknown>);
+  } catch (e) {
+    console.error("[NextCard Amex Offers] readOfferDetails error:", e);
     return null;
   }
 }
@@ -276,12 +574,17 @@ async function listOffers(cardId: string): Promise<AmexOffer[] | null> {
 
 let cancelled = false;
 
-// Proactive rate limiting — match CardPointers' params
-const ENROLL_BASE_DELAY_MS = 150;
-const ENROLL_JITTER_MIN_MS = 50;
-const ENROLL_JITTER_MAX_MS = 150;
-const ENROLL_PAUSE_THRESHOLD = 100;
-const ENROLL_PAUSE_DELAY_MS = 3000;
+// Amex starts returning transient failures if enrollment bursts too quickly.
+const ENROLL_BASE_DELAY_MS = 900;
+const ENROLL_JITTER_MIN_MS = 350;
+const ENROLL_JITTER_MAX_MS = 1200;
+const ENROLL_PAUSE_THRESHOLD = 25;
+const ENROLL_PAUSE_DELAY_MS = 10000;
+const OFFER_BATCH_REFETCH_DELAY_MS = 4500;
+const MAX_EMPTY_BATCH_POLLS = 4;
+const MAX_STALE_BATCH_POLLS = 4;
+const RATE_LIMIT_COOLDOWN_MS = 45000;
+const MAX_RATE_LIMIT_RETRIES = 3;
 let enrollRequestsSincePause = 0;
 
 function enrollJitter(): number {
@@ -293,19 +596,41 @@ function sendProgress(data: Record<string, unknown>) {
 }
 
 /** Enroll a single offer via MAIN world executeScript */
-function enrollSingleOffer(cardId: string, offerId: string, locale: string): Promise<"added" | "skipped" | "failed"> {
+function enrollSingleOffer(cardId: string, offerId: string, locale: string): Promise<AmexEnrollResult> {
   return new Promise((resolve) => {
     chrome.runtime.sendMessage(
       { type: "AMEX_OFFERS_ENROLL_ONE", cardId, offerId, locale },
       (resp) => {
-        if (chrome.runtime.lastError || !resp) resolve("failed");
-        else resolve(resp.result ?? "failed");
+        if (chrome.runtime.lastError || !resp) resolve({ result: "failed", error: chrome.runtime.lastError?.message });
+        else resolve({ ...resp, result: resp.result ?? "failed" });
       },
     );
   });
 }
 
-async function runEnrollment(cardId: string) {
+function isRateLimitLike(result: AmexEnrollResult): boolean {
+  if (result.status === 429 || result.status === 403 || result.status === 503 || result.status === 0) return true;
+  const text = [
+    result.error,
+    result.message,
+    result.explanationCode,
+    result.purpose,
+  ].filter(Boolean).join(" ");
+  return /abort|timeout|rate|limit|too many|temporar|unavailable/i.test(text);
+}
+
+function formatEnrollError(result: AmexEnrollResult): string | null {
+  const pieces = [
+    result.status ? `HTTP ${result.status}` : null,
+    typeof result.explanationCode === "string" ? result.explanationCode : null,
+    typeof result.purpose === "string" ? result.purpose : null,
+    typeof result.message === "string" ? result.message : null,
+    typeof result.error === "string" ? result.error : null,
+  ].filter(Boolean);
+  return pieces.length > 0 ? pieces.join(" - ") : null;
+}
+
+async function runEnrollment(cardId: string, locale: string) {
   cancelled = false;
   enrollRequestsSincePause = 0;
 
@@ -314,21 +639,38 @@ async function runEnrollment(cardId: string) {
   let totalFailed = 0;
   let totalEligible = 0;
   let round = 0;
-  const MAX_ROUNDS = 5;
+  const MAX_ROUNDS = 50;
   const enrolledOffers: AmexOffer[] = [];
   const enrolledOfferIds = new Set<string>();
+  let emptyBatchPolls = 0;
+  let staleBatchPolls = 0;
+  let lastError: string | null = null;
 
   while (round < MAX_ROUNDS && !cancelled) {
     round++;
     sendProgress({ status: "fetching", round, added: totalAdded });
 
-    const offers = await listOffers(cardId);
-    if (!offers || offers.length === 0) break;
+    const offerList = await listOffers(cardId, locale);
+    if (!offerList) break;
 
-    const eligible = offers.filter((o) => o.status !== "ENROLLED" && o.status !== "ADDED");
-    if (eligible.length === 0) break;
+    const eligible = offerList.offers.filter((o) => (
+      o.offerId
+      && isUnenrolledOffer(o)
+      && !enrolledOfferIds.has(o.offerId)
+    ));
 
-    totalEligible += eligible.length;
+    totalEligible = Math.max(totalEligible, offerList.eligibleCount ?? 0, totalAdded + eligible.length);
+
+    if (eligible.length === 0) {
+      if ((offerList.eligibleCount ?? 0) > totalAdded && emptyBatchPolls < MAX_EMPTY_BATCH_POLLS) {
+        emptyBatchPolls++;
+        sendProgress({ status: "checking_new", round, added: totalAdded, total: totalEligible });
+        await delay(OFFER_BATCH_REFETCH_DELAY_MS + enrollJitter());
+        continue;
+      }
+      break;
+    }
+
     sendProgress({ status: "enrolling", round, added: totalAdded, total: totalEligible });
 
     let roundAdded = 0;
@@ -336,20 +678,41 @@ async function runEnrollment(cardId: string) {
     for (const offer of eligible) {
       if (cancelled) break;
 
-      const result = await enrollSingleOffer(cardId, offer.offerId, "en-US");
-      if (result === "added" || result === "skipped") {
-        if (!enrolledOfferIds.has(offer.offerId)) {
-          enrolledOfferIds.add(offer.offerId);
+      const offerForSync = offer;
+      let result = await enrollSingleOffer(cardId, offerForSync.offerId, locale);
+      let rateLimitRetries = 0;
+
+      while (result.result === "failed" && isRateLimitLike(result) && rateLimitRetries < MAX_RATE_LIMIT_RETRIES && !cancelled) {
+        rateLimitRetries++;
+        lastError = formatEnrollError(result);
+        sendProgress({
+          status: "cooling_down",
+          added: totalAdded,
+          skipped: totalAlreadyAdded,
+          failed: totalFailed,
+          round,
+          total: totalEligible,
+          waitSeconds: Math.round(RATE_LIMIT_COOLDOWN_MS / 1000),
+          error: lastError,
+        });
+        await delay(RATE_LIMIT_COOLDOWN_MS + enrollJitter());
+        result = await enrollSingleOffer(cardId, offerForSync.offerId, locale);
+      }
+
+      if (result.result === "added" || result.result === "skipped") {
+        if (!enrolledOfferIds.has(offerForSync.offerId)) {
+          enrolledOfferIds.add(offerForSync.offerId);
           totalAdded++;
           roundAdded++;
-          enrolledOffers.push(offer);
+          enrolledOffers.push(offerForSync);
         }
-        if (result === "skipped") totalAlreadyAdded++;
+        if (result.result === "skipped") totalAlreadyAdded++;
       } else {
+        lastError = formatEnrollError(result);
         totalFailed++;
       }
 
-      sendProgress({ added: totalAdded, skipped: totalAlreadyAdded, failed: totalFailed, round, total: totalEligible });
+      sendProgress({ added: totalAdded, skipped: totalAlreadyAdded, failed: totalFailed, round, total: totalEligible, error: lastError });
 
       // Proactive rate limiting
       enrollRequestsSincePause++;
@@ -362,11 +725,22 @@ async function runEnrollment(cardId: string) {
     }
 
 
-    if (roundAdded === 0) break;
+    if (roundAdded === 0) {
+      if ((offerList.eligibleCount ?? totalEligible) > totalAdded && staleBatchPolls < MAX_STALE_BATCH_POLLS) {
+        staleBatchPolls++;
+        sendProgress({ status: "checking_new", round, added: totalAdded, total: totalEligible });
+        await delay(OFFER_BATCH_REFETCH_DELAY_MS + enrollJitter());
+        continue;
+      }
+      break;
+    }
+
+    emptyBatchPolls = 0;
+    staleBatchPolls = 0;
 
     if (round < MAX_ROUNDS && !cancelled) {
       sendProgress({ status: "checking_new", round, added: totalAdded });
-      await delay(2000);
+      await delay(OFFER_BATCH_REFETCH_DELAY_MS + enrollJitter());
     }
   }
 
@@ -375,6 +749,7 @@ async function runEnrollment(cardId: string) {
     added: totalAdded,
     skipped: totalAlreadyAdded,
     failed: totalFailed,
+    lastError,
     rounds: round,
     cardId,
     cardName: selectedCardName,
@@ -449,16 +824,21 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         return;
       }
       // Probe all cards in parallel — validates session and gets per-card unenrolled counts
-      const probes = await Promise.all(cards.map((c) => listOffers(c.id)));
-      if (probes[0] === null) {
-        sendResponse({ type: "AMEX_OFFERS_READY", cards: [], offerCounts: {}, error: "no_cards" });
-        return;
-      }
+      const probes = await Promise.all(cards.map((c) => listOffers(c.id).catch(() => null)));
       const offerCounts: Record<string, number> = {};
       for (let i = 0; i < cards.length; i++) {
-        const offers = probes[i] ?? [];
-        const eligible = offers.filter((o) => o.status !== "ENROLLED" && o.status !== "ADDED");
-        offerCounts[cards[i].id] = eligible.length;
+        const offerList = probes[i];
+        const offers = offerList?.offers ?? [];
+        const eligible = offers.filter(isUnenrolledOffer);
+        if (offerList) offerCounts[cards[i].id] = offerList.eligibleCount ?? eligible.length;
+        console.info("[NextCard Amex Offers] card discovery summary:", {
+          cardName: cards[i].name,
+          lastDigits: cards[i].lastDigits,
+          observed: offers.length,
+          availableToActivate: offerCounts[cards[i].id] ?? 0,
+          alreadyActivated: offers.length - eligible.length,
+          probeFailed: offerList === null,
+        });
 
         if (offers.length > 0) {
           chrome.runtime.sendMessage({
@@ -480,14 +860,16 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
               merchantUrl: o.merchantUrl,
               merchantLogoUrl: o.merchantLogoUrl,
               redemptionChannel: o.redemptionChannel,
+              status: isUnenrolledOffer(o) ? "detected" : "enrolled",
             })),
           }).catch(() => {});
         }
       }
       sendResponse({
         type: "AMEX_OFFERS_READY",
-        cards: cards.map((c) => ({ id: c.id, name: c.name, lastDigits: c.lastDigits, accountKey: c.accountKey })),
+        cards: cards.map((c) => ({ id: c.id, name: c.name, lastDigits: c.lastDigits, accountKey: c.accountKey, locale: "en-US" })),
         offerCounts,
+        offerProbeError: probes.every((probe) => probe === null) ? "offer_probe_failed" : undefined,
         error: undefined,
       });
     })();
@@ -497,7 +879,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (message.type === "AMEX_OFFERS_RUN") {
     selectedCardName = (message.cardName as string) ?? "";
     selectedCardLastDigits = (message.cardLastDigits as string) ?? null;
-    runEnrollment(message.cardId);
+    runEnrollment(message.cardId, normalizeLocale(message.locale));
     sendResponse({ ok: true });
     return true;
   }

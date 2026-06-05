@@ -52,6 +52,18 @@ function getEnterprisePartyId(): string | null {
   return match ? match[1] : null;
 }
 
+function normalizeChaseOfferStatus(status: string | null | undefined): string {
+  return (status ?? "").trim().toUpperCase();
+}
+
+function isChaseActivatedOffer(offer: ChaseOffer): boolean {
+  return normalizeChaseOfferStatus(offer.status) === "ACTIVATED";
+}
+
+function isChaseActivatableOffer(offer: ChaseOffer): boolean {
+  return !isChaseActivatedOffer(offer);
+}
+
 // ── Card Discovery ─────────────────────────────────────────
 
 async function discoverCards(): Promise<ChaseCard[]> {
@@ -131,7 +143,6 @@ async function listOffers(cardIds: string[], primaryCardId: string): Promise<Cha
     const offers = (customerOffers[0].offers ?? []) as Record<string, unknown>[];
 
     return offers
-      .filter((o) => o.offerStatusName !== "ACTIVATED")
       .map((o) => {
         const details = o.offerDetails as Record<string, unknown> | undefined;
         const display = o.offerDisplayDetails as Record<string, unknown> | undefined;
@@ -207,10 +218,18 @@ async function runEnrollment(cardId: string, allCardIds: string[]) {
   cancelled = false;
 
   sendProgress({ status: "fetching" });
-  const offers = await listOffers(allCardIds, cardId);
+  const observedOffers = await listOffers(allCardIds, cardId);
+  const offers = observedOffers.filter(isChaseActivatableOffer);
 
   if (offers.length === 0) {
-    chrome.runtime.sendMessage({ type: "CHASE_OFFERS_COMPLETE", added: 0 }).catch(() => {});
+    chrome.runtime.sendMessage({
+      type: "CHASE_OFFERS_COMPLETE",
+      added: 0,
+      failed: 0,
+      cardId,
+      cardName: selectedCardName,
+      cardLastDigits: selectedCardLastDigits,
+    }).catch(() => {});
     return;
   }
 
@@ -277,15 +296,24 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       const probes = await Promise.all(cards.map((c) => listOffers(allCardIds, c.id)));
       const offerCounts: Record<string, number> = {};
       for (let i = 0; i < cards.length; i++) {
-        offerCounts[cards[i].id] = probes[i].length;
+        const offers = probes[i];
+        const activatableOffers = offers.filter(isChaseActivatableOffer);
+        offerCounts[cards[i].id] = activatableOffers.length;
+        console.info("[NextCard Chase Offers] card discovery summary:", {
+          cardName: cards[i].name,
+          lastDigits: cards[i].lastDigits,
+          observed: offers.length,
+          availableToActivate: activatableOffers.length,
+          alreadyActivated: offers.length - activatableOffers.length,
+        });
 
-        if (probes[i].length > 0) {
+        if (offers.length > 0) {
           chrome.runtime.sendMessage({
             type: "CHASE_OFFERS_DETECTED",
             cardId: cards[i].id,
             cardName: cards[i].name,
             cardLastDigits: cards[i].lastDigits,
-            detectedOffers: probes[i].map((o) => ({
+            detectedOffers: offers.map((o) => ({
               issuerOfferId: o.offerId,
               merchantName: o.name,
               offerValue: o.offerHeaderText,
@@ -299,6 +327,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
               merchantUrl: o.merchantUrl,
               merchantLogoUrl: o.merchantLogoUrl,
               redemptionChannel: o.redemptionChannel,
+              status: isChaseActivatedOffer(o) ? "enrolled" : "detected",
             })),
           }).catch(() => {});
         }
@@ -327,4 +356,3 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     return true;
   }
 });
-

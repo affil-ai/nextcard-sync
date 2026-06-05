@@ -38,6 +38,8 @@ export interface OfferSyncPayload {
   }>;
 }
 
+export type MerchantOfferSyncStatus = "enrolled" | "detected";
+
 export interface CachedOffer {
   merchantName: string;
   offerValue: string | null;
@@ -47,7 +49,7 @@ export interface CachedOffer {
   issuer: string;
   rewardType: "percentage" | "flat_cash" | "points" | null;
   rewardAmount: number | null;
-  status?: "enrolled" | "detected";
+  status?: MerchantOfferSyncStatus;
 }
 
 export type OfferUrlCache = Record<string, CachedOffer[]>;
@@ -74,6 +76,7 @@ export interface DetectedOfferSyncPayload {
     merchantUrl: string | null;
     merchantLogoUrl: string | null;
     redemptionChannel: "online" | "in_store" | "both" | null;
+    status?: MerchantOfferSyncStatus;
     detectedAt: string;
   }>;
 }
@@ -147,6 +150,7 @@ async function updateOfferUrlCache(payload: OfferSyncPayload): Promise<void> {
         issuer: payload.issuer,
         rewardType: offer.rewardType,
         rewardAmount: offer.rewardAmount,
+        status: "enrolled",
       };
 
       if (!cache[hostname]) {
@@ -197,6 +201,10 @@ async function postOfferSync(
   }
 
   const body = await response.json().catch(() => ({}));
+  const debug = (body as Record<string, unknown>).debug;
+  if (debug) {
+    console.info("[NextCard Offers Sync] summary:", debug);
+  }
   return { ok: true, offerMap: (body as Record<string, unknown>).offerMap as OfferUrlCache | undefined };
 }
 
@@ -340,6 +348,14 @@ export async function syncDetectedOffersToNextCard(payload: DetectedOfferSyncPay
       }
 
       const body = await response.json().catch(() => ({}));
+      const debug = (body as Record<string, unknown>).debug;
+      if (debug) {
+        console.info("[NextCard Detected Offers] chunk summary:", {
+          offset,
+          count: offers.length,
+          debug,
+        });
+      }
       latestOfferMap = (body as Record<string, unknown>).offerMap as OfferUrlCache | undefined;
     }
 
@@ -375,7 +391,7 @@ export async function pullOfferUrlCache(): Promise<void> {
       expirationDate: string | null;
       rewardType: "percentage" | "flat_cash" | "points" | null;
       rewardAmount: number | null;
-      status?: "enrolled" | "detected";
+      status?: MerchantOfferSyncStatus;
     }> = data.offers ?? [];
 
     const enrolledCache: OfferUrlCache = {};
@@ -395,6 +411,7 @@ export async function pullOfferUrlCache(): Promise<void> {
         issuer: offer.issuer,
         rewardType: offer.rewardType,
         rewardAmount: offer.rewardAmount,
+        status: offer.status,
       };
 
       const target = offer.status === "detected" ? detectedCache : enrolledCache;

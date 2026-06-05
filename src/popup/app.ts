@@ -98,7 +98,7 @@ function initAmexOffers() {
   let amexCards: Array<{ id: string; name: string; lastDigits: string | null; locale: string; accountKey: string | null }> = [];
   let amexOfferCounts: Record<string, number> = {};
   let selectedCardId = "";
-  let selectedLocale = "en_US";
+  let selectedLocale = "en-US";
   let selectedAccountKey: string | null = null;
   let amexTabId: number | null = null;
   let amexOurTabId: number | null = null;
@@ -128,9 +128,14 @@ function initAmexOffers() {
   }
 
   function findOrOpenAmexTab(callback: (tabId: number) => void) {
-    chrome.tabs.query({ url: "https://global.americanexpress.com/*" }, (tabs) => {
-      if (tabs[0]?.id) {
-        const tabId = tabs[0].id;
+    chrome.tabs.query({ url: "https://global.americanexpress.com/*", currentWindow: true }, (tabs) => {
+      const tab =
+        tabs.find((candidate) => candidate.active)
+        ?? tabs.find((candidate) => candidate.url?.includes("/offers"))
+        ?? tabs[0];
+
+      if (tab?.id) {
+        const tabId = tab.id;
         amexTabId = tabId;
         amexOurTabId = null;
         chrome.tabs.update(tabId, { active: true });
@@ -178,14 +183,14 @@ function initAmexOffers() {
       amexOfferCounts = resp.offerCounts ?? {};
       if (amexCards.length > 0 && cardSelect && cardSelectWrap) {
         cardSelect.innerHTML = amexCards.map((c) => {
-          const n = amexOfferCounts[c.id] ?? 0;
+          const n = amexOfferCounts[c.id];
           const suffix = n > 0 ? ` (${formatAvailableToActivate(n)})` : "";
-          return `<option value="${escapeHtml(c.id)}" data-locale="${escapeHtml(c.locale)}">${escapeHtml(`${formatCardDisplayName(c)}${suffix}`)}</option>`;
+          return `<option value="${escapeHtml(c.id)}" data-locale="${escapeHtml(c.locale ?? "en-US")}">${escapeHtml(`${formatCardDisplayName(c)}${suffix}`)}</option>`;
         }).join("");
         cardSelectWrap.style.display = "";
       }
       selectedCardId = amexCards[0]?.id ?? "";
-      selectedLocale = amexCards[0]?.locale ?? "en_US";
+      selectedLocale = amexCards[0]?.locale ?? "en-US";
       selectedAccountKey = amexCards[0]?.accountKey ?? null;
       updateOfferCountLabel();
       showState("Ready");
@@ -217,7 +222,11 @@ function initAmexOffers() {
 
   function updateOfferCountLabel() {
     if (!offerCountEl) return;
-    const count = amexOfferCounts[selectedCardId] ?? 0;
+    const count = amexOfferCounts[selectedCardId];
+    if (count === undefined) {
+      offerCountEl.textContent = "Offer count unavailable for this card. Refresh to retry.";
+      return;
+    }
     offerCountEl.textContent = count > 0
       ? `${formatAvailableToActivate(count)} on this card`
       : "No new offers to activate for this card";
@@ -276,9 +285,15 @@ function initAmexOffers() {
       } else if (msg.status === "checking_new") {
         if (progressBar) progressBar.style.width = "100%";
         if (progressDetail) progressDetail.textContent = `${added} activated so far - checking for new offers...`;
+      } else if (msg.status === "cooling_down") {
+        if (progressBar) progressBar.style.width = `${pct}%`;
+        const waitSeconds = typeof msg.waitSeconds === "number" ? msg.waitSeconds : 45;
+        const suffix = typeof msg.error === "string" ? ` (${msg.error})` : "";
+        if (progressDetail) progressDetail.textContent = `Amex is slowing requests; waiting ${waitSeconds}s before retrying${suffix}`;
       } else {
         if (progressBar) progressBar.style.width = `${pct}%`;
-        if (progressDetail) progressDetail.textContent = `${added} of ${total} activated`;
+        const suffix = failed > 0 && typeof msg.error === "string" ? ` - last error: ${msg.error}` : "";
+        if (progressDetail) progressDetail.textContent = `${added} of ${total} activated${suffix}`;
       }
     }
     if (msg.type === "AMEX_OFFERS_COMPLETE") {
@@ -286,6 +301,8 @@ function initAmexOffers() {
       const parts: string[] = [];
       if (msg.added > 0) parts.push(`${pluralize(msg.added, "offer")} activated for ${cardLabel}`);
       if (msg.added === 0) parts.push(`No new offers to activate for ${cardLabel}`);
+      if (msg.failed > 0) parts.push(`${pluralize(msg.failed, "offer")} failed`);
+      if (typeof msg.lastError === "string" && msg.lastError) parts.push(`Last error: ${msg.lastError}`);
       if (msg.rounds > 1) parts.push(`${msg.rounds} rounds`);
       if (summaryEl) summaryEl.textContent = parts.join(" · ");
       showState("Done");

@@ -72,7 +72,7 @@ export function createMessageRouter(options: {
   syncEnrolledOffers?: (issuer: string, message: Record<string, unknown>) => void | Promise<void>;
   syncDetectedOffers?: (issuer: string, message: Record<string, unknown>) => void | Promise<void>;
 }) {
-  return (message: Record<string, unknown>, _sender: chrome.runtime.MessageSender, sendResponse: (response?: unknown) => void) => {
+  return (message: Record<string, unknown>, sender: chrome.runtime.MessageSender, sendResponse: (response?: unknown) => void) => {
     switch (message.type) {
       case "REQUEST_SYNC": {
         const providerId = message.provider;
@@ -339,8 +339,15 @@ export function createMessageRouter(options: {
         // (Amex stores product data on Bootstrapper.digitalData, window.digitalData, or window.a_digitalData)
         (async () => {
           try {
-            const tabs = await chrome.tabs.query({ url: "https://global.americanexpress.com/*" });
-            const tabId = tabs[0]?.id;
+            let tabId = sender.tab?.id ?? null;
+            if (tabId) {
+              const tab = await chrome.tabs.get(tabId).catch(() => null);
+              if (!tab?.url?.includes("americanexpress.com")) tabId = null;
+            }
+            if (!tabId) {
+              const tabs = await chrome.tabs.query({ url: "https://global.americanexpress.com/*" });
+              tabId = tabs[0]?.id ?? null;
+            }
             if (!tabId) { sendResponse({ products: null }); return; }
 
             const results = await chrome.scripting.executeScript({
@@ -376,8 +383,15 @@ export function createMessageRouter(options: {
         (async () => {
           try {
             // Find the Amex tab
-            const tabs = await chrome.tabs.query({ url: "https://global.americanexpress.com/*" });
-            const tabId = tabs[0]?.id;
+            let tabId = sender.tab?.id ?? null;
+            if (tabId) {
+              const tab = await chrome.tabs.get(tabId).catch(() => null);
+              if (!tab?.url?.includes("americanexpress.com")) tabId = null;
+            }
+            if (!tabId) {
+              const tabs = await chrome.tabs.query({ url: "https://global.americanexpress.com/*" });
+              tabId = tabs[0]?.id ?? null;
+            }
             if (!tabId) {
               sendResponse({ status: 0, data: null, error: "No Amex tab found" });
               return;
@@ -387,20 +401,26 @@ export function createMessageRouter(options: {
               target: { tabId },
               world: "MAIN",
               func: async (url: string, method: string, headers: Record<string, string>, body: string | undefined) => {
+                const controller = new AbortController();
+                const timeout = setTimeout(() => controller.abort(), 20000);
                 try {
                   const resp = await fetch(url, {
                     method,
                     headers,
+                    cache: "no-store",
                     credentials: "include",
                     redirect: "follow",
                     referrerPolicy: "same-origin",
                     body: body ?? undefined,
+                    signal: controller.signal,
                   });
                   let data = null;
                   try { data = await resp.json(); } catch { /* */ }
                   return { status: resp.status, data };
                 } catch (e) {
                   return { status: 0, data: null, error: String(e) };
+                } finally {
+                  clearTimeout(timeout);
                 }
               },
               args: [fetchUrl, fetchMethod, fetchHeaders, fetchBody ?? ""],
@@ -424,34 +444,76 @@ export function createMessageRouter(options: {
 
         (async () => {
           try {
-            const tabs = await chrome.tabs.query({ url: "https://global.americanexpress.com/*" });
-            const tabId = tabs[0]?.id;
+            let tabId = sender.tab?.id ?? null;
+            if (tabId) {
+              const tab = await chrome.tabs.get(tabId).catch(() => null);
+              if (!tab?.url?.includes("americanexpress.com")) tabId = null;
+            }
+            if (!tabId) {
+              const tabs = await chrome.tabs.query({ url: "https://global.americanexpress.com/*" });
+              tabId = tabs[0]?.id ?? null;
+            }
             if (!tabId) { sendResponse({ result: "failed" }); return; }
 
             const results = await chrome.scripting.executeScript({
               target: { tabId },
               world: "MAIN",
               func: async (cardId: string, offerId: string, locale: string) => {
+                const controller = new AbortController();
+                const timeout = setTimeout(() => controller.abort(), 20000);
                 try {
                   const resp = await fetch("https://functions.americanexpress.com/CreateOffersHubEnrollment.web.v1", {
                     method: "POST",
-                    headers: { "content-type": "application/json", accept: "application/json", "ce-source": "WEB" },
+                    headers: {
+                      "content-type": "application/json",
+                      accept: "application/json",
+                      "ce-source": "WEB",
+                    },
+                    cache: "no-store",
                     credentials: "include",
-                    body: JSON.stringify({ accountNumberProxy: cardId, locale, offerId, requestType: "OFFERSHUB_ENROLLMENT", synchronizeOnly: false, enrollmentTrigger: "OFFERSHUB_TILE" }),
+                    signal: controller.signal,
+                    body: JSON.stringify({
+                      accountNumberProxy: cardId,
+                      locale,
+                      offerId,
+                      requestType: "OFFERSHUB_ENROLLMENT",
+                      offerUnencrypted: false,
+                      synchronizeOnly: false,
+                      enrollmentTrigger: "OFFERSHUB_TILE",
+                    }),
                   });
                   let json: Record<string, unknown> | null = null;
                   try { json = await resp.json(); } catch { /* */ }
-                  const ok = resp.status === 200 && ((json?.status as Record<string, unknown>)?.purpose === "SUCCESS" || (json?.isEnrolled && json.isEnrolled !== "false"));
-                  const dup = resp.status === 200 && json?.explanationCode === "PZN4107";
-                  if (ok) return "added";
-                  if (dup) return "skipped";
-                  return "failed";
-                } catch { return "failed"; }
+                  const ok = resp.status === 200 && (
+                    (json?.status as Record<string, unknown> | undefined)?.purpose === "SUCCESS"
+                    || (json?.isEnrolled && json.isEnrolled !== "false")
+                  );
+                  const alreadyEnrolled = resp.status === 200 && (
+                    json?.explanationCode === "PZN4107"
+                  );
+                  if (ok) return { result: "added" };
+                  if (alreadyEnrolled) return { result: "skipped" };
+                  return {
+                    result: "failed",
+                    status: resp.status,
+                    purpose: (json?.status as Record<string, unknown> | undefined)?.purpose,
+                    message: (json?.status as Record<string, unknown> | undefined)?.message,
+                    explanationCode: json?.explanationCode,
+                  };
+                } catch (error) {
+                  return { result: "failed", error: String(error) };
+                } finally {
+                  clearTimeout(timeout);
+                }
               },
               args: [enrollCardId, enrollOfferId, enrollLocale],
             });
 
-            sendResponse({ result: results?.[0]?.result ?? "failed" });
+            const result = results?.[0]?.result as { result?: string } | undefined;
+            if (result?.result === "failed") {
+              console.warn("[NextCard SW] AMEX_OFFERS_ENROLL_ONE failed:", result);
+            }
+            sendResponse(result ?? { result: "failed" });
           } catch {
             sendResponse({ result: "failed" });
           }
