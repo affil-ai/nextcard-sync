@@ -97,11 +97,10 @@ export function createAmexSync(options: AmexSyncDeps) {
 
     try {
       const tab = await chrome.tabs.create({ url: definition.syncUrl, active: true });
-      await waitForTabLoad(tab.id!, 30000);
-
       const tabId = tab.id;
       if (!tabId) throw new Error("Could not create tab");
       options.stateStore.recordRunTab("amex", attemptId, tabId, { owned: true });
+      await waitForTabLoad(tabId, 30000);
 
       await new Promise((resolve) => setTimeout(resolve, 2000));
       const currentTab = await chrome.tabs.get(tabId);
@@ -305,6 +304,8 @@ export function createAmexSync(options: AmexSyncDeps) {
         error: errorMessage,
       });
       console.error("[NextCard SW] Amex sync error:", error);
+    } finally {
+      options.stateStore.finishSyncRun("amex", attemptId);
     }
   };
 }

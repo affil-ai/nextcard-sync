@@ -52,10 +52,6 @@ export function createHyattSync(options: HyattSyncDeps) {
   return async function startHyattSync() {
     const attemptId = options.stateStore.beginSyncRun("hyatt").attemptId;
     const definition = options.providerRegistry.hyatt;
-    const accountUrl = definition.accountUrl;
-    if (!accountUrl) {
-      throw new Error("Missing Hyatt account URL");
-    }
 
     options.stateStore.updateProvider("hyatt", {
       status: "detecting_login",
@@ -64,14 +60,19 @@ export function createHyattSync(options: HyattSyncDeps) {
     });
 
     try {
+      const accountUrl = definition.accountUrl;
+      if (!accountUrl) {
+        throw new Error("Missing Hyatt account URL");
+      }
+
       const tab = await chrome.tabs.create({ url: accountUrl, active: true });
       const tabId = tab.id;
       if (!tabId) {
         throw new Error("Could not create tab");
       }
 
-      await waitForTabLoad(tabId, 30000);
       options.stateStore.recordRunTab("hyatt", attemptId, tabId, { owned: true });
+      await waitForTabLoad(tabId, 30000);
       setHyattProgress("Checking Hyatt sign-in...", "detecting_login");
 
       const firstMessage = await new Promise<Record<string, unknown>>((resolve) => {
@@ -244,6 +245,8 @@ export function createHyattSync(options: HyattSyncDeps) {
         progressMessage: null,
       });
       console.error("[NextCard SW] Hyatt sync error:", error);
+    } finally {
+      options.stateStore.finishSyncRun("hyatt", attemptId);
     }
   };
 }

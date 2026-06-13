@@ -351,11 +351,10 @@ export function createGenericSyncHandlers(options: GenericSyncDeps) {
 
     try {
       const tab = await chrome.tabs.create({ url: config.syncUrl, active: true });
-      await waitForTabLoad(tab.id!, 30000);
-
       const tabId = tab.id;
       if (!tabId) throw new Error("Could not create tab");
       options.stateStore.recordRunTab("atmos", attemptId, tabId, { owned: true });
+      await waitForTabLoad(tabId, 30000);
       setProviderProgress("atmos", "Reading Alaska Atmos overview...");
 
       let overview = waitForAtmosMessage(attemptId, "ATMOS_OVERVIEW_DONE");
@@ -550,6 +549,8 @@ export function createGenericSyncHandlers(options: GenericSyncDeps) {
         progressMessage: null,
       });
       console.error("[NextCard SW] Atmos sync error:", error);
+    } finally {
+      options.stateStore.finishSyncRun("atmos", attemptId);
     }
   }
 
@@ -766,8 +767,8 @@ export function createGenericSyncHandlers(options: GenericSyncDeps) {
       const tab = await chrome.tabs.create({ url: definition.syncUrl, active: true });
       const tabId = tab.id;
       if (!tabId) throw new Error("Could not create tab");
-      await waitForTabLoad(tabId, 30000);
       options.stateStore.recordRunTab(providerId, attemptId, tabId, { owned: true });
+      await waitForTabLoad(tabId, 30000);
 
       let currentTab = await chrome.tabs.get(tabId);
       let landingUrl = currentTab.url ?? "";
@@ -1043,6 +1044,8 @@ export function createGenericSyncHandlers(options: GenericSyncDeps) {
         progressMessage: null,
       });
       console.error(`[NextCard SW] ${definition.name} sync error:`, error);
+    } finally {
+      options.stateStore.finishSyncRun(providerId, attemptId);
     }
   }
 

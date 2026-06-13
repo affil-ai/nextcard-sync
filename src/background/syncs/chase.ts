@@ -904,8 +904,8 @@ export function createChaseSync(options: ChaseSyncDeps) {
       }
 
       progressTabId = tabId;
-      await waitForTabLoad(tabId, 30000);
       options.stateStore.recordRunTab("chase", attemptId, tabId, { owned: true });
+      await waitForTabLoad(tabId, 30000);
 
       const alreadyLoaded = await chaseDashboardHasContent(tabId);
       if (!alreadyLoaded) {
@@ -1001,6 +1001,7 @@ export function createChaseSync(options: ChaseSyncDeps) {
       });
       console.error("[NextCard SW] Chase sync error:", error);
     } finally {
+      options.stateStore.finishSyncRun("chase", attemptId);
       progressTabId = null;
     }
   };

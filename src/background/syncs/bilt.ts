@@ -54,10 +54,6 @@ export function createBiltSync(options: BiltSyncDeps) {
   return async function startBiltSync() {
     const attemptId = options.stateStore.beginSyncRun("bilt").attemptId;
     const definition = options.providerRegistry.bilt;
-    const accountUrl = definition.accountUrl;
-    if (!accountUrl) {
-      throw new Error("Missing Bilt account URL");
-    }
 
     options.stateStore.updateProvider("bilt", {
       status: "detecting_login",
@@ -66,15 +62,20 @@ export function createBiltSync(options: BiltSyncDeps) {
     });
 
     try {
+      const accountUrl = definition.accountUrl;
+      if (!accountUrl) {
+        throw new Error("Missing Bilt account URL");
+      }
+
       const tab = await chrome.tabs.create({ url: accountUrl, active: true });
       const tabId = tab.id;
       if (!tabId) {
         throw new Error("Could not create tab");
       }
 
-      await waitForTabLoad(tabId, 30000);
       options.stateStore.recordRunTab("bilt", attemptId, tabId, { owned: true });
-      setBiltProgress("Reading Bilt wallet...");
+      await waitForTabLoad(tabId, 30000);
+      setBiltProgress("Checking Bilt sign-in...", "detecting_login");
 
       const firstMessage = await new Promise<Record<string, unknown>>((resolve) => {
         const timeout = setTimeout(() => {
@@ -245,6 +246,8 @@ export function createBiltSync(options: BiltSyncDeps) {
         progressMessage: null,
       });
       console.error("[NextCard SW] Bilt sync error:", error);
+    } finally {
+      options.stateStore.finishSyncRun("bilt", attemptId);
     }
   };
 }

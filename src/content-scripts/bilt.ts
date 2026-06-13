@@ -23,21 +23,44 @@ function detectLoginState(): LoginState {
   const url = window.location.href.toLowerCase();
   const bodyText = document.body?.innerText ?? "";
   const pointsPill = document.querySelector('[data-testid="user-info-points-pill"]');
+  const hasPasswordInput = Array.from(
+    document.querySelectorAll<HTMLInputElement>(
+      'input[type="password"], input[autocomplete="current-password"]',
+    ),
+  ).some((input) => input.offsetParent !== null);
 
   // Wallet is the most reliable authenticated surface for cardholders.
   if (pointsPill || (url.includes("/wallet") && bodyText.includes("Your Wallet"))) {
     return "logged_in";
   }
 
+  if (
+    hasPasswordInput
+    || /\b(sign in|log in)\b/i.test(bodyText)
+    || url.includes("login")
+    || url.includes("signin")
+    || url.includes("sign-in")
+  ) {
+    return "logged_out";
+  }
+
   if (url.includes("bilt.com/account") && !/sign in|log in/i.test(bodyText)) {
     return "logged_in";
   }
 
-  if (url.includes("login") || url.includes("signin") || url.includes("sign-in")) {
-    return "logged_out";
+  return "unknown";
+}
+
+async function waitForResolvedLoginState(attemptId: string, maxWaitMs = 10000) {
+  const startTime = Date.now();
+  let loginState = detectLoginState();
+
+  while (loginState === "unknown" && Date.now() - startTime < maxWaitMs) {
+    await runControl.sleep(500, attemptId);
+    loginState = detectLoginState();
   }
 
-  return "unknown";
+  return loginState;
 }
 
 // ── Wait for content to render ───────────────────────────────
@@ -557,8 +580,15 @@ function scrapeStatusTracker(): BiltProgress {
 // ── Orchestration ────────────────────────────────────────────
 
 async function runExtraction(attemptId: string) {
-  const loginState = detectLoginState();
+  let loginState = detectLoginState();
   const url = window.location.href.toLowerCase();
+  if (loginState === "unknown" && url.includes("/wallet")) {
+    loginState = await waitForResolvedLoginState(attemptId);
+    if (loginState === "unknown") {
+      loginState = "logged_out";
+    }
+  }
+
   await runControl.sendMessage(attemptId, { type: "LOGIN_STATE", state: loginState });
 
   if (loginState === "logged_out" || loginState === "mfa_challenge") {

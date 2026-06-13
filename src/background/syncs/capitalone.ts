@@ -378,10 +378,10 @@ export function createCapitalOneSync(options: CapitalOneSyncDeps) {
         throw new Error("Could not create tab");
       }
 
-      await waitForTabLoad(tabId, 30000);
       options.stateStore.recordRunTab("capitalone", attemptId, tabId, {
         owned: true,
       });
+      await waitForTabLoad(tabId, 30000);
 
       const currentTab = await chrome.tabs.get(tabId);
       const landingUrl = currentTab.url ?? "";
@@ -515,6 +515,8 @@ export function createCapitalOneSync(options: CapitalOneSyncDeps) {
         progressMessage: null,
       });
       console.error("[NextCard SW] CapitalOne sync error:", error);
+    } finally {
+      options.stateStore.finishSyncRun("capitalone", attemptId);
     }
   };
 }
