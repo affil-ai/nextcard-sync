@@ -208,8 +208,8 @@ function initAmexOffers() {
       tryDiscoverOffers(tabId, gen);
     });
   }
-  discoverBtn?.addEventListener("click", (e) => { e.stopPropagation(); handleAmexDiscover(); });
-  amexCard?.addEventListener("click", () => { if (panels.Initial?.style.display !== "none") handleAmexDiscover(); });
+  discoverBtn?.addEventListener("click", (e) => { e.stopPropagation(); requestToolConsent(handleAmexDiscover); });
+  amexCard?.addEventListener("click", () => { if (panels.Initial?.style.display !== "none") requestToolConsent(handleAmexDiscover); });
   document.getElementById("amexOffersLoadingCancel")?.addEventListener("click", (e) => {
     e.stopPropagation();
     amexDiscoverGen++;
@@ -218,7 +218,9 @@ function initAmexOffers() {
     amexTabId = null;
     amexOurTabId = null;
   });
-  document.getElementById("amexOffersRefreshBtn")?.addEventListener("click", () => { if (amexTabId) tryDiscoverOffers(amexTabId, ++amexDiscoverGen); });
+  document.getElementById("amexOffersRefreshBtn")?.addEventListener("click", () => {
+    requestToolConsent(() => { if (amexTabId) tryDiscoverOffers(amexTabId, ++amexDiscoverGen); });
+  });
 
   function updateOfferCountLabel() {
     if (!offerCountEl) return;
@@ -242,14 +244,14 @@ function initAmexOffers() {
     }
   });
 
-  runBtn?.addEventListener("click", () => {
+  runBtn?.addEventListener("click", () => requestToolConsent(() => {
     if (!amexTabId) return;
     showState("Running");
     if (progressBar) progressBar.style.width = "0%";
     if (progressDetail) progressDetail.textContent = "";
     const amexSelectedCard = amexCards.find((c) => c.id === selectedCardId);
     chrome.tabs.sendMessage(amexTabId, { type: "AMEX_OFFERS_RUN", cardId: selectedCardId, locale: selectedLocale, accountKey: selectedAccountKey, cardName: amexSelectedCard?.name ?? "", cardLastDigits: amexSelectedCard?.lastDigits ?? null });
-  });
+  }));
 
   stopBtn?.addEventListener("click", () => {
     if (!amexTabId) return;
@@ -430,8 +432,8 @@ function initChaseOffers() {
       tryDiscover(tabId, gen);
     });
   }
-  document.getElementById("chaseOffersDiscoverBtn")?.addEventListener("click", (e) => { e.stopPropagation(); handleChaseDiscover(); });
-  chaseCard?.addEventListener("click", () => { if (states.Initial?.style.display !== "none") handleChaseDiscover(); });
+  document.getElementById("chaseOffersDiscoverBtn")?.addEventListener("click", (e) => { e.stopPropagation(); requestToolConsent(handleChaseDiscover); });
+  chaseCard?.addEventListener("click", () => { if (states.Initial?.style.display !== "none") requestToolConsent(handleChaseDiscover); });
   document.getElementById("chaseOffersLoadingCancel")?.addEventListener("click", (e) => {
     e.stopPropagation();
     chaseDiscoverGen++;
@@ -440,7 +442,9 @@ function initChaseOffers() {
     chaseTabId = null;
     chaseOurTabId = null;
   });
-  document.getElementById("chaseOffersRefreshBtn")?.addEventListener("click", () => { if (chaseTabId) tryDiscover(chaseTabId, ++chaseDiscoverGen); });
+  document.getElementById("chaseOffersRefreshBtn")?.addEventListener("click", () => {
+    requestToolConsent(() => { if (chaseTabId) tryDiscover(chaseTabId, ++chaseDiscoverGen); });
+  });
 
   function updateChaseOfferCountLabel() {
     if (!offerCountEl) return;
@@ -458,7 +462,7 @@ function initChaseOffers() {
     }
   });
 
-  document.getElementById("chaseOffersRunBtn")?.addEventListener("click", () => {
+  document.getElementById("chaseOffersRunBtn")?.addEventListener("click", () => requestToolConsent(() => {
     if (!chaseTabId) return;
     showState("Running");
     if (progressBar) progressBar.style.width = "0%";
@@ -466,7 +470,7 @@ function initChaseOffers() {
     const allCardIds = chaseCards.map((c) => c.id);
     const chaseSelectedCard = chaseCards.find((c) => c.id === selectedCardId);
     chrome.tabs.sendMessage(chaseTabId, { type: "CHASE_OFFERS_RUN", cardId: selectedCardId, allCardIds, cardName: chaseSelectedCard?.name ?? "", cardLastDigits: chaseSelectedCard?.lastDigits ?? null });
-  });
+  }));
 
   document.getElementById("chaseOffersStopBtn")?.addEventListener("click", () => {
     if (!chaseTabId) return;
@@ -613,8 +617,8 @@ function initCitiOffers() {
     citiTabId = null;
     findOrOpenCitiTab((tabId) => { if (gen !== citiDiscoverGen) return; citiTabId = tabId; tryDiscover(tabId, gen); });
   }
-  document.getElementById("citiOffersDiscoverBtn")?.addEventListener("click", (e) => { e.stopPropagation(); handleCitiDiscover(); });
-  citiCard?.addEventListener("click", () => { if (states.Initial?.style.display !== "none") handleCitiDiscover(); });
+  document.getElementById("citiOffersDiscoverBtn")?.addEventListener("click", (e) => { e.stopPropagation(); requestToolConsent(handleCitiDiscover); });
+  citiCard?.addEventListener("click", () => { if (states.Initial?.style.display !== "none") requestToolConsent(handleCitiDiscover); });
   document.getElementById("citiOffersLoadingCancel")?.addEventListener("click", (e) => {
     e.stopPropagation();
     citiDiscoverGen++;
@@ -623,7 +627,9 @@ function initCitiOffers() {
     citiTabId = null;
     citiOurTabId = null;
   });
-  document.getElementById("citiOffersRefreshBtn")?.addEventListener("click", () => { if (citiTabId) tryDiscover(citiTabId, ++citiDiscoverGen); });
+  document.getElementById("citiOffersRefreshBtn")?.addEventListener("click", () => {
+    requestToolConsent(() => { if (citiTabId) tryDiscover(citiTabId, ++citiDiscoverGen); });
+  });
 
   function updateCitiOfferCountLabel() {
     if (!offerCountEl) return;
@@ -641,13 +647,13 @@ function initCitiOffers() {
     }
   });
 
-  document.getElementById("citiOffersRunBtn")?.addEventListener("click", () => {
+  document.getElementById("citiOffersRunBtn")?.addEventListener("click", () => requestToolConsent(() => {
     if (!citiTabId) return;
     showState("Running");
     if (progressBar) progressBar.style.width = "0%";
     const citiSelectedCard = citiCards.find((c) => c.id === selectedAccountId);
     chrome.tabs.sendMessage(citiTabId, { type: "CITI_OFFERS_RUN", accountId: selectedAccountId, cardName: citiSelectedCard?.name ?? "", cardLastDigits: citiSelectedCard?.lastDigits ?? null });
-  });
+  }));
 
   document.getElementById("citiOffersStopBtn")?.addEventListener("click", () => {
     if (!citiTabId) return;
@@ -860,8 +866,8 @@ function initCapitalOneOffers() {
     });
   }
 
-  document.getElementById("capitaloneOffersDiscoverBtn")?.addEventListener("click", (e) => { e.stopPropagation(); handleDiscover(); });
-  capitalOneCard?.addEventListener("click", () => { if (states.Initial?.style.display !== "none") handleDiscover(); });
+  document.getElementById("capitaloneOffersDiscoverBtn")?.addEventListener("click", (e) => { e.stopPropagation(); requestToolConsent(handleDiscover); });
+  capitalOneCard?.addEventListener("click", () => { if (states.Initial?.style.display !== "none") requestToolConsent(handleDiscover); });
   document.getElementById("capitaloneOffersLoadingCancel")?.addEventListener("click", (e) => {
     e.stopPropagation();
     capitalOneDiscoverGen++;
@@ -872,16 +878,16 @@ function initCapitalOneOffers() {
   });
   document.getElementById("capitaloneOffersRefreshBtn")?.addEventListener("click", (e) => {
     e.stopPropagation();
-    handleRefresh();
+    requestToolConsent(handleRefresh);
   });
 
-  document.getElementById("capitaloneOffersRunBtn")?.addEventListener("click", () => {
+  document.getElementById("capitaloneOffersRunBtn")?.addEventListener("click", () => requestToolConsent(() => {
     if (!capitalOneTabId) return;
     showState("Running");
     if (progressBar) progressBar.style.width = "0%";
     if (progressDetail) progressDetail.textContent = "Syncing all accounts...";
     chrome.tabs.sendMessage(capitalOneTabId, { type: "CAPITALONE_OFFERS_RUN" });
-  });
+  }));
 
   document.getElementById("capitaloneOffersStopBtn")?.addEventListener("click", () => {
     if (!capitalOneTabId) return;
@@ -891,7 +897,7 @@ function initCapitalOneOffers() {
   });
 
   document.getElementById("capitaloneOffersRunAgainBtn")?.addEventListener("click", () => {
-    handleRefresh();
+    requestToolConsent(handleRefresh);
   });
   document.getElementById("capitaloneOffersRetryBtn")?.addEventListener("click", () => showState("Initial"));
 
@@ -1015,8 +1021,8 @@ function initDiscoverBonus() {
       }, 120000);
     });
   }
-  document.getElementById("discoverBonusBtn")?.addEventListener("click", (e) => { e.stopPropagation(); handleDiscoverBonus(); });
-  discoverCard?.addEventListener("click", () => { if (states.Initial?.style.display !== "none") handleDiscoverBonus(); });
+  document.getElementById("discoverBonusBtn")?.addEventListener("click", (e) => { e.stopPropagation(); requestToolConsent(handleDiscoverBonus); });
+  discoverCard?.addEventListener("click", () => { if (states.Initial?.style.display !== "none") requestToolConsent(handleDiscoverBonus); });
 
   document.getElementById("discoverBonusAgainBtn")?.addEventListener("click", () => showState("Initial"));
   document.getElementById("discoverBonusRetryBtn")?.addEventListener("click", () => showState("Initial"));
@@ -1062,7 +1068,7 @@ function initChaseBonusRegistration() {
     }
   });
 
-  document.getElementById("chaseBonusRegisterBtn")?.addEventListener("click", () => {
+  document.getElementById("chaseBonusRegisterBtn")?.addEventListener("click", () => requestToolConsent(() => {
     const lastName = lastNameInput?.value.trim() ?? "";
     const zip = zipInput?.value.trim() ?? "";
 
@@ -1117,7 +1123,7 @@ function initChaseBonusRegistration() {
         showState("Done");
       });
     });
-  });
+  }));
 
   document.getElementById("chaseBonusAgainBtn")?.addEventListener("click", () => showState("Initial"));
   document.getElementById("chaseBonusRetryBtn")?.addEventListener("click", () => showState("Initial"));
@@ -1268,12 +1274,30 @@ async function startSyncFlow(
 const consentController = createConsentController({
   ...consentElements,
   onContinue: (providerId) => {
-    consentGiven = true;
-    chrome.storage.local.set({ consentGiven: true });
-    void recordConsent();
+    markConsentAccepted();
     void startSyncFlow(providerId, { showViewOnStart: true });
   },
+  onActionContinue: (action) => {
+    markConsentAccepted();
+    action();
+  },
 });
+
+function markConsentAccepted() {
+  consentGiven = true;
+  chrome.storage.local.set({ consentGiven: true });
+  void recordConsent();
+}
+
+function requestToolConsent(action: () => void) {
+  if (!consentGiven) {
+    consentController.requestAction(action);
+    return false;
+  }
+
+  action();
+  return true;
+}
 
 async function requestSync(providerId: ProviderId) {
   if (

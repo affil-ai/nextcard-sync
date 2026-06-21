@@ -144,7 +144,7 @@
           <div class="home-section-label">Offers</div>
           <button class="info-popover-btn" type="button" aria-label="About offer tools" aria-expanded="false" aria-describedby="offersExplainer" data-info-toggle="offersExplainer">?</button>
           <div class="info-popover" id="offersExplainer" role="tooltip">
-            Offer tools find eligible card-linked merchant offers, add or sync them, and save them to your nextcard offers dashboard.
+            Offer tools read eligible card-linked merchant offers, add or sync them, and save offer details to your nextcard offers dashboard. Offer reminders may check the active shopping site's hostname against your saved offers. Some tools use your signed-in issuer session locally for actions you request; issuer cookies are not stored or sent to nextcard.
           </div>
         </div>
 
@@ -289,7 +289,7 @@
           <div class="home-section-label">Bonuses</div>
           <button class="info-popover-btn" type="button" aria-label="About bonus tools" aria-expanded="false" aria-describedby="bonusesExplainer" data-info-toggle="bonusesExplainer">?</button>
           <div class="info-popover" id="bonusesExplainer" role="tooltip">
-            Bonus tools activate quarterly or targeted card bonuses when an issuer supports automated registration.
+            Bonus tools activate quarterly or targeted card bonuses when an issuer supports automated registration. They may use synced card last-four digits, details you enter, and your signed-in issuer session locally to complete requested registrations.
           </div>
         </div>
 
@@ -338,6 +338,10 @@
         </div>
       </div>
       <div class="changelog" id="changelog">
+        <h4>v0.7.2</h4>
+        <ul>
+          <li>Updated first-use consent and privacy disclosures for sync, offer, and bonus tools</li>
+        </ul>
         <h4>v0.7.1</h4>
         <ul>
           <li>Allow sync retries after provider timeouts</li>
@@ -1790,16 +1794,25 @@
         <div class="auth-title" style="margin-bottom: 12px;">Before we sync</div>
         <div class="onboarding-privacy">
           <p>
-            <strong>nextcard never sees, intercepts, or stores your login credentials.</strong>
-            You sign in directly on the provider's own website — we only read the page after you're logged in.
+            <strong>nextcard sync reads account information visible after you sign in to a supported provider.</strong>
+            This can include rewards balances, status, tier progress, member identifiers, card names, last four digits, benefit usage, merchant offers, offer details, and bonus registration details you enter.
           </p>
           <p>
-            Your synced data is encrypted and stored in your nextcard account. You can delete it at any time.
+            We save synced data to your nextcard account and may store limited data locally in Chrome for auth, sync status, retries, settings, and offer reminders. We do not store your provider passwords or MFA codes.
+          </p>
+          <p>
+            For offer reminders, nextcard sync may check the hostname of the active shopping site against your saved offers.
+          </p>
+          <p>
+            For some offer and bonus tools, the extension may use your existing signed-in issuer session locally to complete actions you request. We do not store or send issuer cookies to nextcard.
+          </p>
+          <p>
+            <a href="https://www.nextcard.com/privacy/nextcard-sync" target="_blank" rel="noopener noreferrer">Privacy Policy</a>
           </p>
         </div>
         <label class="onboarding-check-row">
           <input type="checkbox" id="consentCheckbox" />
-          <span class="onboarding-check-label">I understand that nextcard does not access or store my login credentials</span>
+          <span class="onboarding-check-label">I agree that nextcard sync may read this provider data and save it to my nextcard account</span>
         </label>
         <button class="auth-sign-in-btn consent-btn" id="consentContinueBtn" disabled>Continue & Sync</button>
       </div>

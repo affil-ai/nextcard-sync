@@ -63,26 +63,44 @@ export function createConsentController(options: {
   consentCheckbox: HTMLInputElement;
   consentContinueBtn: HTMLButtonElement;
   onContinue: (providerId: ProviderId) => void;
+  onActionContinue?: (action: () => void) => void;
 }) {
   let pendingProvider: ProviderId | null = null;
+  let pendingAction: (() => void) | null = null;
 
   options.consentCheckbox.addEventListener("change", () => {
     options.consentContinueBtn.disabled = !options.consentCheckbox.checked;
   });
 
   options.consentContinueBtn.addEventListener("click", () => {
-    if (!pendingProvider) return;
+    if (!pendingProvider && !pendingAction) return;
     const providerId = pendingProvider;
+    const action = pendingAction;
     pendingProvider = null;
+    pendingAction = null;
     options.consentModal.classList.remove("visible");
     options.consentCheckbox.checked = false;
     options.consentContinueBtn.disabled = true;
-    options.onContinue(providerId);
+    if (action) {
+      options.onActionContinue?.(action);
+      return;
+    }
+    if (providerId) {
+      options.onContinue(providerId);
+    }
   });
 
   return {
     request(providerId: ProviderId) {
       pendingProvider = providerId;
+      pendingAction = null;
+      options.consentModal.classList.add("visible");
+      options.consentCheckbox.checked = false;
+      options.consentContinueBtn.disabled = true;
+    },
+    requestAction(action: () => void) {
+      pendingProvider = null;
+      pendingAction = action;
       options.consentModal.classList.add("visible");
       options.consentCheckbox.checked = false;
       options.consentContinueBtn.disabled = true;
