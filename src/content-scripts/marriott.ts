@@ -475,6 +475,7 @@ function parseIntSafe(str: string, max = 100000): number | null {
 const AWARD_PATTERNS = [
   { regex: /suite\s*night\s*award/i, type: "Suite Night Award" },
   { regex: /free\s*night\s*award/i, type: "Free Night Award" },
+  { regex: /club\s*level\s*upgrade/i, type: "Club Level Upgrade" },
   { regex: /annual\s*choice\s*benefit/i, type: "Annual Choice Benefit" },
   { regex: /confirmed\s*suite\s*upgrade/i, type: "Confirmed Suite Upgrade" },
   { regex: /united\s*club\s*pass/i, type: "United Club Pass" },
@@ -488,6 +489,41 @@ const EXPIRY_REGEX = new RegExp(
   String.raw`(?:Expires?|Expiration|Valid\s+(?:through|until|thru))[:\s]*` + DATE_PATTERN,
   "i"
 );
+
+function normalizeElementText(el: Element) {
+  return el.textContent?.replace(/\s+/g, " ").trim() ?? "";
+}
+
+function getAwardContextText(el: Element) {
+  const candidates: Element[] = [];
+  let current: Element | null = el;
+
+  while (current && current !== document.body && candidates.length < 6) {
+    candidates.push(current);
+    current = current.parentElement;
+  }
+
+  const texts = candidates
+    .map(normalizeElementText)
+    .filter((text) => text.length >= 10 && text.length <= 700);
+
+  return texts.find((text) => EXPIRY_REGEX.test(text)) ?? texts[0] ?? "";
+}
+
+function extractAwardDescription(text: string, awardType: string) {
+  if (awardType === "Club Level Upgrade") {
+    const match = text.match(
+      /(Club\s+Level\s+Upgrade\s+Up\s+To\s+\d+\s+Nights?\s*-\s*\d+)/i
+    );
+    return match?.[1]?.replace(/\s+/g, " ").trim() ?? null;
+  }
+
+  const match = text.match(
+    /((?:Free|Suite)\s+Night\s+Award\s+valued\s+up\s+to\s+[\w\d,]+\s*(?:pts|points)?[^]*?)(?=\s*Expires?|\s*$)/i
+  );
+
+  return match?.[1]?.replace(/\s+/g, " ").trim() ?? null;
+}
 
 function scrapeEarnedRewards(): MarriottCertificate[] {
   const certs: MarriottCertificate[] = [];
@@ -515,10 +551,14 @@ function scrapeEarnedRewards(): MarriottCertificate[] {
     }
     if (!awardType) continue;
 
+    const contextText = getAwardContextText(el);
+    const contextLowerText = contextText.toLowerCase();
+
     // Must have descriptive detail — skip summary badges and headers
     const hasDetail =
-      lowerText.includes("valued") ||
-      (lowerText.includes("expires") && lowerText.includes("award"));
+      contextLowerText.includes("valued") ||
+      contextLowerText.includes("club level upgrade") ||
+      (contextLowerText.includes("expires") && contextLowerText.includes("award"));
 
     if (!hasDetail) continue;
 
@@ -528,20 +568,13 @@ function scrapeEarnedRewards(): MarriottCertificate[] {
     if (el.querySelectorAll("*").length > 20) continue;
 
     // Extract the specific award description line
-    const descMatch = text.match(
-      /((?:Free|Suite)\s+Night\s+Award\s+valued\s+up\s+to\s+[\w\d,]+\s*(?:pts|points)?[^]*?)(?=\s*Expires?|\s*$)/i
-    );
-
-    if (!descMatch) continue;
-
-    const description = descMatch[1]
-      .replace(/\s+/g, " ")
-      .trim();
+    const description = extractAwardDescription(contextText, awardType);
+    if (!description) continue;
 
     if (seenDescriptions.has(description)) continue;
     seenDescriptions.add(description);
 
-    const expiryMatch = text.match(EXPIRY_REGEX);
+    const expiryMatch = contextText.match(EXPIRY_REGEX);
     const expiryDate = expiryMatch ? expiryMatch[1].trim() : null;
 
     let propertyCategory: string | null = null;
@@ -603,7 +636,7 @@ async function runExtraction(attemptId: string) {
     certificates: certs,
     memberNumber: accountData.memberNumber ?? null,
     memberName: accountData.memberName ?? null,
-    pointsExpirationDate: null,
+    pointsExpirationDate: accountData.pointsExpirationDate ?? null,
   };
 
   await runControl.sendMessage(attemptId, { type: "EXTRACTION_DONE", data: finalData });
