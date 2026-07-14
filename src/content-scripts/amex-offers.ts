@@ -33,7 +33,11 @@ interface AmexOffer {
 interface AmexOfferList {
   offers: AmexOffer[];
   eligibleCount: number | null;
+  complete: boolean;
+  rawOfferCount?: number;
 }
+
+const MAX_AMEX_OFFER_PAGES = 50;
 
 interface AmexApiResult {
   status: number;
@@ -109,8 +113,10 @@ function readLastDigits(product: Record<string, unknown>): string | null {
 
   for (const candidate of candidates) {
     const text = readString(candidate);
-    const digits = text?.match(/\d{4}(?!.*\d)/)?.[0] ?? null;
-    if (digits) return digits;
+    const digits = text?.match(/\d+(?!.*\d)/)?.[0] ?? null;
+    // Amex exposes a five-digit account suffix in some surfaces. Preserve it
+    // for matching, without ever sending a full account number to NextCard.
+    if (digits && digits.length >= 4) return digits.slice(-5);
   }
 
   return null;
@@ -240,7 +246,11 @@ function mergeDiscoveredCards(
     const match =
       dashboardCards.find((candidate) => candidate.id === card.id)
       ?? dashboardCards.find((candidate) => candidate.accountKey && candidate.accountKey === card.accountKey)
-      ?? dashboardCards.find((candidate) => candidate.lastDigits && candidate.lastDigits === card.lastDigits)
+      ?? dashboardCards.find((candidate) => (
+        candidate.lastDigits
+        && card.lastDigits
+        && candidate.lastDigits.slice(-4) === card.lastDigits.slice(-4)
+      ))
       ?? dashboardCards[index];
 
     if (!match) return card;
@@ -371,7 +381,7 @@ async function discoverCardsFromDashboard(): Promise<AmexCard[]> {
       if (statusMatch && statusMatch[1] === "Canceled") continue;
 
       const digitsMatch = section.match(/"display_account_number","(\d+)"/);
-      const lastDigits = digitsMatch ? digitsMatch[1].slice(-4) : null;
+      const lastDigits = digitsMatch ? digitsMatch[1].slice(-5) : null;
 
       let accountKey: string | null = null;
       const keyMatch = decoded.match(new RegExp(`"accountToken","${accountToken}","accountKey","([^"]+)"`));
@@ -455,7 +465,30 @@ function isUnenrolledOffer(offer: AmexOffer): boolean {
   return !isAmexIssuerEnrolledStatus(offer.status);
 }
 
-async function listOffersLegacy(cardId: string, locale: string): Promise<AmexOfferList | null> {
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function readLegacyOfferPage(
+  data: Record<string, unknown>,
+  sectionName: "recommendedOffers" | "addedToCard",
+  pageKey: string,
+): Record<string, unknown>[] | null {
+  const section = data[sectionName];
+  if (!isRecord(section) || !isRecord(section.offersList)) return null;
+
+  const page = section.offersList[pageKey];
+  if (!Array.isArray(page) || !page.every(isRecord)) return null;
+  return page;
+}
+
+async function listOffersLegacyPage(
+  cardId: string,
+  locale: string,
+  pageNumber: number,
+): Promise<AmexOfferList | null> {
+  const pageKey = `page${pageNumber}`;
+
   try {
     const resp = await amexApiFetch("https://functions.americanexpress.com/ReadOffersHubPresentation.web.v1", {
       method: "POST",
@@ -463,29 +496,33 @@ async function listOffersLegacy(cardId: string, locale: string): Promise<AmexOff
       body: JSON.stringify({
         accountNumberProxy: cardId,
         locale,
-        offerPage: "page1",
+        offerPage: pageKey,
         requestType: "OFFERSHUB_LANDING",
       }),
     });
 
     if (resp.status !== 200 || !resp.data) return null;
 
-    const data = resp.data as Record<string, unknown>;
-    const recList = ((data.recommendedOffers as Record<string, Record<string, unknown[]>> | undefined)?.offersList?.page1) ?? [];
-    const addedList = ((data.addedToCard as Record<string, Record<string, unknown[]>> | undefined)?.offersList?.page1) ?? [];
-    const all = [...recList, ...addedList] as Record<string, unknown>[];
+    if (!isRecord(resp.data)) return null;
+    const data = resp.data;
+    const recList = readLegacyOfferPage(data, "recommendedOffers", pageKey);
+    const addedList = readLegacyOfferPage(data, "addedToCard", pageKey);
+    if (!recList || !addedList) return null;
+
+    const all = [...recList, ...addedList];
     const offers = all
       .filter((o) => o.offerType === "MERCHANT")
       .map(parseLegacyOffer);
-
-    if (offers.length === 0) return null;
+    if (offers.some((offer) => !offer.offerId)) return null;
 
     return {
       offers,
       eligibleCount: offers.filter(isUnenrolledOffer).length,
+      complete: false,
+      rawOfferCount: all.length,
     };
   } catch (e) {
-    console.error("[NextCard Amex Offers] listOffersLegacy error:", e);
+    console.error(`[NextCard Amex Offers] listOffersLegacyPage(${pageKey}) error:`, e);
     return null;
   }
 }
@@ -521,6 +558,7 @@ async function listOffersModern(cardId: string, locale: string): Promise<AmexOff
       return {
         offers: [],
         eligibleCount: typeof eligibleCount === "number" ? eligibleCount : null,
+        complete: false,
       };
     }
 
@@ -529,6 +567,7 @@ async function listOffersModern(cardId: string, locale: string): Promise<AmexOff
         .filter((o) => o.type === "MERCHANT")
         .map(parseModernOffer),
       eligibleCount: typeof eligibleCount === "number" ? eligibleCount : null,
+      complete: false,
     };
   } catch (e) {
     console.error("[NextCard Amex Offers] listOffersModern error:", e);
@@ -537,7 +576,68 @@ async function listOffersModern(cardId: string, locale: string): Promise<AmexOff
 }
 
 async function listOffers(cardId: string, locale = "en-US"): Promise<AmexOfferList | null> {
-  return await listOffersLegacy(cardId, locale) ?? await listOffersModern(cardId, locale);
+  const legacyOffers = await listOffersLegacyPage(cardId, locale, 1);
+  if (legacyOffers && legacyOffers.offers.length > 0) return legacyOffers;
+  return await listOffersModern(cardId, locale);
+}
+
+async function listAllOffers(cardId: string, locale = "en-US"): Promise<AmexOfferList | null> {
+  const firstPage = await listOffersLegacyPage(cardId, locale, 1);
+  if (!firstPage) {
+    return await listOffersModern(cardId, locale);
+  }
+  if (firstPage.rawOfferCount === 0) {
+    return { ...firstPage, complete: true };
+  }
+
+  const offersById = new Map<string, AmexOffer>();
+  for (const offer of firstPage.offers) {
+    if (offer.offerId) offersById.set(offer.offerId, offer);
+  }
+
+  for (let pageNumber = 2; pageNumber <= MAX_AMEX_OFFER_PAGES; pageNumber += 1) {
+    const page = await listOffersLegacyPage(cardId, locale, pageNumber);
+    if (!page) {
+      return {
+        offers: Array.from(offersById.values()),
+        eligibleCount: Array.from(offersById.values()).filter(isUnenrolledOffer).length,
+        complete: false,
+      };
+    }
+    if (page.rawOfferCount === 0) {
+      const offers = Array.from(offersById.values());
+      return {
+        offers,
+        eligibleCount: offers.filter(isUnenrolledOffer).length,
+        complete: true,
+      };
+    }
+
+    let foundNewOffer = false;
+    for (const offer of page.offers) {
+      if (!offer.offerId || offersById.has(offer.offerId)) continue;
+      offersById.set(offer.offerId, offer);
+      foundNewOffer = true;
+    }
+
+    // A page containing only non-merchant offers is valid but has nothing to
+    // sync. Keep paging; only an actually empty raw page ends the snapshot.
+    if (page.offers.length > 0 && !foundNewOffer) {
+      const offers = Array.from(offersById.values());
+      return {
+        offers,
+        eligibleCount: offers.filter(isUnenrolledOffer).length,
+        complete: false,
+      };
+    }
+  }
+
+  const offers = Array.from(offersById.values());
+  return {
+    offers,
+    eligibleCount: offers.filter(isUnenrolledOffer).length,
+    complete: false,
+  };
 }
 
 async function readOfferDetails(cardId: string, offerId: string, locale: string): Promise<AmexOffer | null> {
@@ -642,11 +742,13 @@ async function runEnrollment(cardId: string, locale: string) {
   const MAX_ROUNDS = 50;
   const enrolledOffers: AmexOffer[] = [];
   const enrolledOfferIds = new Set<string>();
+  const failedOfferIds = new Set<string>();
   let emptyBatchPolls = 0;
   let staleBatchPolls = 0;
   let lastError: string | null = null;
+  let sessionExpired = false;
 
-  while (round < MAX_ROUNDS && !cancelled) {
+  while (round < MAX_ROUNDS && !cancelled && !sessionExpired) {
     round++;
     sendProgress({ status: "fetching", round, added: totalAdded });
 
@@ -657,12 +759,18 @@ async function runEnrollment(cardId: string, locale: string) {
       o.offerId
       && isUnenrolledOffer(o)
       && !enrolledOfferIds.has(o.offerId)
+      && !failedOfferIds.has(o.offerId)
     ));
 
-    totalEligible = Math.max(totalEligible, offerList.eligibleCount ?? 0, totalAdded + eligible.length);
+    totalEligible = Math.max(
+      totalEligible,
+      offerList.eligibleCount ?? 0,
+      enrolledOfferIds.size + failedOfferIds.size + eligible.length,
+    );
 
     if (eligible.length === 0) {
-      if ((offerList.eligibleCount ?? 0) > totalAdded && emptyBatchPolls < MAX_EMPTY_BATCH_POLLS) {
+      const completedOfferCount = enrolledOfferIds.size + failedOfferIds.size;
+      if ((offerList.eligibleCount ?? 0) > completedOfferCount && emptyBatchPolls < MAX_EMPTY_BATCH_POLLS) {
         emptyBatchPolls++;
         sendProgress({ status: "checking_new", round, added: totalAdded, total: totalEligible });
         await delay(OFFER_BATCH_REFETCH_DELAY_MS + enrollJitter());
@@ -709,10 +817,23 @@ async function runEnrollment(cardId: string, locale: string) {
         if (result.result === "skipped") totalAlreadyAdded++;
       } else {
         lastError = formatEnrollError(result);
-        totalFailed++;
+        if (result.status === 401) {
+          sessionExpired = true;
+          lastError = "Your Amex session expired. Log in to Amex, then run again.";
+          console.warn("[NextCard Amex Offers] Amex session expired during enrollment");
+        } else {
+          totalFailed++;
+          failedOfferIds.add(offerForSync.offerId);
+        }
+        console.warn("[NextCard Amex Offers] Amex rejected enrollment:", {
+          offerId: offerForSync.offerId,
+          error: lastError,
+        });
       }
 
       sendProgress({ added: totalAdded, skipped: totalAlreadyAdded, failed: totalFailed, round, total: totalEligible, error: lastError });
+
+      if (sessionExpired) break;
 
       // Proactive rate limiting
       enrollRequestsSincePause++;
@@ -724,9 +845,11 @@ async function runEnrollment(cardId: string, locale: string) {
       }
     }
 
+    if (sessionExpired) break;
 
     if (roundAdded === 0) {
-      if ((offerList.eligibleCount ?? totalEligible) > totalAdded && staleBatchPolls < MAX_STALE_BATCH_POLLS) {
+      const completedOfferCount = enrolledOfferIds.size + failedOfferIds.size;
+      if ((offerList.eligibleCount ?? totalEligible) > completedOfferCount && staleBatchPolls < MAX_STALE_BATCH_POLLS) {
         staleBatchPolls++;
         sendProgress({ status: "checking_new", round, added: totalAdded, total: totalEligible });
         await delay(OFFER_BATCH_REFETCH_DELAY_MS + enrollJitter());
@@ -750,6 +873,7 @@ async function runEnrollment(cardId: string, locale: string) {
     skipped: totalAlreadyAdded,
     failed: totalFailed,
     lastError,
+    sessionExpired,
     rounds: round,
     cardId,
     cardName: selectedCardName,
@@ -824,7 +948,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         return;
       }
       // Probe all cards in parallel — validates session and gets per-card unenrolled counts
-      const probes = await Promise.all(cards.map((c) => listOffers(c.id).catch(() => null)));
+      const probes = await Promise.all(cards.map((c) => listAllOffers(c.id).catch(() => null)));
       const offerCounts: Record<string, number> = {};
       for (let i = 0; i < cards.length; i++) {
         const offerList = probes[i];
@@ -838,14 +962,20 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
           availableToActivate: offerCounts[cards[i].id] ?? 0,
           alreadyActivated: offers.length - eligible.length,
           probeFailed: offerList === null,
+          snapshotComplete: offerList?.complete ?? false,
         });
 
-        if (offers.length > 0) {
+        if (offerList && (offers.length > 0 || offerList.complete)) {
           chrome.runtime.sendMessage({
             type: "AMEX_OFFERS_DETECTED",
             cardId: cards[i].id,
             cardName: cards[i].name,
             cardLastDigits: cards[i].lastDigits,
+            snapshotComplete: offerList.complete,
+            snapshotCapturedAt: offerList.complete ? new Date().toISOString() : undefined,
+            observedIssuerOfferIds: offerList.complete
+              ? offers.map((offer) => offer.offerId).filter(Boolean)
+              : undefined,
             detectedOffers: offers.map((o) => ({
               issuerOfferId: o.offerId,
               merchantName: o.name,

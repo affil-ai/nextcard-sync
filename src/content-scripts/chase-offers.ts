@@ -23,6 +23,8 @@ interface ChaseOffer {
   status: string;
   recommendationIdentifier: string;
   offerImpressionTokenIdentifier: string;
+  offerSessionTokenIdentifier: string;
+  offerDisplaySequenceNumber: number | null;
   cardId: string;
   offerHeaderText: string | null;
   offerRewardTypeCode: string | null;
@@ -112,7 +114,7 @@ async function listOffers(cardIds: string[], primaryCardId: string): Promise<Cha
     return [];
   }
 
-  const url = `https://${host}.chase.com/svc/wr/profile/secure/gateway/ccb/marketing/offer-management/digital-customer-targeted-offers/v2/customer-offers?offer-count=&offerStatusNameList=NEW,ACTIVATED,SERVED&source-application-system-name=CHASE_WEB&source-request-component-name=OFFERS_HUB_CAROUSELS&is-include-summary=true`;
+  const url = `https://${host}.chase.com/svc/wr/profile/secure/gateway/ccb/marketing/offer-management/digital-customer-targeted-offers/v3/customer-offers?offer-count=&offerStatusNameList=NEW,ACTIVATED,SERVED&source-application-system-name=CHASE_WEB&source-request-component-name=OFFERS_HUB_CAROUSELS&is-include-summary=true`;
 
   const pathParams = {
     enterprisePartyIdentifier: epi,
@@ -140,7 +142,11 @@ async function listOffers(cardIds: string[], primaryCardId: string): Promise<Cha
     const customerOffers = data.customerOffers as Record<string, unknown>[] | undefined;
     if (!customerOffers?.length) return [];
 
-    const offers = (customerOffers[0].offers ?? []) as Record<string, unknown>[];
+    const customerOffer = customerOffers[0];
+    const offerSessionTokenIdentifier = typeof customerOffer.customerOfferSessionTokenIdentifier === "string"
+      ? customerOffer.customerOfferSessionTokenIdentifier
+      : "";
+    const offers = (customerOffer.offers ?? []) as Record<string, unknown>[];
 
     return offers
       .map((o) => {
@@ -156,6 +162,8 @@ async function listOffers(cardIds: string[], primaryCardId: string): Promise<Cha
           status: (o.offerStatusName ?? "NEW") as string,
           recommendationIdentifier: (o.recommendationIdentifier ?? "") as string,
           offerImpressionTokenIdentifier: (o.offerImpressionTokenIdentifier ?? "") as string,
+          offerSessionTokenIdentifier,
+          offerDisplaySequenceNumber: typeof o.rankNumber === "number" ? o.rankNumber - 1 : null,
           cardId: primaryCardId,
           offerHeaderText: (display?.offerHeaderText ?? null) as string | null,
           offerRewardTypeCode: (options?.offerRewardTypeCode ?? null) as string | null,
@@ -185,10 +193,32 @@ async function listOffers(cardIds: string[], primaryCardId: string): Promise<Cha
 
 // ── Enrollment ─────────────────────────────────────────────
 
-async function enrollOffer(offer: ChaseOffer, epi: string): Promise<boolean> {
-  const host = getHostname();
-  const url = `https://reco.chase.com/events/recoengine/public/recommendation/ccb/sales-relationship/crm/personalization-recommendation-interactions/v1/customer-interaction?recommendation-event-type-code=CLICK&recommendation-identifier=${offer.recommendationIdentifier}&enterprise-party-identifier=${epi}&source-application-system-name=CHASE_WEB&source-request-component-name=OFFERS_HUB_ALL&offer-identifier=${offer.offerId}&offer-impression-token-identifier=${offer.offerImpressionTokenIdentifier}&request-context=MERCHANT_OFFERS&offer-session-token-identifier=&digital-account-identifier=${offer.cardId}`;
+function buildEnrollmentUrl(
+  version: "v1" | "v2",
+  offer: ChaseOffer,
+  epi: string,
+): string {
+  const params = new URLSearchParams({
+    "recommendation-event-type-code": "CLICK",
+    "recommendation-identifier": offer.recommendationIdentifier,
+    "enterprise-party-identifier": epi,
+    "source-application-system-name": "CHASE_WEB",
+    "source-request-component-name": version === "v2" ? "OFFERS_HUB_CAROUSELS" : "OFFERS_HUB_ALL",
+    "offer-identifier": offer.offerId,
+    "offer-impression-token-identifier": offer.offerImpressionTokenIdentifier,
+    "request-context": "MERCHANT_OFFERS",
+    "offer-session-token-identifier": version === "v2" ? offer.offerSessionTokenIdentifier : "",
+    "digital-account-identifier": offer.cardId,
+  });
 
+  if (version === "v2" && offer.offerDisplaySequenceNumber !== null) {
+    params.set("offer-display-sequence-number", String(offer.offerDisplaySequenceNumber));
+  }
+
+  return `https://reco.chase.com/events/recoengine/public/recommendation/ccb/sales-relationship/crm/personalization-recommendation-interactions/${version}/customer-interaction?${params}`;
+}
+
+async function sendEnrollmentRequest(url: string, host: string): Promise<boolean> {
   try {
     const resp = await fetch(url, {
       method: "GET",
@@ -204,6 +234,18 @@ async function enrollOffer(offer: ChaseOffer, epi: string): Promise<boolean> {
   } catch {
     return false;
   }
+}
+
+async function enrollOffer(offer: ChaseOffer, epi: string): Promise<boolean> {
+  const host = getHostname();
+  const canUseV2 = offer.offerSessionTokenIdentifier.length > 0
+    && offer.offerDisplaySequenceNumber !== null;
+
+  if (canUseV2 && await sendEnrollmentRequest(buildEnrollmentUrl("v2", offer, epi), host)) {
+    return true;
+  }
+
+  return await sendEnrollmentRequest(buildEnrollmentUrl("v1", offer, epi), host);
 }
 
 // ── Runner ─────────────────────────────────────────────────

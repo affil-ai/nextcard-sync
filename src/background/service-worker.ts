@@ -525,12 +525,27 @@ chrome.runtime.onMessage.addListener(
     syncDetectedOffers: (issuer, message) => {
       type DetectedOfferMsg = Omit<DetectedOfferSyncPayload["offers"][number], "detectedAt">;
       const detectedOffers = message.detectedOffers as DetectedOfferMsg[];
+      const observedIssuerOfferIds = Array.isArray(message.observedIssuerOfferIds)
+        ? message.observedIssuerOfferIds.filter(
+            (issuerOfferId): issuerOfferId is string => typeof issuerOfferId === "string",
+          )
+        : null;
+      const snapshot = message.snapshotComplete === true && observedIssuerOfferIds
+        ? {
+            complete: true as const,
+            capturedAt: typeof message.snapshotCapturedAt === "string"
+              ? message.snapshotCapturedAt
+              : new Date().toISOString(),
+            observedIssuerOfferIds,
+          }
+        : undefined;
 
       const payload: DetectedOfferSyncPayload = {
         issuer,
         issuerCardId: String(message.cardId ?? message.accountId ?? ""),
         issuerCardName: String(message.cardName ?? ""),
         issuerCardLastDigits: (message.cardLastDigits as string) ?? null,
+        snapshot,
         offers: detectedOffers.map((o) => ({
           ...o,
           detectedAt: new Date().toISOString(),

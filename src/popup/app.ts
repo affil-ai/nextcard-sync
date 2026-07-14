@@ -302,9 +302,10 @@ function initAmexOffers() {
       const cardLabel = formatCardDisplayName(amexCards.find((c) => c.id === selectedCardId));
       const parts: string[] = [];
       if (msg.added > 0) parts.push(`${pluralize(msg.added, "offer")} activated for ${cardLabel}`);
-      if (msg.added === 0) parts.push(`No new offers to activate for ${cardLabel}`);
-      if (msg.failed > 0) parts.push(`${pluralize(msg.failed, "offer")} failed`);
-      if (typeof msg.lastError === "string" && msg.lastError) parts.push(`Last error: ${msg.lastError}`);
+      if (msg.added === 0 && msg.failed === 0) parts.push(`No new offers to activate for ${cardLabel}`);
+      if (msg.failed > 0) parts.push(`${pluralize(msg.failed, "enrollment attempt")} failed`);
+      if (msg.sessionExpired) parts.push("Amex session expired — log in to Amex, then run again");
+      else if (typeof msg.lastError === "string" && msg.lastError) parts.push(`Last Amex error: ${msg.lastError}`);
       if (msg.rounds > 1) parts.push(`${msg.rounds} rounds`);
       if (summaryEl) summaryEl.textContent = parts.join(" · ");
       showState("Done");

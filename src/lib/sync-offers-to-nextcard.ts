@@ -10,9 +10,22 @@
 
 import { getAuth } from "./auth";
 
-function maskId(value: string | null | undefined): string {
-  if (!value || value.length <= 4) return value ?? "";
-  return "*".repeat(value.length - 4) + value.slice(-4);
+async function getIssuerCardKey(issuer: string, issuerCardId: string): Promise<string> {
+  if (!issuerCardId) return "";
+
+  const payload = new TextEncoder().encode(
+    `nextcard:issuer-card:v1:${issuer.trim().toLowerCase()}:${issuerCardId}`,
+  );
+  const digest = await crypto.subtle.digest("SHA-256", payload);
+  const value = Array.from(new Uint8Array(digest))
+    .map((byte) => byte.toString(16).padStart(2, "0"))
+    .join("");
+  return `v1:${value}`;
+}
+
+function getLegacyIssuerCardId(issuerCardId: string): string {
+  const suffix = issuerCardId.replace(/\D/g, "").slice(-4);
+  return suffix ? `****${suffix}` : "";
 }
 
 export interface OfferSyncPayload {
@@ -40,6 +53,12 @@ export interface OfferSyncPayload {
 
 export type MerchantOfferSyncStatus = "enrolled" | "detected";
 
+export interface CompleteOfferSnapshot {
+  complete: true;
+  capturedAt: string;
+  observedIssuerOfferIds: string[];
+}
+
 export interface CachedOffer {
   merchantName: string;
   offerValue: string | null;
@@ -62,6 +81,9 @@ export interface DetectedOfferSyncPayload {
   issuerCardId: string;
   issuerCardName: string;
   issuerCardLastDigits: string | null;
+  // Present only after the issuer returned every page for this card. The
+  // backend must not use partial responses to mark offers unavailable.
+  snapshot?: CompleteOfferSnapshot;
   offers: Array<{
     issuerOfferId: string;
     merchantName: string;
@@ -182,6 +204,10 @@ async function postOfferSync(
   if (!auth) {
     return { ok: false, error: "Not signed in to NextCard" };
   }
+  const issuerCardKey = await getIssuerCardKey(payload.issuer, payload.issuerCardId);
+  if (!issuerCardKey) {
+    return { ok: false, error: "Missing issuer card identity" };
+  }
 
   const response = await fetch(`${__CONVEX_SITE_URL__}/extension/offers-sync`, {
     method: "POST",
@@ -191,7 +217,8 @@ async function postOfferSync(
     },
     body: JSON.stringify({
       ...payload,
-      issuerCardId: maskId(payload.issuerCardId),
+      issuerCardId: issuerCardKey,
+      legacyIssuerCardId: getLegacyIssuerCardId(payload.issuerCardId),
     }),
   });
 
@@ -311,15 +338,19 @@ export async function retryPendingOfferSyncs(): Promise<void> {
 }
 
 export async function syncDetectedOffersToNextCard(payload: DetectedOfferSyncPayload): Promise<void> {
-  if (payload.offers.length === 0) return;
-
   const auth = await getAuth();
   if (!auth) return;
 
   try {
     let latestOfferMap: OfferUrlCache | undefined;
+    const issuerCardKey = await getIssuerCardKey(payload.issuer, payload.issuerCardId);
+    if (!issuerCardKey) return;
+    const chunkOffsets = payload.offers.length === 0 ? [0] : Array.from(
+      { length: Math.ceil(payload.offers.length / DETECTED_OFFER_SYNC_CHUNK_SIZE) },
+      (_, index) => index * DETECTED_OFFER_SYNC_CHUNK_SIZE,
+    );
 
-    for (let offset = 0; offset < payload.offers.length; offset += DETECTED_OFFER_SYNC_CHUNK_SIZE) {
+    for (const offset of chunkOffsets) {
       const offers = payload.offers.slice(offset, offset + DETECTED_OFFER_SYNC_CHUNK_SIZE);
       const isLastChunk = offset + DETECTED_OFFER_SYNC_CHUNK_SIZE >= payload.offers.length;
       const response = await fetch(`${__CONVEX_SITE_URL__}/extension/offers-detected`, {
@@ -330,9 +361,12 @@ export async function syncDetectedOffersToNextCard(payload: DetectedOfferSyncPay
         },
         body: JSON.stringify({
           ...payload,
-          issuerCardId: maskId(payload.issuerCardId),
+          issuerCardId: issuerCardKey,
+          legacyIssuerCardId: getLegacyIssuerCardId(payload.issuerCardId),
           offers,
           skipOfferMap: !isLastChunk,
+          snapshot: payload.snapshot,
+          reconcileSnapshot: isLastChunk && payload.snapshot?.complete === true,
         }),
       });
 

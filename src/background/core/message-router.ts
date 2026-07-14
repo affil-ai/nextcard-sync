@@ -4,6 +4,24 @@ import type { createRuntimeStateStore } from "./runtime-state";
 
 type RuntimeStateStore = ReturnType<typeof createRuntimeStateStore>;
 
+const AMEX_ENROLL_EXECUTION_TIMEOUT_MS = 30_000;
+
+function withTimeout<T>(operation: Promise<T>, timeoutMs: number, message: string) {
+  return new Promise<T>((resolve, reject) => {
+    const timeout = setTimeout(() => reject(new Error(message)), timeoutMs);
+    operation.then(
+      (value) => {
+        clearTimeout(timeout);
+        resolve(value);
+      },
+      (error: unknown) => {
+        clearTimeout(timeout);
+        reject(error);
+      },
+    );
+  });
+}
+
 export interface SyncHandlers {
   generic: (providerId: ProviderId) => Promise<void>;
   atmos: () => Promise<void>;
@@ -453,15 +471,24 @@ export function createMessageRouter(options: {
               const tabs = await chrome.tabs.query({ url: "https://global.americanexpress.com/*" });
               tabId = tabs[0]?.id ?? null;
             }
-            if (!tabId) { sendResponse({ result: "failed" }); return; }
+            if (!tabId) {
+              sendResponse({ result: "failed", error: "No open Amex tab" });
+              return;
+            }
 
-            const results = await chrome.scripting.executeScript({
+            const startedAt = Date.now();
+            console.info("[NextCard SW] AMEX_OFFERS_ENROLL_ONE started:", {
+              offerId: enrollOfferId,
+            });
+            const results = await withTimeout(chrome.scripting.executeScript({
               target: { tabId },
               world: "MAIN",
               func: async (cardId: string, offerId: string, locale: string) => {
                 const controller = new AbortController();
                 const timeout = setTimeout(() => controller.abort(), 20000);
+                const requestStartedAt = Date.now();
                 try {
+                  console.info("[NextCard Amex Offers] enrollment request started:", { offerId });
                   const resp = await fetch("https://functions.americanexpress.com/CreateOffersHubEnrollment.web.v1", {
                     method: "POST",
                     headers: {
@@ -484,6 +511,11 @@ export function createMessageRouter(options: {
                   });
                   let json: Record<string, unknown> | null = null;
                   try { json = await resp.json(); } catch { /* */ }
+                  console.info("[NextCard Amex Offers] enrollment response:", {
+                    offerId,
+                    status: resp.status,
+                    elapsedMs: Date.now() - requestStartedAt,
+                  });
                   const ok = resp.status === 200 && (
                     (json?.status as Record<string, unknown> | undefined)?.purpose === "SUCCESS"
                     || (json?.isEnrolled && json.isEnrolled !== "false")
@@ -507,15 +539,25 @@ export function createMessageRouter(options: {
                 }
               },
               args: [enrollCardId, enrollOfferId, enrollLocale],
-            });
+            }), AMEX_ENROLL_EXECUTION_TIMEOUT_MS, "Amex enrollment timed out before Chrome completed the request");
 
             const result = results?.[0]?.result as { result?: string } | undefined;
+            console.info("[NextCard SW] AMEX_OFFERS_ENROLL_ONE completed:", {
+              offerId: enrollOfferId,
+              elapsedMs: Date.now() - startedAt,
+              result: result?.result ?? "failed",
+            });
             if (result?.result === "failed") {
               console.warn("[NextCard SW] AMEX_OFFERS_ENROLL_ONE failed:", result);
             }
             sendResponse(result ?? { result: "failed" });
-          } catch {
-            sendResponse({ result: "failed" });
+          } catch (error) {
+            const errorMessage = error instanceof Error ? error.message : String(error);
+            console.error("[NextCard SW] AMEX_OFFERS_ENROLL_ONE error:", {
+              offerId: enrollOfferId,
+              error: errorMessage,
+            });
+            sendResponse({ result: "failed", error: errorMessage });
           }
         })();
         return true;
@@ -639,7 +681,10 @@ export function createMessageRouter(options: {
         return true;
 
       case "AMEX_OFFERS_DETECTED":
-        if (Array.isArray(message.detectedOffers) && message.detectedOffers.length > 0) {
+        if (
+          Array.isArray(message.detectedOffers) &&
+          (message.detectedOffers.length > 0 || message.snapshotComplete === true)
+        ) {
           options.syncDetectedOffers?.("amex", message);
         }
         sendResponse({ ok: true });
