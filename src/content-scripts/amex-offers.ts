@@ -9,6 +9,13 @@
  * to avoid CORS issues (same-site origin, session cookies included).
  */
 
+import {
+  buildSharedOfferGroups,
+  isExplicitlyEligibleAmexOffer,
+  type SharedOfferGroup,
+  type SharedOfferSnapshot,
+} from "./amex-offer-groups";
+
 // ── Types ──────────────────────────────────────────────────
 
 interface AmexCard {
@@ -46,7 +53,7 @@ interface AmexApiResult {
 }
 
 interface AmexEnrollResult {
-  result: "added" | "skipped" | "failed";
+  result: "added" | "skipped" | "failed" | "unknown";
   status?: number;
   purpose?: unknown;
   message?: unknown;
@@ -527,7 +534,11 @@ async function listOffersLegacyPage(
   }
 }
 
-async function listOffersModern(cardId: string, locale: string): Promise<AmexOfferList | null> {
+async function listOffersModern(
+  cardId: string,
+  locale: string,
+  statuses: string[] = ["ELIGIBLE"],
+): Promise<AmexOfferList | null> {
   try {
     const resp = await amexApiFetch("https://functions.americanexpress.com/ReadCardAccountOffersList.v1", {
       method: "POST",
@@ -542,7 +553,7 @@ async function listOffersModern(cardId: string, locale: string): Promise<AmexOff
         locale,
         source: "STANDARD",
         typeOf: "MERCHANT",
-        status: ["ELIGIBLE"],
+        status: statuses,
         offerRequestType: "LIST",
         userOffset: getUserOffset(),
       }),
@@ -673,6 +684,16 @@ async function readOfferDetails(cardId: string, offerId: string, locale: string)
 // ── Enrollment ─────────────────────────────────────────────
 
 let cancelled = false;
+let activeOfferRunId: string | null = null;
+let pendingSharedPreflight: {
+  id: string;
+  selectedCardId: string;
+  groups: Array<SharedOfferGroup<AmexCard, AmexOffer>>;
+} | null = null;
+
+function isRunActive(runId: string): boolean {
+  return activeOfferRunId === runId && !cancelled;
+}
 
 // Amex starts returning transient failures if enrollment bursts too quickly.
 const ENROLL_BASE_DELAY_MS = 900;
@@ -708,6 +729,241 @@ function enrollSingleOffer(cardId: string, offerId: string, locale: string): Pro
   });
 }
 
+function enrollSharedOfferGroup(
+  targets: Array<{ cardId: string; offerId: string }>,
+  locale: string,
+): Promise<AmexEnrollResult[]> {
+  return new Promise((resolve) => {
+    chrome.runtime.sendMessage(
+      { type: "AMEX_OFFERS_ENROLL_GROUP", targets, locale },
+      (response) => {
+        if (chrome.runtime.lastError || !response || !Array.isArray(response.results)) {
+          resolve(targets.map(() => ({
+            result: "failed",
+            error: chrome.runtime.lastError?.message ?? "Amex enrollment group did not return a result",
+          })));
+          return;
+        }
+        resolve(response.results.map((result: AmexEnrollResult) => ({
+          ...result,
+          result: result.result ?? "failed",
+        })));
+      },
+    );
+  });
+}
+
+async function verifyEnrollment(cardId: string, offerId: string, locale: string): Promise<"enrolled" | "eligible" | "unknown"> {
+  let observedEligible = false;
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const legacy = await listAllOffers(cardId, locale);
+    const legacyMatch = legacy?.offers.find((offer) => offer.offerId === offerId);
+    if (legacyMatch) {
+      if (isAmexIssuerEnrolledStatus(legacyMatch.status)) return "enrolled";
+      observedEligible = true;
+    }
+
+    const modern = await listOffersModern(cardId, locale, ["ELIGIBLE", "ENROLLED"]);
+    const modernMatch = modern?.offers.find((offer) => offer.offerId === offerId);
+    if (modernMatch) {
+      if (isAmexIssuerEnrolledStatus(modernMatch.status)) return "enrolled";
+      observedEligible = true;
+    }
+
+    if (attempt < 2) await delay(2000 + enrollJitter());
+  }
+  return observedEligible ? "eligible" : "unknown";
+}
+
+type EnrolledOfferSyncMessage = {
+  issuerOfferId: string;
+  merchantName: string;
+  offerValue: string | null;
+  category: string | null;
+  expirationDate: string | null;
+  rewardType: "percentage" | "flat_cash" | "points" | null;
+  rewardAmount: number | null;
+  rewardCurrency: string | null;
+  maxReward: number | null;
+  minSpend: number | null;
+  merchantUrl: string | null;
+  merchantLogoUrl: string | null;
+  redemptionChannel: "online" | "in_store" | "both" | null;
+};
+
+function toEnrolledOfferSyncMessage(offer: AmexOffer): EnrolledOfferSyncMessage {
+  const description = offer.shortDescription ?? "";
+  const percentage = description.match(/(\d+(?:\.\d+)?)\s*%\s*back/i);
+  const cash = description.match(/earn\s+\$(\d+(?:,\d+)*(?:\.\d+)?)\s*back/i);
+  const points = description.match(/earn\s+([\d,]+)\s+(?:Membership Rewards|MR)/i);
+  const spend = description.match(/Spend\s+\$(\d+(?:,\d+)*(?:\.\d+)?)/i);
+  const maximum = description.match(/up to (?:a total of )?\$(\d+(?:,\d+)*(?:\.\d+)?)/i);
+
+  let rewardType: EnrolledOfferSyncMessage["rewardType"] = null;
+  let rewardAmount: number | null = null;
+  let rewardCurrency: string | null = null;
+  if (points) {
+    rewardType = "points";
+    rewardAmount = Number(points[1].replace(/,/g, ""));
+    rewardCurrency = "MR";
+  } else if (percentage) {
+    rewardType = "percentage";
+    rewardAmount = Number(percentage[1]);
+    rewardCurrency = "cash";
+  } else if (cash) {
+    rewardType = "flat_cash";
+    rewardAmount = Number(cash[1].replace(/,/g, ""));
+    rewardCurrency = "cash";
+  }
+
+  return {
+    issuerOfferId: offer.offerId,
+    merchantName: offer.name,
+    offerValue: offer.shortDescription,
+    category: offer.category,
+    expirationDate: offer.expirationText,
+    rewardType,
+    rewardAmount,
+    rewardCurrency,
+    maxReward: maximum ? Number(maximum[1].replace(/,/g, "")) : null,
+    minSpend: spend ? Number(spend[1].replace(/,/g, "")) : null,
+    merchantUrl: offer.merchantUrl,
+    merchantLogoUrl: offer.merchantLogoUrl,
+    redemptionChannel: offer.redemptionChannel,
+  };
+}
+
+async function prepareSharedOfferGroups(
+  selectedCardId: string,
+  cards: AmexCard[],
+  locale: string,
+): Promise<Array<SharedOfferGroup<AmexCard, AmexOffer>>> {
+  const results = await Promise.all(cards.map(async (card) => {
+    const snapshot = await listAllOffers(card.id, locale);
+    return [card.id, snapshot] as const;
+  }));
+  const snapshots = new Map<string, SharedOfferSnapshot<AmexOffer>>();
+  for (const [cardId, snapshot] of results) {
+    if (snapshot) snapshots.set(cardId, snapshot);
+  }
+  const matchingGroups = buildSharedOfferGroups(selectedCardId, cards, snapshots);
+  const selectedSnapshot = snapshots.get(selectedCardId);
+  if (!selectedSnapshot?.complete) return matchingGroups;
+
+  const matchingOfferIds = new Set(matchingGroups.map((group) => group.offerId));
+  const selectedCard = cards.find((card) => card.id === selectedCardId);
+  if (!selectedCard) return matchingGroups;
+  const selectedOnlyGroups = selectedSnapshot.offers.flatMap((offer) => (
+    !matchingOfferIds.has(offer.offerId) && isExplicitlyEligibleAmexOffer(offer.status)
+      ? [{ offerId: offer.offerId, targets: [{ card: selectedCard, offer }] }]
+      : []
+  ));
+  return [...matchingGroups, ...selectedOnlyGroups];
+}
+
+function readAmexCardsFromMessage(value: unknown): AmexCard[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((entry: unknown) => {
+    if (!isRecord(entry)) return [];
+    const id = readString(entry.id);
+    const name = readString(entry.name);
+    if (!id || !name) return [];
+    return [{
+      id,
+      name,
+      lastDigits: readString(entry.lastDigits),
+      accountKey: readString(entry.accountKey),
+    }];
+  });
+}
+
+async function runSharedEnrollment(
+  runId: string,
+  selectedCardId: string,
+  cards: AmexCard[],
+  locale: string,
+  preflightGroups?: Array<SharedOfferGroup<AmexCard, AmexOffer>>,
+) {
+  cancelled = false;
+  const groups = preflightGroups ?? await prepareSharedOfferGroups(selectedCardId, cards, locale);
+  const enrolledByCard = new Map<string, { card: AmexCard; offers: AmexOffer[] }>();
+  let failed = 0;
+  let unverified = 0;
+  let sessionExpired = false;
+  let lastError: string | null = null;
+
+  if (groups.length === 0 || !isRunActive(runId)) {
+    chrome.runtime.sendMessage({
+      type: "AMEX_OFFERS_COMPLETE",
+      runId,
+      added: 0,
+      failed: 0,
+      unverified: 0,
+      sessionExpired: false,
+      lastError: cancelled ? null : "Matching offers changed or could not be fully checked. No cards were activated.",
+      cancelled: !isRunActive(runId),
+      rounds: 0,
+      enrolledByCard: [],
+    }).catch(() => {});
+    return;
+  }
+
+  let completedGroups = 0;
+  const totalTargets = groups.reduce((count, group) => count + group.targets.length, 0);
+  for (let index = 0; index < groups.length && isRunActive(runId) && !sessionExpired; index += 1) {
+    const group = groups[index];
+    sendProgress({ runId, status: "enrolling", added: Array.from(enrolledByCard.values()).reduce((count, entry) => count + entry.offers.length, 0), failed, total: totalTargets, round: index + 1 });
+    const results = await enrollSharedOfferGroup(
+      group.targets.map(({ card, offer }) => ({ cardId: card.id, offerId: offer.offerId })),
+      locale,
+    );
+
+    for (let targetIndex = 0; targetIndex < group.targets.length; targetIndex += 1) {
+      const target = group.targets[targetIndex];
+      const result = results[targetIndex] ?? { result: "failed", error: "Missing enrollment result" };
+      if (result.status === 401) {
+        sessionExpired = true;
+        lastError = "Your Amex session expired. Log in to Amex, then run again.";
+      }
+      const verification = await verifyEnrollment(target.card.id, target.offer.offerId, locale);
+      if (verification === "enrolled") {
+        const entry = enrolledByCard.get(target.card.id) ?? { card: target.card, offers: [] };
+        entry.offers.push(target.offer);
+        enrolledByCard.set(target.card.id, entry);
+      } else if (verification === "unknown" || result.result === "unknown") {
+        unverified += 1;
+      } else {
+        failed += 1;
+        lastError = formatEnrollError(result);
+      }
+    }
+    completedGroups += 1;
+
+    if (isRunActive(runId) && !sessionExpired && index < groups.length - 1) {
+      await delay(ENROLL_BASE_DELAY_MS + enrollJitter());
+    }
+  }
+
+  const added = Array.from(enrolledByCard.values()).reduce((count, entry) => count + entry.offers.length, 0);
+  chrome.runtime.sendMessage({
+    type: "AMEX_OFFERS_COMPLETE",
+    runId,
+    added,
+    failed,
+    unverified,
+    cancelled: !isRunActive(runId),
+    sessionExpired,
+    lastError,
+    rounds: completedGroups,
+    enrolledByCard: Array.from(enrolledByCard.values()).map(({ card, offers }) => ({
+      cardId: card.id,
+      cardName: card.name,
+      cardLastDigits: card.lastDigits,
+      enrolledOffers: offers.map(toEnrolledOfferSyncMessage),
+    })),
+  }).catch(() => {});
+}
+
 function isRateLimitLike(result: AmexEnrollResult): boolean {
   if (result.status === 429 || result.status === 403 || result.status === 503 || result.status === 0) return true;
   const text = [
@@ -730,13 +986,14 @@ function formatEnrollError(result: AmexEnrollResult): string | null {
   return pieces.length > 0 ? pieces.join(" - ") : null;
 }
 
-async function runEnrollment(cardId: string, locale: string) {
+async function runEnrollment(cardId: string, locale: string, runId: string) {
   cancelled = false;
   enrollRequestsSincePause = 0;
 
   let totalAdded = 0;
   let totalAlreadyAdded = 0;
   let totalFailed = 0;
+  let totalUnverified = 0;
   let totalEligible = 0;
   let round = 0;
   const MAX_ROUNDS = 50;
@@ -748,9 +1005,9 @@ async function runEnrollment(cardId: string, locale: string) {
   let lastError: string | null = null;
   let sessionExpired = false;
 
-  while (round < MAX_ROUNDS && !cancelled && !sessionExpired) {
+  while (round < MAX_ROUNDS && isRunActive(runId) && !sessionExpired) {
     round++;
-    sendProgress({ status: "fetching", round, added: totalAdded });
+    sendProgress({ runId, status: "fetching", round, added: totalAdded });
 
     const offerList = await listOffers(cardId, locale);
     if (!offerList) break;
@@ -772,42 +1029,27 @@ async function runEnrollment(cardId: string, locale: string) {
       const completedOfferCount = enrolledOfferIds.size + failedOfferIds.size;
       if ((offerList.eligibleCount ?? 0) > completedOfferCount && emptyBatchPolls < MAX_EMPTY_BATCH_POLLS) {
         emptyBatchPolls++;
-        sendProgress({ status: "checking_new", round, added: totalAdded, total: totalEligible });
+        sendProgress({ runId, status: "checking_new", round, added: totalAdded, total: totalEligible });
         await delay(OFFER_BATCH_REFETCH_DELAY_MS + enrollJitter());
         continue;
       }
       break;
     }
 
-    sendProgress({ status: "enrolling", round, added: totalAdded, total: totalEligible });
+    sendProgress({ runId, status: "enrolling", round, added: totalAdded, total: totalEligible });
 
     let roundAdded = 0;
 
     for (const offer of eligible) {
-      if (cancelled) break;
+      if (!isRunActive(runId)) break;
 
       const offerForSync = offer;
-      let result = await enrollSingleOffer(cardId, offerForSync.offerId, locale);
-      let rateLimitRetries = 0;
+      const result = await enrollSingleOffer(cardId, offerForSync.offerId, locale);
+      const verification = result.status === 401
+        ? "eligible"
+        : await verifyEnrollment(cardId, offerForSync.offerId, locale);
 
-      while (result.result === "failed" && isRateLimitLike(result) && rateLimitRetries < MAX_RATE_LIMIT_RETRIES && !cancelled) {
-        rateLimitRetries++;
-        lastError = formatEnrollError(result);
-        sendProgress({
-          status: "cooling_down",
-          added: totalAdded,
-          skipped: totalAlreadyAdded,
-          failed: totalFailed,
-          round,
-          total: totalEligible,
-          waitSeconds: Math.round(RATE_LIMIT_COOLDOWN_MS / 1000),
-          error: lastError,
-        });
-        await delay(RATE_LIMIT_COOLDOWN_MS + enrollJitter());
-        result = await enrollSingleOffer(cardId, offerForSync.offerId, locale);
-      }
-
-      if (result.result === "added" || result.result === "skipped") {
+      if (verification === "enrolled") {
         if (!enrolledOfferIds.has(offerForSync.offerId)) {
           enrolledOfferIds.add(offerForSync.offerId);
           totalAdded++;
@@ -821,17 +1063,17 @@ async function runEnrollment(cardId: string, locale: string) {
           sessionExpired = true;
           lastError = "Your Amex session expired. Log in to Amex, then run again.";
           console.warn("[NextCard Amex Offers] Amex session expired during enrollment");
+        } else if (verification === "unknown" || result.result === "unknown") {
+          totalUnverified++;
+          failedOfferIds.add(offerForSync.offerId);
         } else {
           totalFailed++;
           failedOfferIds.add(offerForSync.offerId);
         }
-        console.warn("[NextCard Amex Offers] Amex rejected enrollment:", {
-          offerId: offerForSync.offerId,
-          error: lastError,
-        });
+        console.warn("[NextCard Amex Offers] Amex enrollment could not be verified");
       }
 
-      sendProgress({ added: totalAdded, skipped: totalAlreadyAdded, failed: totalFailed, round, total: totalEligible, error: lastError });
+      sendProgress({ runId, added: totalAdded, skipped: totalAlreadyAdded, failed: totalFailed, unverified: totalUnverified, round, total: totalEligible, error: lastError });
 
       if (sessionExpired) break;
 
@@ -851,7 +1093,7 @@ async function runEnrollment(cardId: string, locale: string) {
       const completedOfferCount = enrolledOfferIds.size + failedOfferIds.size;
       if ((offerList.eligibleCount ?? totalEligible) > completedOfferCount && staleBatchPolls < MAX_STALE_BATCH_POLLS) {
         staleBatchPolls++;
-        sendProgress({ status: "checking_new", round, added: totalAdded, total: totalEligible });
+        sendProgress({ runId, status: "checking_new", round, added: totalAdded, total: totalEligible });
         await delay(OFFER_BATCH_REFETCH_DELAY_MS + enrollJitter());
         continue;
       }
@@ -861,19 +1103,22 @@ async function runEnrollment(cardId: string, locale: string) {
     emptyBatchPolls = 0;
     staleBatchPolls = 0;
 
-    if (round < MAX_ROUNDS && !cancelled) {
-      sendProgress({ status: "checking_new", round, added: totalAdded });
+    if (round < MAX_ROUNDS && isRunActive(runId)) {
+      sendProgress({ runId, status: "checking_new", round, added: totalAdded });
       await delay(OFFER_BATCH_REFETCH_DELAY_MS + enrollJitter());
     }
   }
 
   chrome.runtime.sendMessage({
     type: "AMEX_OFFERS_COMPLETE",
+    runId,
     added: totalAdded,
     skipped: totalAlreadyAdded,
     failed: totalFailed,
+    unverified: totalUnverified,
     lastError,
     sessionExpired,
+    cancelled: !isRunActive(runId),
     rounds: round,
     cardId,
     cardName: selectedCardName,
@@ -995,12 +1240,50 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
           }).catch(() => {});
         }
       }
+      const snapshots = new Map<string, SharedOfferSnapshot>();
+      for (let index = 0; index < cards.length; index += 1) {
+        const snapshot = probes[index];
+        if (snapshot) snapshots.set(cards[index].id, snapshot);
+      }
+      const sharedOfferPreview = cards.map((card) => ({
+        cardId: card.id,
+        sharedOfferCount: buildSharedOfferGroups(card.id, cards, snapshots).length,
+      }));
       sendResponse({
         type: "AMEX_OFFERS_READY",
         cards: cards.map((c) => ({ id: c.id, name: c.name, lastDigits: c.lastDigits, accountKey: c.accountKey, locale: "en-US" })),
         offerCounts,
+        sharedOfferPreview,
         offerProbeError: probes.every((probe) => probe === null) ? "offer_probe_failed" : undefined,
         error: undefined,
+      });
+    })();
+    return true;
+  }
+
+  if (message.type === "AMEX_OFFERS_SHARED_PREFLIGHT") {
+    void (async () => {
+      const selectedCardId = readString(message.cardId);
+      const cards = readAmexCardsFromMessage(message.cards);
+      if (!selectedCardId || cards.length < 2) {
+        sendResponse({ ok: false, error: "Matching cards could not be checked." });
+        return;
+      }
+      const groups = await prepareSharedOfferGroups(selectedCardId, cards, normalizeLocale(message.locale));
+      const sharedGroups = groups.filter((group) => group.targets.length > 1);
+      const targetCards = Array.from(new Map(
+        sharedGroups
+          .flatMap((group) => group.targets.map((target) => target.card))
+          .filter((card) => card.id !== selectedCardId)
+          .map((card) => [card.id, card]),
+      ).values()).map((card) => ({ name: card.name, lastDigits: card.lastDigits }));
+      const preflightId = randomCorrelationId();
+      pendingSharedPreflight = { id: preflightId, selectedCardId, groups };
+      sendResponse({
+        ok: true,
+        preflightId,
+        matchingOfferCount: sharedGroups.length,
+        targetCards,
       });
     })();
     return true;
@@ -1009,7 +1292,25 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (message.type === "AMEX_OFFERS_RUN") {
     selectedCardName = (message.cardName as string) ?? "";
     selectedCardLastDigits = (message.cardLastDigits as string) ?? null;
-    runEnrollment(message.cardId, normalizeLocale(message.locale));
+    const cardId = typeof message.cardId === "string" ? message.cardId : "";
+    const locale = normalizeLocale(message.locale);
+    const cards = readAmexCardsFromMessage(message.cards);
+    const runId = readString(message.runId) ?? randomCorrelationId();
+    activeOfferRunId = runId;
+    cancelled = false;
+    if (message.addMatchingOffersAcrossCards === true && cards.length > 1) {
+      const preflightIsCurrent = readString(message.sharedPreflightId) === pendingSharedPreflight?.id
+        && pendingSharedPreflight.selectedCardId === cardId;
+      if (!preflightIsCurrent || !pendingSharedPreflight) {
+        sendResponse({ ok: false, error: "Matching offer preflight expired. Please confirm again." });
+        return true;
+      }
+      const preflightGroups = pendingSharedPreflight.groups;
+      pendingSharedPreflight = null;
+      void runSharedEnrollment(runId, cardId, cards, locale, preflightGroups);
+    } else {
+      void runEnrollment(cardId, locale, runId);
+    }
     sendResponse({ ok: true });
     return true;
   }

@@ -194,6 +194,11 @@
           <div id="amexOffersReady" class="tool-expand" style="display:none;">
             <div id="amexOffersCardSelectWrap" style="display:none;"><select id="amexOffersCardSelect" class="tool-select"></select></div>
             <div style="display:flex;justify-content:space-between;align-items:center;"><div class="tool-status" style="font-weight:600;color:#342019;" id="amexOffersOfferCount"></div><button class="tool-link-btn" id="amexOffersRefreshBtn">Refresh</button></div>
+            <label id="amexOffersSharedOption" class="tool-check-option" style="display:none;">
+              <input type="checkbox" id="amexOffersSharedCheckbox" />
+              <span>Try matching offers on other eligible Amex cards</span>
+            </label>
+            <div id="amexOffersSharedScope" class="tool-check-note" style="display:none;"></div>
             <button class="sync-btn" id="amexOffersRunBtn" style="margin:0;">Start</button>
           </div>
           <div id="amexOffersRunning" class="tool-expand" style="display:none;">
@@ -338,6 +343,12 @@
         </div>
       </div>
       <div class="changelog" id="changelog">
+        <h4>v0.7.5</h4>
+        <ul>
+          <li>Added an optional experimental mode to try matching Amex offers on eligible cards before they disappear</li>
+          <li>Verify matching-card Amex offer enrollment before saving it to nextcard</li>
+          <li>Improved Amex offer cancellation and completion handling</li>
+        </ul>
         <h4>v0.7.4</h4>
         <ul>
           <li>Fixed Amex offers already added to your card not appearing in nextcard</li>

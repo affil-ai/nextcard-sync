@@ -504,7 +504,7 @@ chrome.runtime.onMessage.addListener(
     getExtensionProfile: getStoredExtensionProfile,
     refreshExtensionProfile,
     openUpgrade: openUpgradeTab,
-    syncEnrolledOffers: (issuer, message) => {
+    syncEnrolledOffers: async (issuer, message) => {
       // Reuse the sync payload shape so message handlers stay aligned with backend expectations.
       const enrolledOffers = message.enrolledOffers as EnrolledOfferSyncMessage[];
 
@@ -519,8 +519,13 @@ chrome.runtime.onMessage.addListener(
         })),
       };
 
-      // Fire-and-forget — don't block the COMPLETE response
-      void syncOffersToNextCard(payload);
+      // The router waits for this promise so every verified card has either
+      // reached NextCard or been persisted for the existing retry path before
+      // the Amex run is reported complete.
+      const syncedOrQueued = await syncOffersToNextCard(payload);
+      if (!syncedOrQueued) {
+        throw new Error("Could not persist the verified Amex offer sync for retry");
+      }
     },
     syncDetectedOffers: (issuer, message) => {
       type DetectedOfferMsg = Omit<DetectedOfferSyncPayload["offers"][number], "detectedAt">;

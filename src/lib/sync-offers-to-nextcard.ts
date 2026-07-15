@@ -235,14 +235,16 @@ async function postOfferSync(
   return { ok: true, offerMap: (body as Record<string, unknown>).offerMap as OfferUrlCache | undefined };
 }
 
-async function persistForRetry(payload: OfferSyncPayload): Promise<void> {
+async function persistForRetry(payload: OfferSyncPayload): Promise<boolean> {
   try {
     const stored = await chrome.storage.local.get(STORAGE_KEY);
     const pending: OfferSyncPayload[] = stored[STORAGE_KEY] ?? [];
     pending.push(payload);
     await chrome.storage.local.set({ [STORAGE_KEY]: pending });
+    return true;
   } catch (e) {
     console.error("[NextCard Offers Sync] Failed to persist for retry:", e);
+    return false;
   }
 }
 
@@ -269,8 +271,8 @@ function normalizeOffers(payload: OfferSyncPayload): OfferSyncPayload {
   };
 }
 
-export async function syncOffersToNextCard(payload: OfferSyncPayload): Promise<void> {
-  if (payload.offers.length === 0) return;
+export async function syncOffersToNextCard(payload: OfferSyncPayload): Promise<boolean> {
+  if (payload.offers.length === 0) return true;
 
   payload = normalizeOffers(payload);
 
@@ -283,14 +285,13 @@ export async function syncOffersToNextCard(payload: OfferSyncPayload): Promise<v
         } else {
           await updateOfferUrlCache(payload);
         }
-        return;
+        return true;
       }
 
       // Auth errors won't resolve with retry
       if (result.error?.includes("token") || result.error?.includes("401")) {
         console.warn(`[NextCard Offers Sync] Auth error, skipping retry: ${result.error}`);
-        await persistForRetry(payload);
-        return;
+        return persistForRetry(payload);
       }
 
       console.warn(`[NextCard Offers Sync] Attempt ${attempt + 1} failed: ${result.error}`);
@@ -304,7 +305,7 @@ export async function syncOffersToNextCard(payload: OfferSyncPayload): Promise<v
   }
 
   // All retries exhausted — persist for later
-  await persistForRetry(payload);
+  return persistForRetry(payload);
 }
 
 /** Retry any pending syncs stored from previous failures. Call on startup. */

@@ -1583,6 +1583,26 @@
   margin-bottom: 8px;
   outline: none;
 }
+.tool-check-option {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  margin: 4px 0 2px;
+  color: #5a4a3e;
+  font-size: 12px;
+  line-height: 1.35;
+  cursor: pointer;
+}
+.tool-check-option input {
+  margin: 1px 0 0;
+  accent-color: #d4943a;
+}
+.tool-check-note {
+  margin: 0 0 5px 20px;
+  color: #8c7a6e;
+  font-size: 11px;
+  line-height: 1.35;
+}
 .tool-input {
   width: 100%;
   padding: 8px 12px;

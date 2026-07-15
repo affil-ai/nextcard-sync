@@ -477,9 +477,7 @@ export function createMessageRouter(options: {
             }
 
             const startedAt = Date.now();
-            console.info("[NextCard SW] AMEX_OFFERS_ENROLL_ONE started:", {
-              offerId: enrollOfferId,
-            });
+            console.info("[NextCard SW] AMEX_OFFERS_ENROLL_ONE started");
             const results = await withTimeout(chrome.scripting.executeScript({
               target: { tabId },
               world: "MAIN",
@@ -488,7 +486,7 @@ export function createMessageRouter(options: {
                 const timeout = setTimeout(() => controller.abort(), 20000);
                 const requestStartedAt = Date.now();
                 try {
-                  console.info("[NextCard Amex Offers] enrollment request started:", { offerId });
+                  console.info("[NextCard Amex Offers] enrollment request started");
                   const resp = await fetch("https://functions.americanexpress.com/CreateOffersHubEnrollment.web.v1", {
                     method: "POST",
                     headers: {
@@ -512,7 +510,6 @@ export function createMessageRouter(options: {
                   let json: Record<string, unknown> | null = null;
                   try { json = await resp.json(); } catch { /* */ }
                   console.info("[NextCard Amex Offers] enrollment response:", {
-                    offerId,
                     status: resp.status,
                     elapsedMs: Date.now() - requestStartedAt,
                   });
@@ -543,7 +540,6 @@ export function createMessageRouter(options: {
 
             const result = results?.[0]?.result as { result?: string } | undefined;
             console.info("[NextCard SW] AMEX_OFFERS_ENROLL_ONE completed:", {
-              offerId: enrollOfferId,
               elapsedMs: Date.now() - startedAt,
               result: result?.result ?? "failed",
             });
@@ -553,11 +549,121 @@ export function createMessageRouter(options: {
             sendResponse(result ?? { result: "failed" });
           } catch (error) {
             const errorMessage = error instanceof Error ? error.message : String(error);
-            console.error("[NextCard SW] AMEX_OFFERS_ENROLL_ONE error:", {
-              offerId: enrollOfferId,
-              error: errorMessage,
-            });
+            console.error("[NextCard SW] AMEX_OFFERS_ENROLL_ONE error:", errorMessage);
             sendResponse({ result: "failed", error: errorMessage });
+          }
+        })();
+        return true;
+      }
+
+      case "AMEX_OFFERS_ENROLL_GROUP": {
+        const targets = Array.isArray(message.targets)
+          ? message.targets.flatMap((target) => {
+              if (!target || typeof target !== "object") return [];
+              const record = target as Record<string, unknown>;
+              return typeof record.cardId === "string" && typeof record.offerId === "string"
+                && record.cardId.length > 0 && record.offerId.length > 0
+                ? [{ cardId: record.cardId, offerId: record.offerId }]
+                : [];
+            })
+          : [];
+        const locale = typeof message.locale === "string" ? message.locale : "en-US";
+
+        if (targets.length === 0) {
+          sendResponse({ results: [] });
+          return true;
+        }
+
+        void (async () => {
+          try {
+            let tabId = sender.tab?.id ?? null;
+            if (tabId) {
+              const tab = await chrome.tabs.get(tabId).catch(() => null);
+              if (!tab?.url?.includes("americanexpress.com")) tabId = null;
+            }
+            if (!tabId) {
+              const tabs = await chrome.tabs.query({ url: "https://global.americanexpress.com/*" });
+              tabId = tabs[0]?.id ?? null;
+            }
+            if (!tabId) {
+              sendResponse({ results: targets.map(() => ({ result: "failed", error: "No open Amex tab" })) });
+              return;
+            }
+
+            const injected = await withTimeout(chrome.scripting.executeScript({
+              target: { tabId },
+              world: "MAIN",
+              func: async (
+                enrollmentTargets: Array<{ cardId: string; offerId: string }>,
+                enrollmentLocale: string,
+              ) => {
+                const userOffset = (() => {
+                  const offsetMinutes = -new Date().getTimezoneOffset();
+                  const sign = offsetMinutes >= 0 ? "+" : "-";
+                  const absolute = Math.abs(offsetMinutes);
+                  return `${sign}${String(Math.floor(absolute / 60)).padStart(2, "0")}:${String(absolute % 60).padStart(2, "0")}`;
+                })();
+                const requestDateTimeWithOffset = (() => {
+                  const date = new Date();
+                  const pad = (value: number) => String(value).padStart(2, "0");
+                  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}_${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}${userOffset}`;
+                })();
+                const requests = enrollmentTargets.map(async (target) => {
+                  const controller = new AbortController();
+                  const timeout = setTimeout(() => controller.abort(), 20_000);
+                  try {
+                    return await fetch(
+                      "https://functions.americanexpress.com/CreateCardAccountOfferEnrollment.v1",
+                      {
+                        method: "POST",
+                        headers: {
+                          accept: "application/json",
+                          "content-type": "application/json",
+                          "ce-source": "offers.list",
+                        },
+                        cache: "no-store",
+                        credentials: "include",
+                        signal: controller.signal,
+                        body: JSON.stringify({
+                          accountNumberProxy: target.cardId,
+                          identifier: target.offerId,
+                          locale: enrollmentLocale,
+                          requestDateTimeWithOffset,
+                          userOffset,
+                        }),
+                      },
+                    );
+                  } finally {
+                    clearTimeout(timeout);
+                  }
+                });
+                const settled = await Promise.allSettled(requests);
+                return Promise.all(settled.map(async (outcome) => {
+                  if (outcome.status === "rejected") {
+                    return { result: "unknown", error: "Amex enrollment request did not return a response" };
+                  }
+                  let body: Record<string, unknown> | null = null;
+                  try { body = await outcome.value.json() as Record<string, unknown>; } catch { /* non-JSON response */ }
+                  const status = outcome.value.status;
+                  const enrolled = body?.isEnrolled === true || body?.isEnrolled === "true";
+                  const alreadyEnrolled = body?.explanationCode === "PZN4107";
+                  if (status === 200 && enrolled) return { result: "added", status };
+                  if (status === 200 && alreadyEnrolled) return { result: "skipped", status };
+                  return {
+                    result: "failed",
+                    status,
+                    purpose: (body?.status as Record<string, unknown> | undefined)?.purpose,
+                    message: (body?.status as Record<string, unknown> | undefined)?.message,
+                    explanationCode: body?.explanationCode,
+                  };
+                }));
+              },
+              args: [targets, locale],
+            }), AMEX_ENROLL_EXECUTION_TIMEOUT_MS, "Amex enrollment group timed out before Chrome completed the request");
+            sendResponse({ results: injected?.[0]?.result ?? targets.map(() => ({ result: "failed" })) });
+          } catch (error) {
+            const errorMessage = error instanceof Error ? error.message : "Amex enrollment group failed";
+            sendResponse({ results: targets.map(() => ({ result: "failed", error: errorMessage })) });
           }
         })();
         return true;
@@ -578,12 +684,46 @@ export function createMessageRouter(options: {
         sendResponse({ ok: true });
         return true;
 
-      case "AMEX_OFFERS_COMPLETE":
-        if (Array.isArray(message.enrolledOffers) && message.enrolledOffers.length > 0) {
-          options.syncEnrolledOffers?.("amex", message);
-        }
-        sendResponse({ ok: true });
+      case "AMEX_OFFERS_COMPLETE": {
+        const enrolledByCard = Array.isArray(message.enrolledByCard) ? message.enrolledByCard : null;
+        void (async () => {
+          let syncError: string | null = null;
+          if (enrolledByCard) {
+            for (const cardResult of enrolledByCard) {
+              if (!cardResult || typeof cardResult !== "object") continue;
+              const record = cardResult as Record<string, unknown>;
+              if (!Array.isArray(record.enrolledOffers) || record.enrolledOffers.length === 0) continue;
+              try {
+                await options.syncEnrolledOffers?.("amex", record);
+              } catch (error) {
+                syncError = error instanceof Error ? error.message : "Could not save one or more verified Amex offers";
+              }
+            }
+          } else if (Array.isArray(message.enrolledOffers) && message.enrolledOffers.length > 0) {
+            try {
+              await options.syncEnrolledOffers?.("amex", message);
+            } catch (error) {
+              syncError = error instanceof Error ? error.message : "Could not save verified Amex offers";
+            }
+          }
+          chrome.runtime.sendMessage({
+            type: "AMEX_OFFERS_SYNCED",
+            runId: message.runId,
+            added: message.added,
+            skipped: message.skipped,
+            failed: message.failed,
+            unverified: message.unverified,
+            cancelled: message.cancelled,
+            sessionExpired: message.sessionExpired,
+            lastError: message.lastError,
+            rounds: message.rounds,
+            multiCard: enrolledByCard !== null,
+            syncError,
+          }).catch(() => {});
+          sendResponse({ ok: true });
+        })();
         return true;
+      }
 
       // ── Chase Offers (sync only — discovery/enrollment handled by content script) ──
       case "CHASE_OFFERS_COMPLETE":

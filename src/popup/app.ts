@@ -103,6 +103,8 @@ function initAmexOffers() {
   let amexTabId: number | null = null;
   let amexOurTabId: number | null = null;
   let amexDiscoverGen = 0;
+  let amexSharedOfferCounts: Record<string, number> = {};
+  let amexActiveRunId: string | null = null;
 
   const discoverBtn = document.getElementById("amexOffersDiscoverBtn");
   const runBtn = document.getElementById("amexOffersRunBtn");
@@ -116,6 +118,16 @@ function initAmexOffers() {
   const progressDetail = document.getElementById("amexOffersProgressDetail");
   const summaryEl = document.getElementById("amexOffersSummary");
   const errorMsgEl = document.getElementById("amexOffersErrorMsg");
+  const sharedOption = document.getElementById("amexOffersSharedOption");
+  const sharedCheckbox = document.getElementById("amexOffersSharedCheckbox") as HTMLInputElement | null;
+  const sharedScope = document.getElementById("amexOffersSharedScope");
+
+  void chrome.storage.local.get("amexSharedOfferEnrollmentEnabled").then((stored) => {
+    if (sharedCheckbox) sharedCheckbox.checked = stored.amexSharedOfferEnrollmentEnabled === true;
+  });
+  sharedCheckbox?.addEventListener("change", () => {
+    void chrome.storage.local.set({ amexSharedOfferEnrollmentEnabled: sharedCheckbox.checked });
+  });
 
   function waitForTabLoad(tabId: number, callback: (tabId: number) => void) {
     const listener = (updatedTabId: number, info: chrome.tabs.TabChangeInfo) => {
@@ -181,6 +193,17 @@ function initAmexOffers() {
       }
       amexCards = resp.cards ?? [];
       amexOfferCounts = resp.offerCounts ?? {};
+      const sharedOfferEntries: Array<[string, number]> = [];
+      if (Array.isArray(resp.sharedOfferPreview)) {
+        for (const entry of resp.sharedOfferPreview) {
+          if (!entry || typeof entry !== "object") continue;
+          const record = entry as Record<string, unknown>;
+          if (typeof record.cardId === "string" && typeof record.sharedOfferCount === "number") {
+            sharedOfferEntries.push([record.cardId, record.sharedOfferCount]);
+          }
+        }
+      }
+      amexSharedOfferCounts = Object.fromEntries(sharedOfferEntries);
       if (amexCards.length > 0 && cardSelect && cardSelectWrap) {
         cardSelect.innerHTML = amexCards.map((c) => {
           const n = amexOfferCounts[c.id];
@@ -232,6 +255,16 @@ function initAmexOffers() {
     offerCountEl.textContent = count > 0
       ? `${formatAvailableToActivate(count)} on this card`
       : "No new offers to activate for this card";
+
+    const sharedCount = amexSharedOfferCounts[selectedCardId] ?? 0;
+    const canTrySharedEnrollment = sharedCount > 0 && amexCards.length > 1;
+    if (sharedOption) sharedOption.style.display = canTrySharedEnrollment ? "" : "none";
+    if (sharedScope) {
+      sharedScope.style.display = canTrySharedEnrollment ? "" : "none";
+      sharedScope.textContent = canTrySharedEnrollment
+        ? `${pluralize(sharedCount, "offer")} currently match ${pluralize(amexCards.length - 1, "other card")}. Amex may not accept every match.`
+        : "";
+    }
   }
 
   cardSelect?.addEventListener("change", () => {
@@ -244,20 +277,85 @@ function initAmexOffers() {
     }
   });
 
-  runBtn?.addEventListener("click", () => requestToolConsent(() => {
+  function startAmexOfferRun(sharedPreflightId: string | null) {
     if (!amexTabId) return;
     showState("Running");
     if (progressBar) progressBar.style.width = "0%";
     if (progressDetail) progressDetail.textContent = "";
     const amexSelectedCard = amexCards.find((c) => c.id === selectedCardId);
-    chrome.tabs.sendMessage(amexTabId, { type: "AMEX_OFFERS_RUN", cardId: selectedCardId, locale: selectedLocale, accountKey: selectedAccountKey, cardName: amexSelectedCard?.name ?? "", cardLastDigits: amexSelectedCard?.lastDigits ?? null });
+    amexActiveRunId = crypto.randomUUID();
+    chrome.tabs.sendMessage(amexTabId, {
+      type: "AMEX_OFFERS_RUN",
+      runId: amexActiveRunId,
+      cardId: selectedCardId,
+      locale: selectedLocale,
+      accountKey: selectedAccountKey,
+      cardName: amexSelectedCard?.name ?? "",
+      cardLastDigits: amexSelectedCard?.lastDigits ?? null,
+      cards: amexCards,
+      addMatchingOffersAcrossCards: sharedPreflightId !== null,
+      sharedPreflightId,
+    }, (response) => {
+      if (chrome.runtime.lastError || response?.ok !== true) {
+        if (errorMsgEl) errorMsgEl.textContent = response?.error ?? "Could not start Amex offers. Refresh and try again.";
+        showState("Error");
+      }
+    });
+  }
+
+  runBtn?.addEventListener("click", () => requestToolConsent(() => {
+    if (!amexTabId) return;
+    const wantsSharedEnrollment = sharedCheckbox?.checked === true
+      && (amexSharedOfferCounts[selectedCardId] ?? 0) > 0;
+    if (!wantsSharedEnrollment) {
+      startAmexOfferRun(null);
+      return;
+    }
+    const preflightCardId = selectedCardId;
+    chrome.tabs.sendMessage(amexTabId, {
+      type: "AMEX_OFFERS_SHARED_PREFLIGHT",
+      cardId: preflightCardId,
+      locale: selectedLocale,
+      cards: amexCards,
+    }, (response) => {
+      if (chrome.runtime.lastError || !response?.ok || !response.preflightId) {
+        if (errorMsgEl) errorMsgEl.textContent = "Could not confirm matching Amex offers. Refresh and try again.";
+        showState("Error");
+        return;
+      }
+      const targetCards = Array.isArray(response.targetCards)
+        ? response.targetCards.map((card: { name?: unknown; lastDigits?: unknown }) => {
+            const name = typeof card.name === "string" ? card.name : "Amex card";
+            const lastDigits = typeof card.lastDigits === "string" ? ` ···· ${card.lastDigits}` : "";
+            return `${name}${lastDigits}`;
+          }).join(", ")
+        : "your matching eligible cards";
+      const matchingOfferCount = typeof response.matchingOfferCount === "number"
+        ? response.matchingOfferCount
+        : 0;
+      if (matchingOfferCount === 0) {
+        if (sharedCheckbox) sharedCheckbox.checked = false;
+        void chrome.storage.local.set({ amexSharedOfferEnrollmentEnabled: false });
+        startAmexOfferRun(null);
+        return;
+      }
+      if (!window.confirm(
+        `Try ${pluralize(matchingOfferCount, "matching offer")} on ${targetCards}?\n\nAmex may only allow this briefly. We will verify each result before it appears in nextcard.`,
+      )) return;
+      if (selectedCardId !== preflightCardId) {
+        if (errorMsgEl) errorMsgEl.textContent = "Your card selection changed. Please confirm matching offers again.";
+        showState("Error");
+        return;
+      }
+      startAmexOfferRun(response.preflightId);
+    });
   }));
 
   stopBtn?.addEventListener("click", () => {
     if (!amexTabId) return;
     chrome.tabs.sendMessage(amexTabId, { type: "AMEX_OFFERS_STOP" });
-    showState("Done");
-    if (summaryEl) summaryEl.textContent = "Cancelled";
+    if (progressDetail) progressDetail.textContent = "Stopping after the current offer...";
+    if (stopBtn) stopBtn.setAttribute("disabled", "true");
   });
 
   runAgainBtn?.addEventListener("click", () => {
@@ -272,6 +370,7 @@ function initAmexOffers() {
 
   // Listen for progress + completion messages from the content script
   chrome.runtime.onMessage.addListener((msg) => {
+    if (amexActiveRunId && msg.runId !== amexActiveRunId) return;
     if (msg.type === "AMEX_OFFERS_PROGRESS") {
       const added = msg.added ?? 0;
       const skipped = msg.skipped ?? 0;
@@ -298,16 +397,24 @@ function initAmexOffers() {
         if (progressDetail) progressDetail.textContent = `${added} of ${total} activated${suffix}`;
       }
     }
-    if (msg.type === "AMEX_OFFERS_COMPLETE") {
+    if (msg.type === "AMEX_OFFERS_SYNCED") {
       const cardLabel = formatCardDisplayName(amexCards.find((c) => c.id === selectedCardId));
       const parts: string[] = [];
-      if (msg.added > 0) parts.push(`${pluralize(msg.added, "offer")} activated for ${cardLabel}`);
+      if (msg.added > 0) {
+        parts.push(msg.multiCard
+          ? `${pluralize(msg.added, "offer")} activated across your Amex cards`
+          : `${pluralize(msg.added, "offer")} activated for ${cardLabel}`);
+      }
       if (msg.added === 0 && msg.failed === 0) parts.push(`No new offers to activate for ${cardLabel}`);
       if (msg.failed > 0) parts.push(`${pluralize(msg.failed, "enrollment attempt")} failed`);
+      if (msg.unverified > 0) parts.push(`${pluralize(msg.unverified, "offer")} could not be verified`);
+      if (msg.cancelled) parts.push("Stopped after the current offer");
       if (msg.sessionExpired) parts.push("Amex session expired — log in to Amex, then run again");
       else if (typeof msg.lastError === "string" && msg.lastError) parts.push(`Last Amex error: ${msg.lastError}`);
+      if (typeof msg.syncError === "string" && msg.syncError) parts.push("Verified offers could not be saved to nextcard — run again after checking your connection");
       if (msg.rounds > 1) parts.push(`${msg.rounds} rounds`);
       if (summaryEl) summaryEl.textContent = parts.join(" · ");
+      stopBtn?.removeAttribute("disabled");
       showState("Done");
     }
   });
