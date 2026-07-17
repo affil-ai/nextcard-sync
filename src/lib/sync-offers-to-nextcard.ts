@@ -106,7 +106,9 @@ export interface DetectedOfferSyncPayload {
 const MAX_RETRIES = 2;
 const RETRY_DELAY_MS = 2000;
 const STORAGE_KEY = "pendingOfferSyncs";
-const DETECTED_OFFER_SYNC_CHUNK_SIZE = 2_000;
+// Detected-offer upserts can require a substantial read of the user's offer
+// history. Keep each request well below Convex's per-function read limit.
+const DETECTED_OFFER_SYNC_CHUNK_SIZE = 50;
 
 function delay(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
@@ -365,7 +367,10 @@ export async function syncDetectedOffersToNextCard(payload: DetectedOfferSyncPay
           issuerCardId: issuerCardKey,
           legacyIssuerCardId: getLegacyIssuerCardId(payload.issuerCardId),
           offers,
-          skipOfferMap: !isLastChunk,
+          // The full URL map can exceed Convex's read limit for users with a
+          // large offer history. Detected offers are still persisted; the map
+          // is refreshed separately on extension startup.
+          skipOfferMap: true,
           snapshot: payload.snapshot,
           reconcileSnapshot: isLastChunk && payload.snapshot?.complete === true,
         }),

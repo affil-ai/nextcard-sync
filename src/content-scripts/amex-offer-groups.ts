@@ -35,19 +35,21 @@ export function buildSharedOfferGroups<Card extends SharedOfferCard, Offer exten
   snapshots: ReadonlyMap<string, SharedOfferSnapshot<Offer>>,
 ): Array<SharedOfferGroup<Card, Offer>> {
   const selectedSnapshot = snapshots.get(selectedCardId);
-  if (!selectedSnapshot?.complete) return [];
+  if (!selectedSnapshot) return [];
 
   const cardsById = new Map(cards.map((card) => [card.id, card]));
-  const completeSnapshots = cards
+  // A partial snapshot can miss an offer, but an exact issuer offer ID present
+  // and eligible on two cards is still a safe enrollment target. Requiring
+  // every card's snapshot to be complete turns transient/incomplete Amex
+  // responses into false negatives and silently drops the multi-card flow.
+  const availableSnapshots = cards
     .map((card) => ({ card, snapshot: snapshots.get(card.id) }))
-    .filter((entry): entry is { card: Card; snapshot: SharedOfferSnapshot<Offer> } => Boolean(entry.snapshot?.complete));
-
-  if (completeSnapshots.length !== cards.length) return [];
+    .filter((entry): entry is { card: Card; snapshot: SharedOfferSnapshot<Offer> } => Boolean(entry.snapshot));
 
   return selectedSnapshot.offers.flatMap((selectedOffer) => {
     if (!selectedOffer.offerId || !isExplicitlyEligibleAmexOffer(selectedOffer.status)) return [];
 
-    const targets = completeSnapshots.flatMap(({ card, snapshot }) => {
+    const targets = availableSnapshots.flatMap(({ card, snapshot }) => {
       const matchingOffer = snapshot.offers.find((offer) => (
         offer.offerId === selectedOffer.offerId
         && isExplicitlyEligibleAmexOffer(offer.status)

@@ -212,9 +212,11 @@ function initAmexOffers() {
         }).join("");
         cardSelectWrap.style.display = "";
       }
-      selectedCardId = amexCards[0]?.id ?? "";
-      selectedLocale = amexCards[0]?.locale ?? "en-US";
-      selectedAccountKey = amexCards[0]?.accountKey ?? null;
+      const refreshedSelectedCard = amexCards.find((card) => card.id === selectedCardId) ?? amexCards[0];
+      selectedCardId = refreshedSelectedCard?.id ?? "";
+      selectedLocale = refreshedSelectedCard?.locale ?? "en-US";
+      selectedAccountKey = refreshedSelectedCard?.accountKey ?? null;
+      if (cardSelect) cardSelect.value = selectedCardId;
       updateOfferCountLabel();
       showState("Ready");
     });
@@ -242,7 +244,11 @@ function initAmexOffers() {
     amexOurTabId = null;
   });
   document.getElementById("amexOffersRefreshBtn")?.addEventListener("click", () => {
-    requestToolConsent(() => { if (amexTabId) tryDiscoverOffers(amexTabId, ++amexDiscoverGen); });
+    requestToolConsent(() => {
+      if (!amexTabId) return;
+      showState("Loading");
+      tryDiscoverOffers(amexTabId, ++amexDiscoverGen);
+    });
   });
 
   function updateOfferCountLabel() {
@@ -257,13 +263,13 @@ function initAmexOffers() {
       : "No new offers to activate for this card";
 
     const sharedCount = amexSharedOfferCounts[selectedCardId] ?? 0;
-    const canTrySharedEnrollment = sharedCount > 0 && amexCards.length > 1;
-    if (sharedOption) sharedOption.style.display = canTrySharedEnrollment ? "" : "none";
+    const canShowSharedEnrollment = amexCards.length > 1;
+    if (sharedOption) sharedOption.style.display = canShowSharedEnrollment ? "" : "none";
     if (sharedScope) {
-      sharedScope.style.display = canTrySharedEnrollment ? "" : "none";
-      sharedScope.textContent = canTrySharedEnrollment
+      sharedScope.style.display = canShowSharedEnrollment ? "" : "none";
+      sharedScope.textContent = sharedCount > 0
         ? `${pluralize(sharedCount, "offer")} currently match ${pluralize(amexCards.length - 1, "other card")}. Amex may not accept every match.`
-        : "";
+        : "We'll check for matching eligible offers before activation.";
     }
   }
 
@@ -305,8 +311,7 @@ function initAmexOffers() {
 
   runBtn?.addEventListener("click", () => requestToolConsent(() => {
     if (!amexTabId) return;
-    const wantsSharedEnrollment = sharedCheckbox?.checked === true
-      && (amexSharedOfferCounts[selectedCardId] ?? 0) > 0;
+    const wantsSharedEnrollment = sharedCheckbox?.checked === true;
     if (!wantsSharedEnrollment) {
       startAmexOfferRun(null);
       return;
@@ -323,13 +328,6 @@ function initAmexOffers() {
         showState("Error");
         return;
       }
-      const targetCards = Array.isArray(response.targetCards)
-        ? response.targetCards.map((card: { name?: unknown; lastDigits?: unknown }) => {
-            const name = typeof card.name === "string" ? card.name : "Amex card";
-            const lastDigits = typeof card.lastDigits === "string" ? ` ···· ${card.lastDigits}` : "";
-            return `${name}${lastDigits}`;
-          }).join(", ")
-        : "your matching eligible cards";
       const matchingOfferCount = typeof response.matchingOfferCount === "number"
         ? response.matchingOfferCount
         : 0;
@@ -339,9 +337,6 @@ function initAmexOffers() {
         startAmexOfferRun(null);
         return;
       }
-      if (!window.confirm(
-        `Try ${pluralize(matchingOfferCount, "matching offer")} on ${targetCards}?\n\nAmex may only allow this briefly. We will verify each result before it appears in nextcard.`,
-      )) return;
       if (selectedCardId !== preflightCardId) {
         if (errorMsgEl) errorMsgEl.textContent = "Your card selection changed. Please confirm matching offers again.";
         showState("Error");

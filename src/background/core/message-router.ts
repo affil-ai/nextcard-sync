@@ -568,6 +568,7 @@ export function createMessageRouter(options: {
             })
           : [];
         const locale = typeof message.locale === "string" ? message.locale : "en-US";
+        const useOffersHubFallback = message.useOffersHubFallback === true;
 
         if (targets.length === 0) {
           sendResponse({ results: [] });
@@ -596,6 +597,7 @@ export function createMessageRouter(options: {
               func: async (
                 enrollmentTargets: Array<{ cardId: string; offerId: string }>,
                 enrollmentLocale: string,
+                useOffersHubFallback: boolean,
               ) => {
                 const userOffset = (() => {
                   const offsetMinutes = -new Date().getTimezoneOffset();
@@ -612,25 +614,48 @@ export function createMessageRouter(options: {
                   const controller = new AbortController();
                   const timeout = setTimeout(() => controller.abort(), 20_000);
                   try {
+                    const request = useOffersHubFallback
+                      ? {
+                          url: "https://functions.americanexpress.com/CreateOffersHubEnrollment.web.v1",
+                          headers: {
+                            accept: "application/json",
+                            "content-type": "application/json",
+                            "ce-source": "WEB",
+                          },
+                          body: {
+                            accountNumberProxy: target.cardId,
+                            locale: enrollmentLocale,
+                            offerId: target.offerId,
+                            requestType: "OFFERSHUB_ENROLLMENT",
+                            offerUnencrypted: false,
+                            synchronizeOnly: false,
+                            enrollmentTrigger: "OFFERSHUB_TILE",
+                          },
+                        }
+                      : {
+                          url: "https://functions.americanexpress.com/CreateCardAccountOfferEnrollment.v1",
+                          headers: {
+                            accept: "application/json",
+                            "content-type": "application/json",
+                            "ce-source": "offers.enroll",
+                          },
+                          body: {
+                            accountNumberProxy: target.cardId,
+                            identifier: target.offerId,
+                            locale: enrollmentLocale,
+                            requestDateTimeWithOffset,
+                            userOffset,
+                          },
+                        };
                     return await fetch(
-                      "https://functions.americanexpress.com/CreateCardAccountOfferEnrollment.v1",
+                      request.url,
                       {
                         method: "POST",
-                        headers: {
-                          accept: "application/json",
-                          "content-type": "application/json",
-                          "ce-source": "offers.list",
-                        },
+                        headers: request.headers,
                         cache: "no-store",
                         credentials: "include",
                         signal: controller.signal,
-                        body: JSON.stringify({
-                          accountNumberProxy: target.cardId,
-                          identifier: target.offerId,
-                          locale: enrollmentLocale,
-                          requestDateTimeWithOffset,
-                          userOffset,
-                        }),
+                        body: JSON.stringify(request.body),
                       },
                     );
                   } finally {
@@ -640,12 +665,26 @@ export function createMessageRouter(options: {
                 const settled = await Promise.allSettled(requests);
                 return Promise.all(settled.map(async (outcome) => {
                   if (outcome.status === "rejected") {
-                    return { result: "unknown", error: "Amex enrollment request did not return a response" };
+                    return {
+                      result: "unknown",
+                      error: outcome.reason instanceof Error
+                        ? outcome.reason.message
+                        : String(outcome.reason),
+                    };
                   }
                   let body: Record<string, unknown> | null = null;
                   try { body = await outcome.value.json() as Record<string, unknown>; } catch { /* non-JSON response */ }
                   const status = outcome.value.status;
-                  const enrolled = body?.isEnrolled === true || body?.isEnrolled === "true";
+                  const responseStatus = body?.status;
+                  const responseWasSuccessful =
+                    typeof responseStatus === "object"
+                    && responseStatus !== null
+                    && "purpose" in responseStatus
+                    && responseStatus.purpose === "SUCCESS";
+                  const enrolled =
+                    body?.isEnrolled === true
+                    || body?.isEnrolled === "true"
+                    || responseWasSuccessful;
                   const alreadyEnrolled = body?.explanationCode === "PZN4107";
                   if (status === 200 && enrolled) return { result: "added", status };
                   if (status === 200 && alreadyEnrolled) return { result: "skipped", status };
@@ -658,7 +697,7 @@ export function createMessageRouter(options: {
                   };
                 }));
               },
-              args: [targets, locale],
+              args: [targets, locale, useOffersHubFallback],
             }), AMEX_ENROLL_EXECUTION_TIMEOUT_MS, "Amex enrollment group timed out before Chrome completed the request");
             sendResponse({ results: injected?.[0]?.result ?? targets.map(() => ({ result: "failed" })) });
           } catch (error) {
