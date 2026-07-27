@@ -13,13 +13,22 @@
     <link rel="stylesheet" href="./popup.css" />
   </head>
   <body>
+    <!-- STARTUP VIEW: shown only while auth and rollout state are loading -->
+    <div class="view active" id="loadingView" role="status" aria-live="polite">
+      <div class="popup-loading-screen">
+        <img class="auth-logo" id="loadingLogo" alt="" />
+        <span class="popup-loading-label" id="loadingLabel">Loading nextcard…</span>
+        <span class="popup-loading-detail" id="loadingDetail"></span>
+      </div>
+    </div>
+
     <!-- SIGN-IN VIEW -->
     <div class="view" id="authView">
       <div class="auth-screen">
         <img class="auth-logo" id="authLogo" alt="nextcard" />
         <div class="auth-title">nextcard sync</div>
         <div class="auth-subtitle">
-          Sign in to your nextcard account to sync your loyalty programs.
+          Sign in to check and add card offers, then track your rewards.
         </div>
         <button class="auth-sign-in-btn" id="authSignInBtn">
           Sign in to nextcard
@@ -28,88 +37,68 @@
     </div>
 
     <!-- ONBOARDING VIEW -->
-    <div class="view active" id="disclosureView">
+    <div class="view" id="disclosureView">
       <div class="onboarding">
-        <!-- Step 1: Welcome -->
         <div class="onboarding-step active" data-step="0">
           <img class="auth-logo" id="disclosureLogo" alt="nextcard" />
-          <div class="auth-title">Welcome to nextcard sync</div>
+          <div class="auth-title">Find card offers before you miss them</div>
           <div class="onboarding-subtitle">
-            Sync your loyalty programs to see all your points, status, and benefits in one place.
+            Check supported issuers to find the offers currently available on your cards.
           </div>
           <div class="onboarding-carousel-wrapper">
             <div class="onboarding-carousel" id="onboardingProviders"></div>
           </div>
+          <div class="onboarding-offer-preview" aria-label="Example issuer check">
+            <div class="onboarding-offer-preview-row">
+              <span>Amex</span>
+              <strong>Check for offers</strong>
+            </div>
+            <small>You sign in directly with your card issuer.</small>
+          </div>
         </div>
 
-        <!-- Step 2: What does this extension do? -->
         <div class="onboarding-step" data-step="1">
-          <div class="auth-title" style="margin-bottom: 16px;">What nextcard sync does</div>
-          <div class="onboarding-subtitle" style="margin-bottom: 20px;">
-            We connect to your loyalty programs and credit card accounts to show everything in one place.
+          <div class="onboarding-step-icon" aria-hidden="true">••••</div>
+          <div class="auth-title">Choose the card you want to use</div>
+          <div class="onboarding-subtitle">
+            Fresh results are shown separately for every card, so you always know where each offer will be added.
           </div>
-          <div class="onboarding-how">
-            <div class="onboarding-how-item">
-              <div class="onboarding-how-num">1</div>
-              <div class="onboarding-how-text">
-                <strong>Points & miles</strong><br/>
-                <span>See balances across all your airline and hotel programs</span>
-              </div>
+          <div class="onboarding-card-preview" aria-label="Example offer results by card">
+            <div class="onboarding-card-preview-row selected">
+              <span>Platinum ···· 1002</span>
+              <strong>29 offers</strong>
             </div>
-            <div class="onboarding-how-item">
-              <div class="onboarding-how-num">2</div>
-              <div class="onboarding-how-text">
-                <strong>Elite status & tier progress</strong><br/>
-                <span>Track your progress toward the next tier in every program</span>
-              </div>
-            </div>
-            <div class="onboarding-how-item">
-              <div class="onboarding-how-num">3</div>
-              <div class="onboarding-how-text">
-                <strong>Benefits & perks</strong><br/>
-                <span>Never miss a companion cert, lounge pass, or credit card benefit</span>
-              </div>
+            <div class="onboarding-card-preview-row">
+              <span>Blue Business ···· 2002</span>
+              <strong>72 offers</strong>
             </div>
           </div>
+          <div class="onboarding-footnote">Counts appear only after you check the issuer.</div>
         </div>
 
-        <!-- Step 3: Create account / Sign in -->
         <div class="onboarding-step" data-step="2">
-          <div class="auth-title onboarding-title-nowrap" style="margin-bottom: 8px;">Sign in or create your free account</div>
-          <div class="onboarding-subtitle" style="margin-bottom: 20px;">
-            Your account lets us securely store your synced data and show you personalized insights on <span class="onboarding-accent">nextcard.com</span>
+          <div class="onboarding-step-icon review" aria-hidden="true">✓</div>
+          <div class="auth-title">Review before anything is added</div>
+          <div class="onboarding-subtitle">
+            Checking finds and saves offer details. Adding offers always requires your confirmation.
           </div>
-          <div class="onboarding-dashboard-preview">
-            <div class="onboarding-dashboard-header">Your nextcard wallet</div>
-            <div class="onboarding-dashboard-row">
-              <div class="onboarding-dashboard-item">
-                <div class="onboarding-dashboard-label">Total Points</div>
-                <div class="onboarding-dashboard-value">243,891</div>
-              </div>
-              <div class="onboarding-dashboard-item">
-                <div class="onboarding-dashboard-label">Programs</div>
-                <div class="onboarding-dashboard-value">6</div>
-              </div>
-            </div>
-            <div class="onboarding-dashboard-row">
-              <div class="onboarding-dashboard-item">
-                <div class="onboarding-dashboard-label">Benefits tracked</div>
-                <div class="onboarding-dashboard-value">12</div>
-              </div>
-              <div class="onboarding-dashboard-item">
-                <div class="onboarding-dashboard-label">Est. value</div>
-                <div class="onboarding-dashboard-value">$4,210</div>
-              </div>
-            </div>
+          <div class="onboarding-confirm-preview" aria-label="Example offer confirmation">
+            <strong>Add 29 offers to Platinum ending 1002?</strong>
+            <span>Nothing is added until you confirm.</span>
+            <div>Add 29 offers</div>
           </div>
+          <div class="onboarding-trust">
+            <span>Passwords and verification codes stay with your bank</span>
+            <span>You can stop before remaining offers are attempted</span>
+          </div>
+          <a class="onboarding-privacy-link" href="https://www.nextcard.com/privacy/nextcard-sync" target="_blank" rel="noopener noreferrer">How your data is used</a>
         </div>
 
-        <!-- Footer: dots + button -->
         <div class="onboarding-footer">
-          <div class="onboarding-dots">
-            <button class="onboarding-dot active" data-dot="0"></button>
-            <button class="onboarding-dot" data-dot="1"></button>
-            <button class="onboarding-dot" data-dot="2"></button>
+          <div class="onboarding-dots" aria-label="Onboarding progress">
+            <button class="onboarding-dot active" data-dot="0" type="button" aria-label="Step 1"></button>
+            <button class="onboarding-dot" data-dot="1" type="button" aria-label="Step 2"></button>
+            <button class="onboarding-dot" data-dot="2" type="button" aria-label="Step 3"></button>
           </div>
           <button class="auth-sign-in-btn onboarding-btn" id="onboardingBtn">Next</button>
         </div>
@@ -126,22 +115,71 @@
         </div>
         <button class="user-sign-out" id="userSignOutBtn">Sign out</button>
       </div>
-      <button class="home-wallet-btn" id="homeWalletBtn" type="button">
-        Open nextcard wallet
-      </button>
-      <div class="tab-bar hidden" id="tabBar" data-active="sync">
+      <div class="tab-bar hidden" id="tabBar" data-active="offers" role="tablist" aria-label="Extension sections">
         <div class="tab-slider"></div>
-        <button class="tab-btn active" data-tab="sync">sync</button>
-        <button class="tab-btn" data-tab="tools">tools</button>
+        <button class="tab-btn active" id="offersTab" role="tab" aria-selected="true" aria-controls="toolsTabPanel" data-tab="offers">Offers</button>
+        <button class="tab-btn" id="rewardsTab" role="tab" aria-selected="false" aria-controls="syncTabPanel" data-tab="rewards">Rewards</button>
       </div>
-      <div id="syncTabPanel">
-      <div class="tour-tooltip" id="tourTooltip">↓ Tap an issuer to start your first sync</div>
+      <div id="syncTabPanel" role="tabpanel" aria-labelledby="rewardsTab" style="display:none;">
+      <div class="tour-tooltip" id="tourTooltip">Rewards setup: choose a program to sync points and benefits ↓</div>
       <div class="provider-list" id="providerList"></div>
       <div class="version-footer" id="versionFooter"></div>
       </div><!-- /syncTabPanel -->
-      <div id="toolsTabPanel" style="display:none;">
+      <div id="toolsTabPanel" role="tabpanel" aria-labelledby="offersTab">
+        <div class="offers-coachmark" id="offersCoachmark" hidden>
+          <div>
+            <strong>Offers have a new home</strong>
+            <span>Check your cards and add offers here.</span>
+          </div>
+          <button type="button" id="offersCoachmarkDismiss">Got it</button>
+        </div>
+
+        <section class="offers-recommendation" id="offersRecommendation" aria-live="polite">
+          <div class="offers-eyebrow">Recommended next step</div>
+          <h2 id="offersRecommendationTitle">Check your first card</h2>
+          <p id="offersRecommendationText">Choose a card issuer to find and save eligible offers.</p>
+          <div class="offers-issuer-actions">
+            <button type="button" data-offer-issuer="chase">Chase</button>
+            <button type="button" data-offer-issuer="amex">Amex</button>
+            <button type="button" data-offer-issuer="citi">Citi</button>
+          </div>
+          <div class="offers-setup-secondary" id="offersSetupActions">
+            <button type="button" id="offersSetupSkip">Not now</button>
+            <button type="button" id="offersSetupUnsupported">I don’t use these cards</button>
+          </div>
+        </section>
+
+        <section class="offer-usage-card" id="offerUsageCard" aria-live="polite">
+          <div class="offer-usage-heading">
+            <div>
+              <strong>Monthly offer activations</strong>
+              <span class="offer-usage-detail-row">
+                <span id="offerUsageDetail">Loading your allowance…</span>
+                <button type="button" id="offerUsageUpgrade" hidden>Go unlimited</button>
+              </span>
+            </div>
+            <span class="offer-usage-value" id="offerUsageValue">—</span>
+          </div>
+          <div
+            class="offer-usage-track"
+            id="offerUsageTrack"
+            role="progressbar"
+            aria-label="Monthly offer activations"
+          >
+            <div class="offer-usage-fill" id="offerUsageFill"></div>
+          </div>
+        </section>
+
+        <div class="offer-activity" id="offerActivity" aria-live="polite" hidden>
+          <div class="offer-activity-copy">
+            <strong id="offerActivityTitle"></strong>
+            <span id="offerActivityDetail"></span>
+          </div>
+          <button type="button" id="offerActivityCancel" hidden>Cancel</button>
+        </div>
+
         <div class="home-section-heading" style="margin-top:16px">
-          <div class="home-section-label">Offers</div>
+          <div class="home-section-label">Your card offers</div>
           <button class="info-popover-btn" type="button" aria-label="About offer tools" aria-expanded="false" aria-describedby="offersExplainer" data-info-toggle="offersExplainer">?</button>
           <div class="info-popover" id="offersExplainer" role="tooltip">
             Offer tools read eligible card-linked merchant offers, add or sync them, and save offer details to your nextcard offers dashboard. Offer reminders may check the active shopping site's hostname against your saved offers. Some tools use your signed-in issuer session locally for actions you request; issuer cookies are not stored or sent to nextcard.
@@ -150,8 +188,8 @@
 
         <div class="provider-card tool-card" id="chaseOffersCard" style="cursor:pointer">
           <div class="provider-icon"><img src="" id="chaseOffersIcon" alt="Chase" /></div>
-          <div class="provider-info"><div class="provider-name">Chase Offers</div><div class="provider-desc">Add all eligible offers to your cards</div></div>
-          <div id="chaseOffersInitial"><div class="provider-arrow" id="chaseOffersDiscoverBtn">&rsaquo;</div></div>
+          <div class="provider-info"><div class="provider-name">Chase</div><div class="provider-desc">Not checked · Check for offers</div></div>
+          <div id="chaseOffersInitial"><button class="offer-row-action" id="chaseOffersDiscoverBtn" type="button">Check</button></div>
           <div id="chaseOffersLoading" class="tool-expand" style="display:none;">
             <div class="tool-status" id="chaseOffersLoadingText">Looking for your Chase cards...</div>
             <div class="offers-progress-bar"><div class="offers-progress-bar-fill"></div></div>
@@ -160,21 +198,21 @@
           <div id="chaseOffersReady" class="tool-expand" style="display:none;">
             <div id="chaseOffersCardSelectWrap" style="display:none;"><select id="chaseOffersCardSelect" class="tool-select"></select></div>
             <div style="display:flex;justify-content:space-between;align-items:center;"><div class="tool-status" style="font-weight:600;color:#342019;" id="chaseOffersOfferCount"></div><button class="tool-link-btn" id="chaseOffersRefreshBtn">Refresh</button></div>
-            <button class="sync-btn" id="chaseOffersRunBtn" style="margin:0;">Start</button>
+            <button class="sync-btn" id="chaseOffersRunBtn" style="margin:0;">Add offers</button>
           </div>
           <div id="chaseOffersRunning" class="tool-expand" style="display:none;">
             <div class="tool-status" style="font-weight:600;color:#342019;">Adding offers...</div>
             <div class="offers-progress-bar"><div id="chaseOffersProgressBar" class="offers-progress-bar-fill"></div></div>
             <div style="display:flex;justify-content:space-between;align-items:center;">
               <span class="tool-status" id="chaseOffersProgressDetail">0 added</span>
-              <button class="tool-link-btn" id="chaseOffersStopBtn">Cancel</button>
+              <button class="tool-link-btn" id="chaseOffersStopBtn">Stop after current offer</button>
             </div>
           </div>
           <div id="chaseOffersDone" class="tool-expand" style="display:none;">
             <div style="font-size:13px;font-weight:700;color:#34c759;margin-bottom:4px;">Done!</div>
             <div class="tool-status" id="chaseOffersSummary"></div>
             <a href="https://www.nextcard.com/dashboard/offers" target="_blank" class="sync-btn" style="margin:8px 0 0;text-align:center;text-decoration:none;display:block;">View your offers &rarr;</a>
-            <button class="tool-link-btn" id="chaseOffersRunAgainBtn" style="margin:6px auto 0;display:block;">Run again</button>
+            <button class="tool-link-btn" id="chaseOffersRunAgainBtn" style="margin:6px auto 0;display:block;">Check again</button>
           </div>
           <div id="chaseOffersError" class="tool-expand" style="display:none;">
             <div class="error-box" id="chaseOffersErrorMsg"></div>
@@ -184,8 +222,8 @@
 
         <div class="provider-card tool-card" id="amexOffersCard" style="cursor:pointer">
           <div class="provider-icon"><img src="" id="amexOffersIcon" alt="Amex" /></div>
-          <div class="provider-info"><div class="provider-name">Amex Offers</div><div class="provider-desc">Add all eligible offers to your cards</div></div>
-          <div id="amexOffersInitial"><div class="provider-arrow" id="amexOffersDiscoverBtn">&rsaquo;</div></div>
+          <div class="provider-info"><div class="provider-name">Amex</div><div class="provider-desc">Not checked · Check for offers</div></div>
+          <div id="amexOffersInitial"><button class="offer-row-action" id="amexOffersDiscoverBtn" type="button">Check</button></div>
           <div id="amexOffersLoading" class="tool-expand" style="display:none;">
             <div class="tool-status" id="amexOffersLoadingText">Looking for your Amex cards...</div>
             <div class="offers-progress-bar"><div class="offers-progress-bar-fill"></div></div>
@@ -199,21 +237,21 @@
               <span>Try matching offers on other eligible Amex cards</span>
             </label>
             <div id="amexOffersSharedScope" class="tool-check-note" style="display:none;"></div>
-            <button class="sync-btn" id="amexOffersRunBtn" style="margin:0;">Start</button>
+            <button class="sync-btn" id="amexOffersRunBtn" style="margin:0;">Add offers</button>
           </div>
           <div id="amexOffersRunning" class="tool-expand" style="display:none;">
             <div class="tool-status" style="font-weight:600;color:#342019;" id="amexOffersProgressText">Adding offers...</div>
             <div class="offers-progress-bar"><div id="amexOffersProgressBar" class="offers-progress-bar-fill"></div></div>
             <div style="display:flex;justify-content:space-between;align-items:center;">
               <span class="tool-status" id="amexOffersProgressDetail">0 / 0</span>
-              <button class="tool-link-btn" id="amexOffersStopBtn">Cancel</button>
+              <button class="tool-link-btn" id="amexOffersStopBtn">Stop after current offer</button>
             </div>
           </div>
           <div id="amexOffersDone" class="tool-expand" style="display:none;">
             <div style="font-size:13px;font-weight:700;color:#34c759;margin-bottom:4px;">Done!</div>
             <div class="tool-status" id="amexOffersSummary"></div>
             <a href="https://www.nextcard.com/dashboard/offers" target="_blank" class="sync-btn" style="margin:8px 0 0;text-align:center;text-decoration:none;display:block;">View your offers &rarr;</a>
-            <button class="tool-link-btn" id="amexOffersRunAgainBtn" style="margin:6px auto 0;display:block;">Run again</button>
+            <button class="tool-link-btn" id="amexOffersRunAgainBtn" style="margin:6px auto 0;display:block;">Check again</button>
           </div>
           <div id="amexOffersError" class="tool-expand" style="display:none;">
             <div class="error-box" id="amexOffersErrorMsg"></div>
@@ -223,8 +261,8 @@
 
         <div class="provider-card tool-card" id="citiOffersCard" style="cursor:pointer">
           <div class="provider-icon"><img src="" id="citiOffersIcon" alt="Citi" /></div>
-          <div class="provider-info"><div class="provider-name">Citi Offers</div><div class="provider-desc">Add all eligible offers to your cards</div></div>
-          <div id="citiOffersInitial"><div class="provider-arrow" id="citiOffersDiscoverBtn">&rsaquo;</div></div>
+          <div class="provider-info"><div class="provider-name">Citi</div><div class="provider-desc">Not checked · Check for offers</div></div>
+          <div id="citiOffersInitial"><button class="offer-row-action" id="citiOffersDiscoverBtn" type="button">Check</button></div>
           <div id="citiOffersLoading" class="tool-expand" style="display:none;">
             <div class="tool-status" id="citiOffersLoadingText">Looking for your Citi cards...</div>
             <div class="offers-progress-bar"><div class="offers-progress-bar-fill"></div></div>
@@ -233,21 +271,21 @@
           <div id="citiOffersReady" class="tool-expand" style="display:none;">
             <div id="citiOffersCardSelectWrap" style="display:none;"><select id="citiOffersCardSelect" class="tool-select"></select></div>
             <div style="display:flex;justify-content:space-between;align-items:center;"><div class="tool-status" style="font-weight:600;color:#342019;" id="citiOffersOfferCount"></div><button class="tool-link-btn" id="citiOffersRefreshBtn">Refresh</button></div>
-            <button class="sync-btn" id="citiOffersRunBtn" style="margin:0;">Start</button>
+            <button class="sync-btn" id="citiOffersRunBtn" style="margin:0;">Add offers</button>
           </div>
           <div id="citiOffersRunning" class="tool-expand" style="display:none;">
             <div class="tool-status" style="font-weight:600;color:#342019;">Adding offers...</div>
             <div class="offers-progress-bar"><div id="citiOffersProgressBar" class="offers-progress-bar-fill"></div></div>
             <div style="display:flex;justify-content:space-between;align-items:center;">
               <span class="tool-status" id="citiOffersProgressDetail">0 added</span>
-              <button class="tool-link-btn" id="citiOffersStopBtn">Cancel</button>
+              <button class="tool-link-btn" id="citiOffersStopBtn">Stop after current offer</button>
             </div>
           </div>
           <div id="citiOffersDone" class="tool-expand" style="display:none;">
             <div style="font-size:13px;font-weight:700;color:#34c759;margin-bottom:4px;">Done!</div>
             <div class="tool-status" id="citiOffersSummary"></div>
             <a href="https://www.nextcard.com/dashboard/offers" target="_blank" class="sync-btn" style="margin:8px 0 0;text-align:center;text-decoration:none;display:block;">View your offers &rarr;</a>
-            <button class="tool-link-btn" id="citiOffersRunAgainBtn" style="margin:6px auto 0;display:block;">Run again</button>
+            <button class="tool-link-btn" id="citiOffersRunAgainBtn" style="margin:6px auto 0;display:block;">Check again</button>
           </div>
           <div id="citiOffersError" class="tool-expand" style="display:none;">
             <div class="error-box" id="citiOffersErrorMsg"></div>
@@ -255,10 +293,13 @@
           </div>
         </div>
 
+        <details class="offers-more" id="offersMore">
+          <summary>More ways to save</summary>
+
         <div class="provider-card tool-card" id="capitaloneOffersCard" style="cursor:pointer">
           <div class="provider-icon"><img src="" id="capitaloneOffersIcon" alt="Capital One" /></div>
-          <div class="provider-info"><div class="provider-name">Capital One Offers</div><div class="provider-desc">Save available shopping offers by card</div></div>
-          <div id="capitaloneOffersInitial"><div class="provider-arrow" id="capitaloneOffersDiscoverBtn">&rsaquo;</div></div>
+          <div class="provider-info"><div class="provider-name">Capital One</div><div class="provider-desc">Find and save shopping offers</div></div>
+          <div id="capitaloneOffersInitial"><button class="offer-row-action" id="capitaloneOffersDiscoverBtn" type="button">Check</button></div>
           <div id="capitaloneOffersLoading" class="tool-expand" style="display:none;">
             <div class="tool-status" id="capitaloneOffersLoadingText">Looking for your Capital One offers...</div>
             <div class="offers-progress-bar"><div id="capitaloneOffersLoadingProgressBar" class="offers-progress-bar-fill"></div></div>
@@ -341,8 +382,18 @@
             <button class="sync-btn" id="chaseBonusRetryBtn" style="margin:8px 0 0;">Try Again</button>
           </div>
         </div>
+        </details>
+
+        <button class="home-wallet-btn offers-wallet-link" id="homeWalletBtn" type="button">
+          View saved offers and rewards
+        </button>
       </div>
       <div class="changelog" id="changelog">
+        <h4>v0.7.7</h4>
+        <ul>
+          <li>New Offers-first home with guided setup and resumable card-offer activation</li>
+          <li>Added monthly activation tracking: 100 with Free and unlimited with Pro</li>
+        </ul>
         <h4>v0.7.6</h4>
         <ul>
           <li>Improved Amex multi-card activation, reliability, and offer refresh</li>
@@ -1814,10 +1865,10 @@
     </div>
 
     <!-- CONSENT MODAL -->
-    <div class="consent-modal-backdrop" id="consentModal">
-      <div class="consent-modal">
-        <div class="auth-title" style="margin-bottom: 12px;">Before we sync</div>
-        <div class="onboarding-privacy">
+    <div class="consent-modal-backdrop" id="consentModal" aria-hidden="true">
+      <div class="consent-modal" role="dialog" aria-modal="true" aria-labelledby="consentTitle" aria-describedby="consentBody">
+        <div class="auth-title" id="consentTitle" style="margin-bottom: 12px;" tabindex="-1">Before we continue</div>
+        <div class="onboarding-privacy" id="consentBody">
           <p>
             <strong>nextcard sync reads account information visible after you sign in to a supported provider.</strong>
             This can include rewards balances, status, tier progress, member identifiers, card names, last four digits, benefit usage, merchant offers, offer details, and bonus registration details you enter.
@@ -1839,7 +1890,49 @@
           <input type="checkbox" id="consentCheckbox" />
           <span class="onboarding-check-label">I agree that nextcard sync may read this provider data and save it to my nextcard account</span>
         </label>
-        <button class="auth-sign-in-btn consent-btn" id="consentContinueBtn" disabled>Continue & Sync</button>
+        <button class="auth-sign-in-btn consent-btn" id="consentContinueBtn" disabled>Agree & continue</button>
+        <button class="consent-cancel-btn" id="consentCancelBtn" type="button">Cancel</button>
+      </div>
+    </div>
+
+    <!-- OFFER ACTION CONFIRMATION -->
+    <div class="consent-modal-backdrop" id="offerConfirmModal">
+      <div class="consent-modal offer-confirm-modal" role="dialog" aria-modal="true" aria-labelledby="offerConfirmTitle">
+        <div class="auth-title" id="offerConfirmTitle" style="margin-bottom: 10px;">Add offers?</div>
+        <p class="offer-confirm-body" id="offerConfirmBody"></p>
+        <button class="auth-sign-in-btn consent-btn" id="offerConfirmContinue" type="button">Add offers</button>
+        <button class="consent-cancel-btn" id="offerConfirmCancel" type="button">Not now</button>
+      </div>
+    </div>
+
+    <!-- MONTHLY OFFER LIMIT -->
+    <div class="consent-modal-backdrop" id="offerLimitModal" aria-hidden="true">
+      <div class="consent-modal offer-confirm-modal" role="dialog" aria-modal="true" aria-labelledby="offerLimitTitle" aria-describedby="offerLimitBody">
+        <div class="offers-eyebrow">Free plan</div>
+        <div class="auth-title" id="offerLimitTitle" style="margin-bottom: 10px;">Monthly limit reached</div>
+        <p class="offer-confirm-body" id="offerLimitBody">
+          You’ve used all 100 offer activations available this month.
+        </p>
+        <button class="auth-sign-in-btn consent-btn" id="offerLimitUpgrade" type="button">Upgrade to Pro</button>
+        <button class="consent-cancel-btn" id="offerLimitDismiss" type="button">Maybe later</button>
+      </div>
+    </div>
+
+    <!-- AMEX MULTI-CARD RISK ACKNOWLEDGMENT -->
+    <div class="consent-modal-backdrop" id="amexMultiEnrollDisclaimerModal" aria-hidden="true">
+      <div class="consent-modal offer-confirm-modal" role="dialog" aria-modal="true" aria-labelledby="amexMultiEnrollDisclaimerTitle" aria-describedby="amexMultiEnrollDisclaimerBody">
+        <div class="offer-risk-eyebrow">Advanced option</div>
+        <div class="auth-title" id="amexMultiEnrollDisclaimerTitle" style="margin-bottom: 10px;">Before you try multiple cards</div>
+        <div class="offer-confirm-body" id="amexMultiEnrollDisclaimerBody">
+          <p>Amex generally limits a specific offer to one Card. Trying matching offers on additional cards may fail.</p>
+          <p>Amex may reverse rewards or restrict access to Amex Offers if it considers the activity automated, abusive, or inconsistent with its program terms.</p>
+        </div>
+        <label class="onboarding-check-row offer-risk-check">
+          <input type="checkbox" id="amexMultiEnrollDisclaimerCheckbox" />
+          <span class="onboarding-check-label">I understand the risk and still want to try matching offers on other eligible cards</span>
+        </label>
+        <button class="auth-sign-in-btn consent-btn" id="amexMultiEnrollDisclaimerContinue" type="button" disabled>Continue</button>
+        <button class="consent-cancel-btn" id="amexMultiEnrollDisclaimerCancel" type="button">Use one card instead</button>
       </div>
     </div>
 

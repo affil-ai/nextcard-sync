@@ -3,8 +3,8 @@
   "incognito": "split",
   "name": "nextcard sync",
   "short_name": "nextcard sync",
-  "version": "0.7.6",
-  "description": "Sync your loyalty program balances and credit card benefit usage to your nextcard wallet.",
+  "version": "0.7.7",
+  "description": "Find and add card offers, get shopping reminders, and sync rewards to your nextcard wallet.",
   "permissions": ["storage", "scripting", "sidePanel", "tabs", "alarms"],
   "host_permissions": [],
   "externally_connectable": {
@@ -28,6 +28,11 @@
     {
       "matches": ["https://myaccounts.capitalone.com/*", "https://capitaloneoffers.com/*"],
       "js": ["src/content-scripts/capitalone-offers.ts"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": ["https://online.citi.com/*"],
+      "js": ["src/content-scripts/citi-offers.ts"],
       "run_at": "document_idle"
     }
   ],

@@ -5,6 +5,15 @@ import type {
   ProviderStateMap,
   ProviderSyncState,
 } from "../lib/types";
+import {
+  getOfferOperationStatusText,
+  isOfferOperationActive,
+  isOfferResultFresh,
+  normalizeOfferOperationSnapshot,
+  type OfferIssuer,
+  type OfferOperationCard,
+  type OfferOperationSnapshot,
+} from "../lib/offer-operation";
 import { homeElements, authElements, views, onboardingElements, consentElements, footerElements } from "./dom";
 import { createAirlineRenderers } from "./renderers/airlines";
 import { createBankRenderers } from "./renderers/banks";
@@ -26,6 +35,42 @@ type ViewName = keyof typeof views;
 const tabBar = document.getElementById("tabBar");
 const syncTabPanel = document.getElementById("syncTabPanel");
 const toolsTabPanel = document.getElementById("toolsTabPanel");
+let offersFirstUiEnabled = false;
+let activeDestination: "offers" | "rewards" = "offers";
+let offerConsentVersion = 0;
+const CURRENT_OFFERS_INTRO_VERSION = 9;
+const CURRENT_OFFER_CONSENT_VERSION = 1;
+const SIGNED_OUT_CONFIRMATION_POLLS = 3;
+const NEXTCARD_AUTH_WAIT_TIMEOUT_MS = 45_000;
+const OFFER_ACTIVATION_USAGE_REFRESH_MS = 3 * 60 * 1000;
+const activeOfferRunIds = new Map<OfferIssuer, string>();
+let renderedAccountKey: string | null = null;
+let destinationRestored = false;
+let offerActivationUsage: {
+  used: number;
+  limit: number | null;
+  remaining: number | null;
+  accountLevel: "free" | "pro";
+} | null = null;
+let offerActivationUsageFetchedAt = 0;
+let offerActivationUsageRequest: Promise<void> | null = null;
+let offerLimitDialogTrigger: HTMLElement | null = null;
+
+function setDestination(destination: "offers" | "rewards", options: { persist?: boolean } = {}) {
+  activeDestination = destination;
+  tabBar?.setAttribute("data-active", destination);
+  tabBar?.querySelectorAll(".tab-btn").forEach((button) => {
+    const selected = button.getAttribute("data-tab") === destination;
+    button.classList.toggle("active", selected);
+    button.setAttribute("aria-selected", String(selected));
+    button.setAttribute("tabindex", selected ? "0" : "-1");
+  });
+  if (syncTabPanel) syncTabPanel.style.display = destination === "rewards" ? "" : "none";
+  if (toolsTabPanel) toolsTabPanel.style.display = destination === "offers" ? "" : "none";
+  if (options.persist !== false) {
+    void chrome.storage.local.set({ lastHomeDestination: destination });
+  }
+}
 
 type OfferToolCard = {
   id: string;
@@ -37,13 +82,81 @@ function pluralize(count: number, singular: string, plural = `${singular}s`) {
   return `${count} ${count === 1 ? singular : plural}`;
 }
 
-function formatCardDisplayName(card: OfferToolCard | undefined) {
+function formatCardDisplayName(
+  card: Pick<OfferToolCard, "name" | "lastDigits"> | undefined,
+) {
   if (!card) return "this card";
   return `${card.name}${card.lastDigits ? ` ···· ${card.lastDigits}` : ""}`;
 }
 
 function formatAvailableToActivate(count: number) {
   return `${count} available to activate`;
+}
+
+function findOfferToolCardBySelectValue<T extends { id: string }>(
+  cards: T[],
+  value: string,
+) {
+  const directMatch = cards.find((card) => card.id === value);
+  if (directMatch) return directMatch;
+  const indexMatch = value.match(/^card-(\d+)$/);
+  return indexMatch ? cards[Number(indexMatch[1])] : undefined;
+}
+
+function renderOfferCardChoices(options: {
+  issuer: "amex" | "chase" | "citi";
+  cards: OfferToolCard[];
+  counts: Record<string, number>;
+  select: HTMLSelectElement | null;
+  selectWrap: HTMLElement | null;
+  runButton: HTMLButtonElement | null;
+}) {
+  if (!offersFirstUiEnabled || !options.selectWrap || options.cards.length === 0) return;
+  let container = document.getElementById(`${options.issuer}OfferCardChoices`);
+  if (!container) {
+    container = document.createElement("div");
+    container.id = `${options.issuer}OfferCardChoices`;
+    container.className = "offer-card-choices";
+    options.selectWrap.insertAdjacentElement("beforebegin", container);
+  }
+  container.innerHTML = "";
+  options.selectWrap.style.display = "none";
+
+  const selectCard = (cardId: string, button: HTMLButtonElement) => {
+    if (options.select) {
+      options.select.value = cardId;
+      options.select.dispatchEvent(new Event("change", { bubbles: true }));
+    }
+    container?.querySelectorAll("button").forEach((candidate) => {
+      candidate.classList.toggle("selected", candidate === button);
+      candidate.setAttribute("aria-pressed", String(candidate === button));
+    });
+    const count = options.counts[cardId];
+    if (options.runButton) {
+      options.runButton.textContent =
+        typeof count === "number" && count > 0 ? `Add ${count} offers` : "Add offers";
+      options.runButton.disabled = count === 0;
+    }
+  };
+
+  const initialCardId = options.cards.some((card) => card.id === options.select?.value)
+    ? options.select?.value
+    : options.cards[0]?.id;
+  options.cards.forEach((card) => {
+    const count = options.counts[card.id];
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "offer-card-choice";
+    const selected = card.id === initialCardId;
+    button.setAttribute("aria-pressed", String(selected));
+    button.innerHTML = `
+      <span>${escapeHtml(formatCardDisplayName(card))}</span>
+      <strong>${typeof count === "number" ? `${count} ${count === 1 ? "offer" : "offers"} found` : "Count unavailable"}</strong>
+    `;
+    button.addEventListener("click", () => selectCard(card.id, button));
+    container?.appendChild(button);
+    if (selected) selectCard(card.id, button);
+  });
 }
 
 function escapeHtml(value: string) {
@@ -54,28 +167,524 @@ function escapeHtml(value: string) {
     .replace(/"/g, "&quot;");
 }
 
+const offerIssuerNames: Record<OfferIssuer, string> = {
+  chase: "Chase",
+  amex: "Amex",
+  citi: "Citi",
+  capitalone: "Capital One",
+};
+
+async function patchOfferOperation(
+  issuer: OfferIssuer,
+  patch: Record<string, unknown>,
+) {
+  const runId = activeOfferRunIds.get(issuer);
+  if (!runId) return;
+  await chrome.runtime.sendMessage({
+    type: "PATCH_OFFER_OPERATION",
+    runId,
+    ...patch,
+  }).catch(() => null);
+}
+
+async function beginTrackedOfferCheck(
+  issuer: OfferIssuer,
+  action: () => void,
+) {
+  if (!offersFirstUiEnabled) {
+    action();
+    return;
+  }
+  const response = await chrome.runtime.sendMessage({
+    type: "START_OFFER_CHECK",
+    issuer,
+  }).catch(() => null) as {
+    ok?: boolean;
+    busy?: OfferIssuer;
+    state?: { runId?: string };
+  } | null;
+
+  if (!response?.ok || !response.state?.runId) {
+    const activeIssuer = response?.busy ? offerIssuerNames[response.busy] : "another issuer";
+    renderOfferActivityMessage(
+      `Finish or stop ${activeIssuer} first`,
+      "Only one card-offer check can run at a time.",
+    );
+    return;
+  }
+
+  activeOfferRunIds.set(issuer, response.state.runId);
+  void refreshOfferOperationUi();
+}
+
+function requestOfferCheck(issuer: OfferIssuer, action: () => void) {
+  const execute = () => void beginTrackedOfferCheck(issuer, action);
+  if (offerConsentVersion >= CURRENT_OFFER_CONSENT_VERSION) {
+    execute();
+    return;
+  }
+
+  const issuerName = offerIssuerNames[issuer];
+  consentController.requestAction(
+    () => {
+      void recordOfferConsent().then((recorded) => {
+        if (!recorded) {
+          renderOfferActivityMessage(
+            "Couldn’t save your permission",
+            "Check your connection and try again.",
+          );
+          return;
+        }
+        offerConsentVersion = CURRENT_OFFER_CONSENT_VERSION;
+        void chrome.storage.local.set({
+          offerConsentVersion: CURRENT_OFFER_CONSENT_VERSION,
+        });
+        execute();
+      });
+    },
+    {
+      title: `Check ${issuerName} offers?`,
+      body: `
+        <p><strong>nextcard will read card names and offers visible in your signed-in ${issuerName} account.</strong></p>
+        <p>Detected offer details are saved to your nextcard account so they can be tracked and used for shopping reminders. Nothing will be added to ${issuerName} until you confirm.</p>
+        <p>We never store your ${issuerName} password or verification codes.</p>
+        <p><a href="https://www.nextcard.com/privacy/nextcard-sync" target="_blank" rel="noopener noreferrer">Privacy Policy</a></p>
+      `,
+      continueLabel: `Agree & open ${issuerName}`,
+    },
+  );
+}
+
+async function startTrackedEnrollment(
+  issuer: OfferIssuer,
+  selectedCardKeys: string[],
+  total: number | null,
+  options: { addMatchingOffersAcrossCards?: boolean } = {},
+): Promise<"started" | "limit_reached" | "failed"> {
+  const runId = activeOfferRunIds.get(issuer);
+  if (!runId) return "failed";
+  const response = await chrome.runtime.sendMessage({
+    type: "START_OFFER_ENROLLMENT",
+    runId,
+    selectedCardKeys,
+    total,
+    addMatchingOffersAcrossCards: options.addMatchingOffersAcrossCards === true,
+  }).catch(() => null) as {
+    ok?: boolean;
+    error?: string;
+    used?: number;
+    limit?: number | null;
+    remaining?: number | null;
+    accountLevel?: "free" | "pro";
+  } | null;
+  if (response?.error === "monthly_offer_limit_reached") {
+    showOfferLimitDialog(response);
+    return "limit_reached";
+  }
+  if (response?.error === "quota_unavailable") {
+    showOfferQuotaUnavailableDialog();
+    return "failed";
+  }
+  if (response?.ok === true) {
+    offerActivationUsageFetchedAt = 0;
+  }
+  return response?.ok === true ? "started" : "failed";
+}
+
+async function reserveLegacyEnrollment(requested: number) {
+  const runId = crypto.randomUUID();
+  const response = await chrome.runtime.sendMessage({
+    type: "RESERVE_OFFER_ACTIVATION",
+    runId,
+    requested,
+  }).catch(() => null) as {
+    ok?: boolean;
+    error?: string;
+    granted?: number;
+    used?: number;
+    limit?: number | null;
+    remaining?: number | null;
+    accountLevel?: "free" | "pro";
+  } | null;
+  if (response?.ok !== true || typeof response.granted !== "number") {
+    if (response?.error === "monthly_offer_limit_reached") {
+      showOfferLimitDialog(response);
+    } else {
+      showOfferQuotaUnavailableDialog();
+    }
+    return null;
+  }
+  return {
+    runId,
+    maxOffers: Math.max(0, Math.floor(response.granted)),
+  };
+}
+
+let offerConfirmationTrigger: HTMLButtonElement | null = null;
+let amexMultiEnrollDisclaimerTrigger: HTMLButtonElement | null = null;
+
+function closeOfferLimitDialog(options: { restoreFocus: boolean }) {
+  const modal = document.getElementById("offerLimitModal");
+  modal?.classList.remove("visible");
+  modal?.setAttribute("aria-hidden", "true");
+  if (options.restoreFocus) offerLimitDialogTrigger?.focus();
+  offerLimitDialogTrigger = null;
+}
+
+function showOfferLimitDialog(usage?: {
+  used?: number;
+  limit?: number | null;
+  remaining?: number | null;
+  accountLevel?: "free" | "pro";
+} | null) {
+  const modal = document.getElementById("offerLimitModal");
+  const body = document.getElementById("offerLimitBody");
+  const eyebrow = document.querySelector<HTMLElement>(
+    "#offerLimitModal .offers-eyebrow",
+  );
+  const title = document.getElementById("offerLimitTitle");
+  const dismiss = document.getElementById(
+    "offerLimitDismiss",
+  ) as HTMLButtonElement | null;
+  const upgrade = document.getElementById(
+    "offerLimitUpgrade",
+  ) as HTMLButtonElement | null;
+  if (!modal || !body || !title || !upgrade || !dismiss) return;
+
+  if (eyebrow) eyebrow.textContent = "Free plan";
+  title.textContent = "Monthly limit reached";
+  upgrade.hidden = false;
+  dismiss.textContent = "Maybe later";
+
+  if (
+    typeof usage?.used === "number"
+    && typeof usage.limit === "number"
+    && typeof usage.remaining === "number"
+  ) {
+    offerActivationUsage = {
+      used: Math.max(0, usage.used),
+      limit: usage.limit,
+      remaining: Math.max(0, usage.remaining),
+      accountLevel: "free",
+    };
+    renderOfferActivationUsage();
+  }
+
+  const limit =
+    typeof usage?.limit === "number"
+      ? usage.limit
+      : offerActivationUsage?.limit ?? 100;
+  body.textContent =
+    `You’ve used all ${limit} Free offer activations for this month. `
+    + "Your allowance resets next month, or you can upgrade for unlimited activations.";
+  offerLimitDialogTrigger =
+    document.activeElement instanceof HTMLElement ? document.activeElement : null;
+  modal.classList.add("visible");
+  modal.setAttribute("aria-hidden", "false");
+  upgrade.focus();
+}
+
+function showOfferQuotaUnavailableDialog() {
+  const modal = document.getElementById("offerLimitModal");
+  const eyebrow = document.querySelector<HTMLElement>(
+    "#offerLimitModal .offers-eyebrow",
+  );
+  const title = document.getElementById("offerLimitTitle");
+  const body = document.getElementById("offerLimitBody");
+  const upgrade = document.getElementById(
+    "offerLimitUpgrade",
+  ) as HTMLButtonElement | null;
+  const dismiss = document.getElementById(
+    "offerLimitDismiss",
+  ) as HTMLButtonElement | null;
+  if (!modal || !title || !body || !upgrade || !dismiss) return;
+
+  if (eyebrow) eyebrow.textContent = "Please try again";
+  title.textContent = "Couldn’t verify your monthly limit";
+  body.textContent =
+    "No offers were added. Check your connection and try again in a moment.";
+  upgrade.hidden = true;
+  dismiss.textContent = "Close";
+  offerLimitDialogTrigger =
+    document.activeElement instanceof HTMLElement ? document.activeElement : null;
+  modal.classList.add("visible");
+  modal.setAttribute("aria-hidden", "false");
+  dismiss.focus();
+}
+
+function closeOfferConfirmation(options: { restoreFocus: boolean }) {
+  document.getElementById("offerConfirmModal")?.classList.remove("visible");
+  if (options.restoreFocus) offerConfirmationTrigger?.focus();
+  offerConfirmationTrigger = null;
+}
+
+function closeAmexMultiEnrollDisclaimer(options: { restoreFocus: boolean }) {
+  const modal = document.getElementById("amexMultiEnrollDisclaimerModal");
+  const checkbox = document.getElementById(
+    "amexMultiEnrollDisclaimerCheckbox",
+  ) as HTMLInputElement | null;
+  const continueButton = document.getElementById(
+    "amexMultiEnrollDisclaimerContinue",
+  ) as HTMLButtonElement | null;
+  modal?.classList.remove("visible");
+  modal?.setAttribute("aria-hidden", "true");
+  if (checkbox) checkbox.checked = false;
+  if (continueButton) continueButton.disabled = true;
+  if (options.restoreFocus) amexMultiEnrollDisclaimerTrigger?.focus();
+  amexMultiEnrollDisclaimerTrigger = null;
+}
+
+function showAmexMultiEnrollDisclaimer(button: HTMLButtonElement) {
+  const modal = document.getElementById("amexMultiEnrollDisclaimerModal");
+  const checkbox = document.getElementById(
+    "amexMultiEnrollDisclaimerCheckbox",
+  ) as HTMLInputElement | null;
+  const continueButton = document.getElementById(
+    "amexMultiEnrollDisclaimerContinue",
+  ) as HTMLButtonElement | null;
+  if (!modal || !checkbox || !continueButton) return;
+  amexMultiEnrollDisclaimerTrigger = button;
+  checkbox.checked = false;
+  continueButton.disabled = true;
+  modal.classList.add("visible");
+  modal.setAttribute("aria-hidden", "false");
+  checkbox.focus();
+}
+
+function confirmOfferEnrollment(button: HTMLButtonElement) {
+  const modal = document.getElementById("offerConfirmModal");
+  const title = document.getElementById("offerConfirmTitle");
+  const body = document.getElementById("offerConfirmBody");
+  const continueButton = document.getElementById("offerConfirmContinue") as HTMLButtonElement | null;
+  if (!modal || !title || !body || !continueButton) return;
+
+  const config = {
+    chaseOffersRunBtn: {
+      issuer: "Chase",
+      selectId: "chaseOffersCardSelect",
+      countId: "chaseOffersOfferCount",
+    },
+    amexOffersRunBtn: {
+      issuer: "Amex",
+      selectId: "amexOffersCardSelect",
+      countId: "amexOffersOfferCount",
+    },
+    citiOffersRunBtn: {
+      issuer: "Citi",
+      selectId: "citiOffersCardSelect",
+      countId: "citiOffersOfferCount",
+    },
+  }[button.id];
+  if (!config) return;
+
+  const select = document.getElementById(config.selectId) as HTMLSelectElement | null;
+  const selectedLabel = select?.selectedOptions[0]?.textContent
+    ?.replace(/\s*\(\d+ available to activate\)\s*$/, "")
+    .trim();
+  const count = button.dataset.enrollmentCount ?? null;
+  const amexShared =
+    button.id === "amexOffersRunBtn"
+    && (document.getElementById("amexOffersSharedCheckbox") as HTMLInputElement | null)?.checked;
+  if (amexShared && button.dataset.sharedRiskAcknowledged !== "true") {
+    showAmexMultiEnrollDisclaimer(button);
+    return;
+  }
+
+  title.textContent =
+    count && selectedLabel && !amexShared
+      ? `Add ${count} offers to ${selectedLabel}?`
+      : `Add available ${config.issuer} offers?`;
+  body.textContent = amexShared
+    ? "Amex will add offers to the selected card and try verified matches on other eligible cards. You’ll see the final result when it finishes."
+    : `This will add the available offers shown for ${selectedLabel ?? `this ${config.issuer} card`}. Already-submitted issuer actions cannot be undone.`;
+  continueButton.textContent = count && !amexShared ? `Add ${count} offers` : "Add offers";
+  offerConfirmationTrigger = button;
+  modal.classList.add("visible");
+  continueButton.focus();
+
+  continueButton.onclick = () => {
+    closeOfferConfirmation({ restoreFocus: false });
+    button.dataset.confirmed = "true";
+    button.click();
+    delete button.dataset.confirmed;
+  };
+}
+
+document.addEventListener("click", (event) => {
+  const button = (event.target as HTMLElement).closest(
+    "#chaseOffersRunBtn, #amexOffersRunBtn, #citiOffersRunBtn",
+  ) as HTMLButtonElement | null;
+  if (!button) return;
+  if (button.dataset.confirmed === "true") {
+    if (offersFirstUiEnabled) {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      const issuer = button.id.startsWith("chase")
+        ? "chase"
+        : button.id.startsWith("amex")
+          ? "amex"
+          : "citi";
+      const select = document.getElementById(`${issuer}OffersCardSelect`) as HTMLSelectElement | null;
+      const state = latestOfferSnapshot.active?.issuer === issuer
+        ? latestOfferSnapshot.active
+        : latestOfferSnapshot.history[issuer];
+      const selectedKey = select?.value ?? "";
+      const selected = state?.cards.find((card) => card.key === selectedKey);
+      void startTrackedEnrollment(
+        issuer,
+        selectedKey ? [selectedKey] : [],
+        selected?.availableCount ?? null,
+        {
+          addMatchingOffersAcrossCards:
+            issuer === "amex"
+            && (document.getElementById("amexOffersSharedCheckbox") as HTMLInputElement | null)
+              ?.checked === true,
+        },
+      ).then((result) => {
+        if (result === "failed") {
+          renderOfferActivityMessage(
+            "Check again before adding offers",
+            "The issuer session or selected card is no longer available.",
+          );
+        }
+        void refreshOfferOperationUi();
+      });
+    }
+    return;
+  }
+  event.preventDefault();
+  event.stopImmediatePropagation();
+  confirmOfferEnrollment(button);
+}, true);
+
+document.getElementById("offerConfirmCancel")?.addEventListener("click", () => {
+  closeOfferConfirmation({ restoreFocus: true });
+});
+
+document.getElementById("offerLimitUpgrade")?.addEventListener("click", () => {
+  closeOfferLimitDialog({ restoreFocus: false });
+  handleLockedProviderSelected("chase");
+});
+document.getElementById("offerLimitDismiss")?.addEventListener("click", () => {
+  closeOfferLimitDialog({ restoreFocus: true });
+});
+document.getElementById("offerLimitModal")?.addEventListener("click", (event) => {
+  if (event.target === event.currentTarget) {
+    closeOfferLimitDialog({ restoreFocus: true });
+  }
+});
+
+const amexMultiEnrollDisclaimerCheckbox = document.getElementById(
+  "amexMultiEnrollDisclaimerCheckbox",
+) as HTMLInputElement | null;
+const amexMultiEnrollDisclaimerContinue = document.getElementById(
+  "amexMultiEnrollDisclaimerContinue",
+) as HTMLButtonElement | null;
+amexMultiEnrollDisclaimerCheckbox?.addEventListener("change", () => {
+  if (amexMultiEnrollDisclaimerContinue) {
+    amexMultiEnrollDisclaimerContinue.disabled =
+      amexMultiEnrollDisclaimerCheckbox.checked !== true;
+  }
+});
+amexMultiEnrollDisclaimerContinue?.addEventListener("click", () => {
+  const trigger = amexMultiEnrollDisclaimerTrigger;
+  if (!trigger || amexMultiEnrollDisclaimerCheckbox?.checked !== true) return;
+  closeAmexMultiEnrollDisclaimer({ restoreFocus: false });
+  trigger.dataset.sharedRiskAcknowledged = "true";
+  confirmOfferEnrollment(trigger);
+  delete trigger.dataset.sharedRiskAcknowledged;
+});
+document.getElementById("amexMultiEnrollDisclaimerCancel")?.addEventListener("click", () => {
+  const sharedCheckbox = document.getElementById(
+    "amexOffersSharedCheckbox",
+  ) as HTMLInputElement | null;
+  if (sharedCheckbox) sharedCheckbox.checked = false;
+  closeAmexMultiEnrollDisclaimer({ restoreFocus: true });
+});
+
+document.addEventListener("click", (event) => {
+  if (!offersFirstUiEnabled) return;
+  const button = (event.target as HTMLElement).closest<HTMLButtonElement>(
+    "[id$='OffersRefreshBtn']",
+  );
+  if (!button) return;
+  const issuer = button.id.startsWith("chase")
+    ? "chase"
+    : button.id.startsWith("amex")
+      ? "amex"
+      : button.id.startsWith("citi")
+        ? "citi"
+        : "capitalone";
+  const active = latestOfferSnapshot.active;
+  event.preventDefault();
+  event.stopImmediatePropagation();
+  if (!active || active.issuer !== issuer) {
+    requestOfferCheck(issuer, () => {});
+    return;
+  }
+  void chrome.runtime.sendMessage({
+    type: "REFRESH_OFFER_CHECK",
+    runId: active.runId,
+  }).then((result: { ok?: boolean } | null) => {
+    if (!result?.ok) {
+      renderOfferActivityMessage(
+        `Couldn’t refresh ${offerIssuerNames[issuer]}`,
+        "Keep the issuer tab open and try again.",
+      );
+    }
+    void refreshOfferOperationUi();
+  });
+}, true);
+
+document.addEventListener("click", (event) => {
+  if (!offersFirstUiEnabled) return;
+  const button = (event.target as HTMLElement).closest<HTMLButtonElement>(
+    "[id$='OffersRunAgainBtn'], [id$='OffersRetryBtn']",
+  );
+  if (!button) return;
+  const issuer = button.id.startsWith("chase")
+    ? "chase"
+    : button.id.startsWith("amex")
+      ? "amex"
+      : button.id.startsWith("citi")
+        ? "citi"
+        : "capitalone";
+  event.preventDefault();
+  event.stopImmediatePropagation();
+  requestOfferCheck(issuer, () => {});
+}, true);
+
 if (tabBar) {
   tabBar.addEventListener("click", (e) => {
     const btn = (e.target as HTMLElement).closest("[data-tab]") as HTMLElement | null;
     if (!btn) return;
-    const tab = btn.getAttribute("data-tab");
-    tabBar.querySelectorAll(".tab-btn").forEach((b) => b.classList.remove("active"));
-    btn.classList.add("active");
-    tabBar.setAttribute("data-active", tab ?? "sync");
-    if (syncTabPanel) syncTabPanel.style.display = tab === "sync" ? "" : "none";
-    if (toolsTabPanel) toolsTabPanel.style.display = tab === "tools" ? "" : "none";
+    const destination = btn.getAttribute("data-tab");
+    if (destination === "offers" || destination === "rewards") {
+      setDestination(destination);
+    }
+  });
+  tabBar.addEventListener("keydown", (event) => {
+    if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+    event.preventDefault();
+    const destination = activeDestination === "offers" ? "rewards" : "offers";
+    setDestination(destination);
+    (tabBar.querySelector(`[data-tab="${destination}"]`) as HTMLButtonElement | null)?.focus();
   });
 
-  chrome.storage.local.get("pendingTab").then((stored) => {
-    if (stored.pendingTab === "tools" && toolsTabPanel && syncTabPanel) {
-      tabBar.setAttribute("data-active", "tools");
-      tabBar.querySelectorAll(".tab-btn").forEach((b) => {
-        b.classList.toggle("active", b.getAttribute("data-tab") === "tools");
-      });
-      syncTabPanel.style.display = "none";
-      toolsTabPanel.style.display = "";
-      chrome.storage.local.remove("pendingTab");
+  chrome.storage.local.get(["pendingDestination", "pendingTab", "lastHomeDestination"]).then((stored) => {
+    if (stored.pendingDestination === "offers" || stored.pendingTab === "tools") {
+      destinationRestored = true;
+      setDestination("offers", { persist: false });
+      chrome.storage.local.remove(["pendingDestination", "pendingTab"]);
       chrome.action.setBadgeText({ text: "" });
+      return;
+    }
+    if (stored.lastHomeDestination === "rewards") {
+      destinationRestored = true;
+      setDestination("rewards", { persist: false });
+    } else if (stored.lastHomeDestination === "offers") {
+      destinationRestored = true;
+      setDestination("offers", { persist: false });
     }
   });
 }
@@ -107,7 +716,7 @@ function initAmexOffers() {
   let amexActiveRunId: string | null = null;
 
   const discoverBtn = document.getElementById("amexOffersDiscoverBtn");
-  const runBtn = document.getElementById("amexOffersRunBtn");
+  const runBtn = document.getElementById("amexOffersRunBtn") as HTMLButtonElement | null;
   const stopBtn = document.getElementById("amexOffersStopBtn");
   const runAgainBtn = document.getElementById("amexOffersRunAgainBtn");
   const retryBtn = document.getElementById("amexOffersRetryBtn");
@@ -122,12 +731,7 @@ function initAmexOffers() {
   const sharedCheckbox = document.getElementById("amexOffersSharedCheckbox") as HTMLInputElement | null;
   const sharedScope = document.getElementById("amexOffersSharedScope");
 
-  void chrome.storage.local.get("amexSharedOfferEnrollmentEnabled").then((stored) => {
-    if (sharedCheckbox) sharedCheckbox.checked = stored.amexSharedOfferEnrollmentEnabled === true;
-  });
-  sharedCheckbox?.addEventListener("change", () => {
-    void chrome.storage.local.set({ amexSharedOfferEnrollmentEnabled: sharedCheckbox.checked });
-  });
+  if (sharedCheckbox) sharedCheckbox.checked = false;
 
   function waitForTabLoad(tabId: number, callback: (tabId: number) => void) {
     const listener = (updatedTabId: number, info: chrome.tabs.TabChangeInfo) => {
@@ -140,6 +744,28 @@ function initAmexOffers() {
   }
 
   function findOrOpenAmexTab(callback: (tabId: number) => void) {
+    if (offersFirstUiEnabled) {
+      chrome.tabs.create({ url: "https://global.americanexpress.com/offers", active: true }, (newTab) => {
+        if (!newTab?.id) {
+          if (errorMsgEl) errorMsgEl.textContent = "Could not open Amex.";
+          showState("Error");
+          void patchOfferOperation("amex", {
+            phase: "failed",
+            error: "Couldn’t open Amex.",
+          });
+          return;
+        }
+        amexTabId = newTab.id;
+        amexOurTabId = newTab.id;
+        void patchOfferOperation("amex", {
+          phase: "waiting_for_login",
+          ownedTabId: newTab.id,
+        });
+        waitForTabLoad(newTab.id, callback);
+      });
+      return;
+    }
+
     chrome.tabs.query({ url: "https://global.americanexpress.com/*", currentWindow: true }, (tabs) => {
       const tab =
         tabs.find((candidate) => candidate.active)
@@ -179,6 +805,10 @@ function initAmexOffers() {
         }
         if (errorMsgEl) errorMsgEl.textContent = "Could not reach Amex page. Make sure you're signed in.";
         showState("Error");
+        void patchOfferOperation("amex", {
+          phase: "failed",
+          error: "Couldn’t check Amex. Make sure you’re signed in.",
+        });
         return;
       }
 
@@ -189,6 +819,10 @@ function initAmexOffers() {
         }
         if (errorMsgEl) errorMsgEl.textContent = "No Amex cards found. Make sure you're signed in and try again.";
         showState("Error");
+        void patchOfferOperation("amex", {
+          phase: "failed",
+          error: "No Amex cards were found. Finish signing in, then try again.",
+        });
         return;
       }
       amexCards = resp.cards ?? [];
@@ -218,7 +852,28 @@ function initAmexOffers() {
       selectedAccountKey = refreshedSelectedCard?.accountKey ?? null;
       if (cardSelect) cardSelect.value = selectedCardId;
       updateOfferCountLabel();
+      renderOfferCardChoices({
+        issuer: "amex",
+        cards: amexCards,
+        counts: amexOfferCounts,
+        select: cardSelect,
+        selectWrap: cardSelectWrap,
+        runButton: runBtn,
+      });
       showState("Ready");
+      const operationCards: OfferOperationCard[] = amexCards.map((card, index) => ({
+        key: `card-${index}`,
+        name: card.name || "Amex card",
+        lastDigits: card.lastDigits,
+        availableCount:
+          typeof amexOfferCounts[card.id] === "number" ? amexOfferCounts[card.id] : null,
+        countStatus:
+          typeof amexOfferCounts[card.id] === "number" ? "complete" : "unknown",
+      }));
+      void patchOfferOperation("amex", {
+        phase: "ready_to_add",
+        cards: operationCards,
+      });
     });
   }
 
@@ -230,11 +885,12 @@ function initAmexOffers() {
     findOrOpenAmexTab((tabId) => {
       if (gen !== amexDiscoverGen) return;
       amexTabId = tabId;
+      void patchOfferOperation("amex", { phase: "checking", ownedTabId: tabId });
       tryDiscoverOffers(tabId, gen);
     });
   }
-  discoverBtn?.addEventListener("click", (e) => { e.stopPropagation(); requestToolConsent(handleAmexDiscover); });
-  amexCard?.addEventListener("click", () => { if (panels.Initial?.style.display !== "none") requestToolConsent(handleAmexDiscover); });
+  discoverBtn?.addEventListener("click", (e) => { e.stopPropagation(); requestOfferCheck("amex", handleAmexDiscover); });
+  amexCard?.addEventListener("click", () => { if (panels.Initial?.style.display !== "none") requestOfferCheck("amex", handleAmexDiscover); });
   document.getElementById("amexOffersLoadingCancel")?.addEventListener("click", (e) => {
     e.stopPropagation();
     amexDiscoverGen++;
@@ -242,11 +898,14 @@ function initAmexOffers() {
     if (amexOurTabId) { chrome.tabs.remove(amexOurTabId); }
     amexTabId = null;
     amexOurTabId = null;
+    const runId = activeOfferRunIds.get("amex");
+    if (runId) void chrome.runtime.sendMessage({ type: "CANCEL_OFFER_OPERATION", runId });
   });
   document.getElementById("amexOffersRefreshBtn")?.addEventListener("click", () => {
-    requestToolConsent(() => {
+    requestOfferToolAction(() => {
       if (!amexTabId) return;
       showState("Loading");
+      void patchOfferOperation("amex", { phase: "checking", cards: [] });
       tryDiscoverOffers(amexTabId, ++amexDiscoverGen);
     });
   });
@@ -274,7 +933,7 @@ function initAmexOffers() {
   }
 
   cardSelect?.addEventListener("change", () => {
-    const card = amexCards.find((c) => c.id === cardSelect.value);
+    const card = findOfferToolCardBySelectValue(amexCards, cardSelect.value);
     if (card) {
       selectedCardId = card.id;
       selectedLocale = card.locale;
@@ -283,13 +942,27 @@ function initAmexOffers() {
     }
   });
 
-  function startAmexOfferRun(sharedPreflightId: string | null) {
+  async function startAmexOfferRun(sharedPreflightId: string | null) {
     if (!amexTabId) return;
+    const selectedCount = amexOfferCounts[selectedCardId];
+    const requested = sharedPreflightId === null
+      ? (typeof selectedCount === "number" ? selectedCount : 100)
+      : Math.max(
+          typeof selectedCount === "number" ? selectedCount : 0,
+          Object.values(amexOfferCounts).reduce(
+            (sum, count) => sum + (typeof count === "number" ? count : 0),
+            0,
+          ),
+        );
+    const reservation = await reserveLegacyEnrollment(
+      requested || 100,
+    );
+    if (!reservation) return;
     showState("Running");
     if (progressBar) progressBar.style.width = "0%";
     if (progressDetail) progressDetail.textContent = "";
     const amexSelectedCard = amexCards.find((c) => c.id === selectedCardId);
-    amexActiveRunId = crypto.randomUUID();
+    amexActiveRunId = reservation.runId;
     chrome.tabs.sendMessage(amexTabId, {
       type: "AMEX_OFFERS_RUN",
       runId: amexActiveRunId,
@@ -301,15 +974,20 @@ function initAmexOffers() {
       cards: amexCards,
       addMatchingOffersAcrossCards: sharedPreflightId !== null,
       sharedPreflightId,
+      maxOffers: reservation.maxOffers,
     }, (response) => {
       if (chrome.runtime.lastError || response?.ok !== true) {
+        void chrome.runtime.sendMessage({
+          type: "RELEASE_OFFER_ACTIVATION",
+          runId: reservation.runId,
+        });
         if (errorMsgEl) errorMsgEl.textContent = response?.error ?? "Could not start Amex offers. Refresh and try again.";
         showState("Error");
       }
     });
   }
 
-  runBtn?.addEventListener("click", () => requestToolConsent(() => {
+  runBtn?.addEventListener("click", () => requestOfferToolAction(() => {
     if (!amexTabId) return;
     const wantsSharedEnrollment = sharedCheckbox?.checked === true;
     if (!wantsSharedEnrollment) {
@@ -333,7 +1011,6 @@ function initAmexOffers() {
         : 0;
       if (matchingOfferCount === 0) {
         if (sharedCheckbox) sharedCheckbox.checked = false;
-        void chrome.storage.local.set({ amexSharedOfferEnrollmentEnabled: false });
         startAmexOfferRun(null);
         return;
       }
@@ -463,6 +1140,28 @@ function initChaseOffers() {
   }
 
   function findOrOpenChaseTab(callback: (tabId: number) => void) {
+    if (offersFirstUiEnabled) {
+      chrome.tabs.create({ url: "https://secure.chase.com/web/auth/dashboard", active: true }, (newTab) => {
+        if (!newTab?.id) {
+          if (errorMsgEl) errorMsgEl.textContent = "Could not open Chase.";
+          showState("Error");
+          void patchOfferOperation("chase", {
+            phase: "failed",
+            error: "Couldn’t open Chase.",
+          });
+          return;
+        }
+        chaseTabId = newTab.id;
+        chaseOurTabId = newTab.id;
+        void patchOfferOperation("chase", {
+          phase: "waiting_for_login",
+          ownedTabId: newTab.id,
+        });
+        waitForChaseTabLoad(newTab.id, callback);
+      });
+      return;
+    }
+
     chrome.tabs.query({ url: ["https://secure.chase.com/*", "https://secure01a.chase.com/*", "https://secure03a.chase.com/*", "https://secure05a.chase.com/*"] }, (tabs) => {
       if (tabs[0]?.id) {
         const tabId = tabs[0].id;
@@ -497,6 +1196,10 @@ function initChaseOffers() {
         }
         if (errorMsgEl) errorMsgEl.textContent = "Could not reach Chase. Make sure you're signed in.";
         showState("Error");
+        void patchOfferOperation("chase", {
+          phase: "failed",
+          error: "Couldn’t check Chase. Make sure you’re signed in.",
+        });
         return;
       }
       if (resp.error === "no_cards") {
@@ -506,21 +1209,46 @@ function initChaseOffers() {
         }
         if (errorMsgEl) errorMsgEl.textContent = "No Chase cards found. Sign in and try again.";
         showState("Error");
+        void patchOfferOperation("chase", {
+          phase: "failed",
+          error: "No Chase cards were found. Finish signing in, then try again.",
+        });
         return;
       }
       chaseCards = resp.cards ?? [];
       chaseOfferCounts = resp.offerCounts ?? {};
-      if (chaseCards.length > 1 && cardSelect && cardSelectWrap) {
+      if (chaseCards.length > 0 && cardSelect && cardSelectWrap) {
         cardSelect.innerHTML = chaseCards.map((c) => {
           const n = chaseOfferCounts[c.id] ?? 0;
           const suffix = n > 0 ? ` (${formatAvailableToActivate(n)})` : "";
           return `<option value="${escapeHtml(c.id)}">${escapeHtml(`${formatCardDisplayName(c)}${suffix}`)}</option>`;
         }).join("");
-        cardSelectWrap.style.display = "";
+        cardSelectWrap.style.display = chaseCards.length > 1 ? "" : "none";
       }
       selectedCardId = chaseCards[0]?.id ?? "";
       updateChaseOfferCountLabel();
+      renderOfferCardChoices({
+        issuer: "chase",
+        cards: chaseCards,
+        counts: chaseOfferCounts,
+        select: cardSelect,
+        selectWrap: cardSelectWrap,
+        runButton: document.getElementById("chaseOffersRunBtn") as HTMLButtonElement | null,
+      });
       showState("Ready");
+      const operationCards: OfferOperationCard[] = chaseCards.map((card, index) => ({
+        key: `card-${index}`,
+        name: card.name || "Chase card",
+        lastDigits: card.lastDigits,
+        availableCount:
+          typeof chaseOfferCounts[card.id] === "number" ? chaseOfferCounts[card.id] : null,
+        countStatus:
+          typeof chaseOfferCounts[card.id] === "number" ? "complete" : "unknown",
+      }));
+      void patchOfferOperation("chase", {
+        phase: "ready_to_add",
+        cards: operationCards,
+      });
     });
   }
 
@@ -532,11 +1260,12 @@ function initChaseOffers() {
     findOrOpenChaseTab((tabId) => {
       if (gen !== chaseDiscoverGen) return;
       chaseTabId = tabId;
+      void patchOfferOperation("chase", { phase: "checking", ownedTabId: tabId });
       tryDiscover(tabId, gen);
     });
   }
-  document.getElementById("chaseOffersDiscoverBtn")?.addEventListener("click", (e) => { e.stopPropagation(); requestToolConsent(handleChaseDiscover); });
-  chaseCard?.addEventListener("click", () => { if (states.Initial?.style.display !== "none") requestToolConsent(handleChaseDiscover); });
+  document.getElementById("chaseOffersDiscoverBtn")?.addEventListener("click", (e) => { e.stopPropagation(); requestOfferCheck("chase", handleChaseDiscover); });
+  chaseCard?.addEventListener("click", () => { if (states.Initial?.style.display !== "none") requestOfferCheck("chase", handleChaseDiscover); });
   document.getElementById("chaseOffersLoadingCancel")?.addEventListener("click", (e) => {
     e.stopPropagation();
     chaseDiscoverGen++;
@@ -544,9 +1273,16 @@ function initChaseOffers() {
     if (chaseOurTabId) { chrome.tabs.remove(chaseOurTabId); }
     chaseTabId = null;
     chaseOurTabId = null;
+    const runId = activeOfferRunIds.get("chase");
+    if (runId) void chrome.runtime.sendMessage({ type: "CANCEL_OFFER_OPERATION", runId });
   });
   document.getElementById("chaseOffersRefreshBtn")?.addEventListener("click", () => {
-    requestToolConsent(() => { if (chaseTabId) tryDiscover(chaseTabId, ++chaseDiscoverGen); });
+    requestOfferToolAction(() => {
+      if (!chaseTabId) return;
+      showState("Loading");
+      void patchOfferOperation("chase", { phase: "checking", cards: [] });
+      tryDiscover(chaseTabId, ++chaseDiscoverGen);
+    });
   });
 
   function updateChaseOfferCountLabel() {
@@ -558,21 +1294,42 @@ function initChaseOffers() {
   }
 
   cardSelect?.addEventListener("change", () => {
-    const card = chaseCards.find((c) => c.id === cardSelect.value);
+    const card = findOfferToolCardBySelectValue(chaseCards, cardSelect.value);
     if (card) {
       selectedCardId = card.id;
       updateChaseOfferCountLabel();
     }
   });
 
-  document.getElementById("chaseOffersRunBtn")?.addEventListener("click", () => requestToolConsent(() => {
+  document.getElementById("chaseOffersRunBtn")?.addEventListener("click", () => requestOfferToolAction(async () => {
     if (!chaseTabId) return;
+    const requested = typeof chaseOfferCounts[selectedCardId] === "number"
+      ? chaseOfferCounts[selectedCardId]
+      : 100;
+    const reservation = await reserveLegacyEnrollment(requested);
+    if (!reservation) return;
     showState("Running");
     if (progressBar) progressBar.style.width = "0%";
     if (progressDetail) progressDetail.textContent = "";
     const allCardIds = chaseCards.map((c) => c.id);
     const chaseSelectedCard = chaseCards.find((c) => c.id === selectedCardId);
-    chrome.tabs.sendMessage(chaseTabId, { type: "CHASE_OFFERS_RUN", cardId: selectedCardId, allCardIds, cardName: chaseSelectedCard?.name ?? "", cardLastDigits: chaseSelectedCard?.lastDigits ?? null });
+    chrome.tabs.sendMessage(chaseTabId, {
+      type: "CHASE_OFFERS_RUN",
+      runId: reservation.runId,
+      cardId: selectedCardId,
+      allCardIds,
+      cardName: chaseSelectedCard?.name ?? "",
+      cardLastDigits: chaseSelectedCard?.lastDigits ?? null,
+      maxOffers: reservation.maxOffers,
+    }, (response) => {
+      if (chrome.runtime.lastError || response?.ok !== true) {
+        void chrome.runtime.sendMessage({
+          type: "RELEASE_OFFER_ACTIVATION",
+          runId: reservation.runId,
+        });
+        showState("Error");
+      }
+    });
   }));
 
   document.getElementById("chaseOffersStopBtn")?.addEventListener("click", () => {
@@ -645,6 +1402,42 @@ function initCitiOffers() {
   }
 
   function findOrOpenCitiTab(callback: (tabId: number) => void) {
+    if (offersFirstUiEnabled) {
+      chrome.tabs.create({ url: "https://online.citi.com/US/ag/dashboard", active: true }, (newTab) => {
+        if (!newTab?.id) {
+          if (errorMsgEl) errorMsgEl.textContent = "Could not open Citi.";
+          showState("Error");
+          void patchOfferOperation("citi", {
+            phase: "failed",
+            error: "Couldn’t open Citi.",
+          });
+          return;
+        }
+        const tabId = newTab.id;
+        citiTabId = tabId;
+        citiOurTabId = tabId;
+        void patchOfferOperation("citi", {
+          phase: "waiting_for_login",
+          ownedTabId: tabId,
+        });
+        const dashboardListener = (updatedTabId: number, info: chrome.tabs.TabChangeInfo) => {
+          if (updatedTabId !== tabId || info.status !== "complete") return;
+          chrome.tabs.onUpdated.removeListener(dashboardListener);
+          chrome.tabs.update(tabId, {
+            url: "https://online.citi.com/US/ag/products-offers/merchantoffers",
+          });
+          const offersListener = (offersTabId: number, offersInfo: chrome.tabs.TabChangeInfo) => {
+            if (offersTabId !== tabId || offersInfo.status !== "complete") return;
+            chrome.tabs.onUpdated.removeListener(offersListener);
+            setTimeout(() => callback(tabId), 3000);
+          };
+          chrome.tabs.onUpdated.addListener(offersListener);
+        };
+        chrome.tabs.onUpdated.addListener(dashboardListener);
+      });
+      return;
+    }
+
     chrome.tabs.query({ url: "https://online.citi.com/*" }, (tabs) => {
       if (tabs[0]?.id) {
         const tabId = tabs[0].id;
@@ -689,27 +1482,56 @@ function initCitiOffers() {
         if (retriesLeft > 0) { setTimeout(() => tryDiscover(tabId, gen, retriesLeft - 1), 3000); return; }
         if (errorMsgEl) errorMsgEl.textContent = "Could not reach Citi. Make sure you're signed in.";
         showState("Error");
+        void patchOfferOperation("citi", {
+          phase: "failed",
+          error: "Couldn’t check Citi. Make sure you’re signed in.",
+        });
         return;
       }
       if (resp.error === "no_cards") {
         if (retriesLeft > 0) { setTimeout(() => tryDiscover(tabId, gen, retriesLeft - 1), 3000); return; }
         if (errorMsgEl) errorMsgEl.textContent = "No Citi cards found. Sign in and try again.";
         showState("Error");
+        void patchOfferOperation("citi", {
+          phase: "failed",
+          error: "No Citi cards were found. Finish signing in, then try again.",
+        });
         return;
       }
       citiCards = resp.cards ?? [];
       citiOfferCounts = resp.offerCounts ?? {};
-      if (citiCards.length > 1 && cardSelect && cardSelectWrap) {
+      if (citiCards.length > 0 && cardSelect && cardSelectWrap) {
         cardSelect.innerHTML = citiCards.map((c) => {
           const n = citiOfferCounts[c.id] ?? 0;
           const suffix = n > 0 ? ` (${formatAvailableToActivate(n)})` : "";
           return `<option value="${escapeHtml(c.id)}">${escapeHtml(`${formatCardDisplayName(c)}${suffix}`)}</option>`;
         }).join("");
-        cardSelectWrap.style.display = "";
+        cardSelectWrap.style.display = citiCards.length > 1 ? "" : "none";
       }
       selectedAccountId = citiCards[0]?.id ?? "";
       updateCitiOfferCountLabel();
+      renderOfferCardChoices({
+        issuer: "citi",
+        cards: citiCards,
+        counts: citiOfferCounts,
+        select: cardSelect,
+        selectWrap: cardSelectWrap,
+        runButton: document.getElementById("citiOffersRunBtn") as HTMLButtonElement | null,
+      });
       showState("Ready");
+      const operationCards: OfferOperationCard[] = citiCards.map((card, index) => ({
+        key: `card-${index}`,
+        name: card.name || "Citi card",
+        lastDigits: card.lastDigits,
+        availableCount:
+          typeof citiOfferCounts[card.id] === "number" ? citiOfferCounts[card.id] : null,
+        countStatus:
+          typeof citiOfferCounts[card.id] === "number" ? "complete" : "unknown",
+      }));
+      void patchOfferOperation("citi", {
+        phase: "ready_to_add",
+        cards: operationCards,
+      });
     });
   }
 
@@ -718,10 +1540,15 @@ function initCitiOffers() {
     const gen = ++citiDiscoverGen;
     showState("Loading");
     citiTabId = null;
-    findOrOpenCitiTab((tabId) => { if (gen !== citiDiscoverGen) return; citiTabId = tabId; tryDiscover(tabId, gen); });
+    findOrOpenCitiTab((tabId) => {
+      if (gen !== citiDiscoverGen) return;
+      citiTabId = tabId;
+      void patchOfferOperation("citi", { phase: "checking", ownedTabId: tabId });
+      tryDiscover(tabId, gen);
+    });
   }
-  document.getElementById("citiOffersDiscoverBtn")?.addEventListener("click", (e) => { e.stopPropagation(); requestToolConsent(handleCitiDiscover); });
-  citiCard?.addEventListener("click", () => { if (states.Initial?.style.display !== "none") requestToolConsent(handleCitiDiscover); });
+  document.getElementById("citiOffersDiscoverBtn")?.addEventListener("click", (e) => { e.stopPropagation(); requestOfferCheck("citi", handleCitiDiscover); });
+  citiCard?.addEventListener("click", () => { if (states.Initial?.style.display !== "none") requestOfferCheck("citi", handleCitiDiscover); });
   document.getElementById("citiOffersLoadingCancel")?.addEventListener("click", (e) => {
     e.stopPropagation();
     citiDiscoverGen++;
@@ -729,9 +1556,16 @@ function initCitiOffers() {
     if (citiOurTabId) { chrome.tabs.remove(citiOurTabId); }
     citiTabId = null;
     citiOurTabId = null;
+    const runId = activeOfferRunIds.get("citi");
+    if (runId) void chrome.runtime.sendMessage({ type: "CANCEL_OFFER_OPERATION", runId });
   });
   document.getElementById("citiOffersRefreshBtn")?.addEventListener("click", () => {
-    requestToolConsent(() => { if (citiTabId) tryDiscover(citiTabId, ++citiDiscoverGen); });
+    requestOfferToolAction(() => {
+      if (!citiTabId) return;
+      showState("Loading");
+      void patchOfferOperation("citi", { phase: "checking", cards: [] });
+      tryDiscover(citiTabId, ++citiDiscoverGen);
+    });
   });
 
   function updateCitiOfferCountLabel() {
@@ -743,19 +1577,39 @@ function initCitiOffers() {
   }
 
   cardSelect?.addEventListener("change", () => {
-    const card = citiCards.find((c) => c.id === cardSelect.value);
+    const card = findOfferToolCardBySelectValue(citiCards, cardSelect.value);
     if (card) {
       selectedAccountId = card.id;
       updateCitiOfferCountLabel();
     }
   });
 
-  document.getElementById("citiOffersRunBtn")?.addEventListener("click", () => requestToolConsent(() => {
+  document.getElementById("citiOffersRunBtn")?.addEventListener("click", () => requestOfferToolAction(async () => {
     if (!citiTabId) return;
+    const requested = typeof citiOfferCounts[selectedAccountId] === "number"
+      ? citiOfferCounts[selectedAccountId]
+      : 100;
+    const reservation = await reserveLegacyEnrollment(requested);
+    if (!reservation) return;
     showState("Running");
     if (progressBar) progressBar.style.width = "0%";
     const citiSelectedCard = citiCards.find((c) => c.id === selectedAccountId);
-    chrome.tabs.sendMessage(citiTabId, { type: "CITI_OFFERS_RUN", accountId: selectedAccountId, cardName: citiSelectedCard?.name ?? "", cardLastDigits: citiSelectedCard?.lastDigits ?? null });
+    chrome.tabs.sendMessage(citiTabId, {
+      type: "CITI_OFFERS_RUN",
+      runId: reservation.runId,
+      accountId: selectedAccountId,
+      cardName: citiSelectedCard?.name ?? "",
+      cardLastDigits: citiSelectedCard?.lastDigits ?? null,
+      maxOffers: reservation.maxOffers,
+    }, (response) => {
+      if (chrome.runtime.lastError || response?.ok !== true) {
+        void chrome.runtime.sendMessage({
+          type: "RELEASE_OFFER_ACTIVATION",
+          runId: reservation.runId,
+        });
+        showState("Error");
+      }
+    });
   }));
 
   document.getElementById("citiOffersStopBtn")?.addEventListener("click", () => {
@@ -840,6 +1694,28 @@ function initCapitalOneOffers() {
   }
 
   function findOrOpenCapitalOneTab(callback: (tabId: number) => void) {
+    if (offersFirstUiEnabled) {
+      chrome.tabs.create({ url: "https://myaccounts.capitalone.com/accountSummary", active: true }, (newTab) => {
+        if (!newTab?.id) {
+          if (errorMsgEl) errorMsgEl.textContent = "Could not open Capital One.";
+          showState("Error");
+          void patchOfferOperation("capitalone", {
+            phase: "failed",
+            error: "Couldn’t open Capital One.",
+          });
+          return;
+        }
+        capitalOneTabId = newTab.id;
+        capitalOneOurTabId = newTab.id;
+        void patchOfferOperation("capitalone", {
+          phase: "waiting_for_login",
+          ownedTabId: newTab.id,
+        });
+        waitForCapitalOneTabLoad(newTab.id, callback);
+      });
+      return;
+    }
+
     chrome.tabs.query({ url: ["https://capitaloneoffers.com/*", "https://myaccounts.capitalone.com/*"] }, (tabs) => {
       if (tabs[0]?.id) {
         const tabId = tabs[0].id;
@@ -895,6 +1771,10 @@ function initCapitalOneOffers() {
         if (retriesLeft > 0) { setTimeout(() => tryDiscover(tabId, gen, retriesLeft - 1), 3000); return; }
         if (errorMsgEl) errorMsgEl.textContent = "Could not reach Capital One. Make sure you're signed in.";
         showState("Error");
+        void patchOfferOperation("capitalone", {
+          phase: "failed",
+          error: "Couldn’t check Capital One. Make sure you’re signed in.",
+        });
         return;
       }
       if (resp.redirectUrl) {
@@ -907,11 +1787,20 @@ function initCapitalOneOffers() {
         if (retriesLeft > 0) { setTimeout(() => tryDiscover(tabId, gen, retriesLeft - 1), 3000); return; }
         if (errorMsgEl) errorMsgEl.textContent = "No eligible Capital One accounts found. Sign in and try again.";
         showState("Error");
+        void patchOfferOperation("capitalone", {
+          phase: "failed",
+          error: "No eligible Capital One accounts were found.",
+        });
         return;
       }
       if (resp.error) {
         if (errorMsgEl) errorMsgEl.textContent = "Could not save Capital One offers. Try again in a minute.";
         showState("Error");
+        void patchOfferOperation("capitalone", {
+          phase: "failed",
+          error: "Couldn’t save Capital One offers. Try again.",
+          saveStatus: "failed",
+        });
         return;
       }
 
@@ -932,6 +1821,23 @@ function initCapitalOneOffers() {
       if (loadingProgressDetail) loadingProgressDetail.textContent = "Offers saved";
       updateDoneSummary();
       showState("Done");
+      const operationCards: OfferOperationCard[] = capitalOneCards.map((card, index) => ({
+        key: `card-${index}`,
+        name: card.name || "Capital One account",
+        lastDigits: card.lastDigits,
+        availableCount:
+          typeof capitalOneOfferCounts[card.id] === "number"
+            ? capitalOneOfferCounts[card.id]
+            : null,
+        countStatus:
+          typeof capitalOneOfferCounts[card.id] === "number" ? "complete" : "unknown",
+      }));
+      void patchOfferOperation("capitalone", {
+        phase: "completed",
+        cards: operationCards,
+        total: totalOfferCount(),
+        saveStatus: "saved",
+      });
     });
   }
 
@@ -946,6 +1852,7 @@ function initCapitalOneOffers() {
     findOrOpenCapitalOneTab((tabId) => {
       if (gen !== capitalOneDiscoverGen) return;
       capitalOneTabId = tabId;
+      void patchOfferOperation("capitalone", { phase: "checking", ownedTabId: tabId });
       tryDiscover(tabId, gen);
     });
   }
@@ -969,8 +1876,8 @@ function initCapitalOneOffers() {
     });
   }
 
-  document.getElementById("capitaloneOffersDiscoverBtn")?.addEventListener("click", (e) => { e.stopPropagation(); requestToolConsent(handleDiscover); });
-  capitalOneCard?.addEventListener("click", () => { if (states.Initial?.style.display !== "none") requestToolConsent(handleDiscover); });
+  document.getElementById("capitaloneOffersDiscoverBtn")?.addEventListener("click", (e) => { e.stopPropagation(); requestOfferCheck("capitalone", handleDiscover); });
+  capitalOneCard?.addEventListener("click", () => { if (states.Initial?.style.display !== "none") requestOfferCheck("capitalone", handleDiscover); });
   document.getElementById("capitaloneOffersLoadingCancel")?.addEventListener("click", (e) => {
     e.stopPropagation();
     capitalOneDiscoverGen++;
@@ -978,13 +1885,15 @@ function initCapitalOneOffers() {
     if (capitalOneOurTabId) { chrome.tabs.remove(capitalOneOurTabId); }
     capitalOneTabId = null;
     capitalOneOurTabId = null;
+    const runId = activeOfferRunIds.get("capitalone");
+    if (runId) void chrome.runtime.sendMessage({ type: "CANCEL_OFFER_OPERATION", runId });
   });
   document.getElementById("capitaloneOffersRefreshBtn")?.addEventListener("click", (e) => {
     e.stopPropagation();
-    requestToolConsent(handleRefresh);
+    requestOfferToolAction(handleRefresh);
   });
 
-  document.getElementById("capitaloneOffersRunBtn")?.addEventListener("click", () => requestToolConsent(() => {
+  document.getElementById("capitaloneOffersRunBtn")?.addEventListener("click", () => requestOfferToolAction(() => {
     if (!capitalOneTabId) return;
     showState("Running");
     if (progressBar) progressBar.style.width = "0%";
@@ -1000,7 +1909,7 @@ function initCapitalOneOffers() {
   });
 
   document.getElementById("capitaloneOffersRunAgainBtn")?.addEventListener("click", () => {
-    requestToolConsent(handleRefresh);
+    requestOfferToolAction(handleRefresh);
   });
   document.getElementById("capitaloneOffersRetryBtn")?.addEventListener("click", () => showState("Initial"));
 
@@ -1234,23 +2143,531 @@ function initChaseBonusRegistration() {
 
 initChaseBonusRegistration();
 
-let currentView: ViewName = "disclosure";
+let currentView: ViewName = "loading";
 let disclosureAccepted = false;
 let consentGiven = false;
 let firstSyncCompleted = false;
 let flagsLoaded = false;
 let tourSyncProvider: ProviderId | null = null;
 let extensionProfile: ExtensionProfile | null = null;
+let offersSetupCompleted = false;
+let offersCoachmarkSeen = false;
+let offersIntroVersion = 0;
+let latestOfferSnapshot: OfferOperationSnapshot = { active: null, history: {} };
+let appliedOffersFirstMode: boolean | null = null;
+let currentAuth: NextCardAuth | null = null;
+let awaitingNextcardAuth = false;
+let nextcardAuthWaitTimeout: number | null = null;
 
 const iconUrl = chrome.runtime.getURL("src/icons/icon128.png");
 authElements.authLogo.src = iconUrl;
+authElements.loadingLogo.src = iconUrl;
 authElements.disclosureLogo.src = iconUrl;
+
+function applyOffersFirstMode(profile: ExtensionProfile | null) {
+  const enabled =
+    __OFFERS_FIRST_UI_DEV_OVERRIDE__
+    || profile?.offersFirstUiEnabled === true;
+  offersFirstUiEnabled = enabled;
+  if (appliedOffersFirstMode === enabled) return;
+  appliedOffersFirstMode = enabled;
+
+  document.body.classList.toggle("legacy-ui", !enabled);
+  const offersTab = tabBar?.querySelector("[data-tab='offers']");
+  const rewardsTab = tabBar?.querySelector("[data-tab='rewards']");
+  if (offersTab) offersTab.textContent = enabled ? "Offers" : "tools";
+  if (rewardsTab) rewardsTab.textContent = enabled ? "Rewards" : "sync";
+  if (tabBar && offersTab && rewardsTab) {
+    tabBar.append(
+      enabled ? offersTab : rewardsTab,
+      enabled ? rewardsTab : offersTab,
+    );
+  }
+  const offersMore = document.getElementById("offersMore") as HTMLDetailsElement | null;
+  if (offersMore) offersMore.open = !enabled;
+
+  setDestination(
+    destinationRestored ? activeDestination : enabled ? "offers" : "rewards",
+    { persist: false },
+  );
+}
+
+function renderOfferActivityMessage(title: string, detail: string) {
+  const container = document.getElementById("offerActivity");
+  const titleElement = document.getElementById("offerActivityTitle");
+  const detailElement = document.getElementById("offerActivityDetail");
+  if (!container || !titleElement || !detailElement) return;
+  container.hidden = false;
+  titleElement.textContent = title;
+  detailElement.textContent = detail;
+}
+
+function formatOfferCheckDate(value: string | null) {
+  if (!value) return "";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+  return date.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+}
+
+function renderOfferActivationUsage() {
+  const card = document.getElementById("offerUsageCard");
+  const value = document.getElementById("offerUsageValue");
+  const detail = document.getElementById("offerUsageDetail");
+  const upgrade = document.getElementById(
+    "offerUsageUpgrade",
+  ) as HTMLButtonElement | null;
+  const track = document.getElementById("offerUsageTrack");
+  const fill = document.getElementById("offerUsageFill") as HTMLElement | null;
+  if (
+    !card
+    || !value
+    || !detail
+    || !upgrade
+    || !track
+    || !fill
+    || !offerActivationUsage
+  ) return;
+
+  const { used, limit, remaining, accountLevel } = offerActivationUsage;
+  const isPro = accountLevel === "pro" || limit == null;
+  card.classList.toggle("unlimited", isPro);
+  value.textContent = `${isPro ? used : Math.min(used, limit)} / ${isPro ? "∞" : limit}`;
+  detail.textContent = isPro
+    ? "Unlimited with Pro"
+    : `${remaining ?? 0} remaining this month`;
+  upgrade.hidden = isPro;
+  track.setAttribute(
+    "aria-valuetext",
+    isPro
+      ? `${used} activations this month, unlimited`
+      : `${used} of ${limit} activations used this month`,
+  );
+  if (isPro) {
+    track.removeAttribute("aria-valuemin");
+    track.removeAttribute("aria-valuemax");
+    track.removeAttribute("aria-valuenow");
+    fill.style.width = "100%";
+  } else {
+    track.setAttribute("aria-valuemin", "0");
+    track.setAttribute("aria-valuemax", String(limit));
+    track.setAttribute("aria-valuenow", String(Math.min(used, limit)));
+    fill.style.width = `${Math.min(100, (used / limit) * 100)}%`;
+  }
+}
+
+document.getElementById("offerUsageUpgrade")?.addEventListener("click", () => {
+  handleLockedProviderSelected("chase");
+});
+
+function updateIssuerCardStatus(snapshot: OfferOperationSnapshot) {
+  const cardIds: Record<OfferIssuer, string> = {
+    chase: "chaseOffersCard",
+    amex: "amexOffersCard",
+    citi: "citiOffersCard",
+    capitalone: "capitaloneOffersCard",
+  };
+  for (const issuer of Object.keys(cardIds) as OfferIssuer[]) {
+    const card = document.getElementById(cardIds[issuer]);
+    const description = card?.querySelector(".provider-desc");
+    if (!description) continue;
+    const state = snapshot.active?.issuer === issuer
+      ? snapshot.active
+      : snapshot.history[issuer];
+    if (!state) {
+      description.textContent = issuer === "capitalone"
+        ? "Find and save shopping offers"
+        : "Not checked · Check for offers";
+      continue;
+    }
+    const checkedDate = formatOfferCheckDate(state.checkedAt);
+    const suffix =
+      state.phase === "ready_to_add" && !isOfferResultFresh(state) && checkedDate
+        ? ` · last checked ${checkedDate}`
+        : "";
+    description.textContent = `${getOfferOperationStatusText(state)}${suffix}`;
+  }
+}
+
+function renderBackgroundOwnedIssuerState(snapshot: OfferOperationSnapshot) {
+  if (!offersFirstUiEnabled) return;
+  for (const issuer of ["chase", "amex", "citi"] as const) {
+    const state = snapshot.active?.issuer === issuer
+      ? snapshot.active
+      : snapshot.history[issuer];
+    if (!state) continue;
+    const panelNames = ["Initial", "Loading", "Ready", "Running", "Done", "Error"] as const;
+    const targetPanel =
+      state.phase === "ready_to_add"
+        ? "Ready"
+        : state.phase === "adding"
+          ? "Running"
+          : state.phase === "completed" || state.phase === "cancelled"
+            ? "Done"
+            : state.phase === "failed" || state.phase === "interrupted"
+              ? "Error"
+              : "Loading";
+    for (const panelName of panelNames) {
+      const panel = document.getElementById(`${issuer}Offers${panelName}`);
+      if (panel) panel.style.display = panelName === targetPanel ? "" : "none";
+    }
+
+    const select = document.getElementById(`${issuer}OffersCardSelect`) as HTMLSelectElement | null;
+    const selectWrap = document.getElementById(`${issuer}OffersCardSelectWrap`);
+    if (select && state.cards.length > 0) {
+      const previousValue = select.value;
+      select.innerHTML = state.cards.map((card) => {
+        const count = card.availableCount;
+        const suffix =
+          count == null
+            ? " (count unavailable)"
+            : count > 0
+              ? ` (${formatAvailableToActivate(count)})`
+              : " (no new offers)";
+        return `<option value="${escapeHtml(card.key)}">${escapeHtml(`${formatCardDisplayName(card)}${suffix}`)}</option>`;
+      }).join("");
+      select.value = state.cards.some((card) => card.key === previousValue)
+        ? previousValue
+        : state.cards[0].key;
+      const runButton = document.getElementById(`${issuer}OffersRunBtn`) as HTMLButtonElement | null;
+      renderOfferCardChoices({
+        issuer,
+        cards: state.cards.map((card) => ({
+          id: card.key,
+          name: card.name,
+          lastDigits: card.lastDigits,
+        })),
+        counts: Object.fromEntries(
+          state.cards.map((card) => [card.key, card.availableCount ?? 0]),
+        ),
+        select,
+        selectWrap,
+        runButton,
+      });
+    }
+
+    const updateSelection = () => {
+      const selected = state.cards.find((card) => card.key === select?.value) ?? state.cards[0];
+      const countElement = document.getElementById(`${issuer}OffersOfferCount`);
+      const runButton = document.getElementById(`${issuer}OffersRunBtn`) as HTMLButtonElement | null;
+      const readyPanel = document.getElementById(`${issuer}OffersReady`);
+      const refreshButton = document.getElementById(
+        `${issuer}OffersRefreshBtn`,
+      ) as HTMLButtonElement | null;
+      const fresh = isOfferResultFresh(state);
+      const availableCount = selected?.availableCount ?? null;
+      const isFree = offerActivationUsage?.accountLevel !== "pro";
+      const remaining = isFree ? offerActivationUsage?.remaining ?? 0 : null;
+      const enrollmentCount =
+        availableCount == null
+          ? null
+          : remaining == null
+            ? availableCount
+            : Math.min(availableCount, remaining);
+      if (refreshButton) refreshButton.textContent = fresh ? "Refresh" : "Check again";
+      if (issuer === "amex") {
+        const sharedOption = document.getElementById("amexOffersSharedOption");
+        const sharedCheckbox = document.getElementById(
+          "amexOffersSharedCheckbox",
+        ) as HTMLInputElement | null;
+        const sharedScope = document.getElementById("amexOffersSharedScope");
+        const sharedCount = selected?.sharedOfferCount ?? 0;
+        const canTryMultipleCards = state.cards.length > 1 && sharedCount > 0;
+        if (sharedOption) sharedOption.style.display = canTryMultipleCards ? "" : "none";
+        if (sharedScope) {
+          sharedScope.style.display = canTryMultipleCards ? "" : "none";
+          sharedScope.textContent = canTryMultipleCards
+            ? `${pluralize(sharedCount, "offer")} currently match at least one other eligible card. This advanced option is off by default.`
+            : "";
+        }
+        if (!canTryMultipleCards && sharedCheckbox) sharedCheckbox.checked = false;
+      }
+      if (countElement) {
+        countElement.textContent =
+          availableCount == null
+            ? "Offer count unavailable for this card. Check again."
+            : availableCount > 0
+              ? `${formatAvailableToActivate(availableCount)} on this card`
+              : "No new offers to activate for this card";
+      }
+      let quotaNotice = document.getElementById(`${issuer}OffersQuotaNotice`);
+      const shouldShowQuota =
+        isFree
+        && availableCount != null
+        && remaining != null
+        && availableCount > remaining;
+      if (shouldShowQuota && readyPanel) {
+        if (!quotaNotice) {
+          quotaNotice = document.createElement("div");
+          quotaNotice.id = `${issuer}OffersQuotaNotice`;
+          quotaNotice.className = "offer-quota-notice";
+          runButton?.insertAdjacentElement("beforebegin", quotaNotice);
+        }
+        const quotaMessage = remaining === 0
+          ? "You’ve used all 100 Free activations for this month."
+          : `Your Free plan has ${remaining} activation${remaining === 1 ? "" : "s"} left this month. This run will add up to ${remaining}.`;
+        quotaNotice.innerHTML = `
+          <span>${quotaMessage}</span>
+          <button type="button">Upgrade to Pro for unlimited activations</button>
+        `;
+        quotaNotice.querySelector("button")?.addEventListener(
+          "click",
+          handleLockedProviderSelected.bind(null, "chase"),
+        );
+      } else {
+        quotaNotice?.remove();
+      }
+      if (runButton) {
+        runButton.textContent =
+          enrollmentCount != null && enrollmentCount > 0
+            ? `Add ${enrollmentCount} offers`
+            : availableCount != null && availableCount > 0 && remaining === 0
+              ? "Monthly limit reached"
+            : "Add offers";
+        if (enrollmentCount != null) {
+          runButton.dataset.enrollmentCount = String(enrollmentCount);
+        } else {
+          delete runButton.dataset.enrollmentCount;
+        }
+        runButton.disabled =
+          !fresh
+          || availableCount == null
+          || availableCount === 0
+          || enrollmentCount === 0;
+      }
+    };
+    if (select) select.onchange = updateSelection;
+    updateSelection();
+
+    const errorElement = document.getElementById(`${issuer}OffersErrorMsg`);
+    if (errorElement && state.error) errorElement.textContent = state.error;
+    const progress = document.getElementById(`${issuer}OffersProgressDetail`);
+    if (progress && state.phase === "adding") {
+      progress.textContent = state.total == null
+        ? `${state.added} added`
+        : `${state.added} of ${state.total} added`;
+    }
+    const summary = document.getElementById(`${issuer}OffersSummary`);
+    if (summary && (state.phase === "completed" || state.phase === "cancelled")) {
+      const outcome = state.phase === "cancelled"
+        ? `Stopped · ${state.added} added, ${state.remaining ?? 0} not attempted`
+        : state.failed > 0
+          ? `${state.added} added · ${state.failed} couldn’t be added`
+          : `${state.added} offers added`;
+      const saveOutcome =
+        state.saveStatus === "queued_for_retry"
+          ? " · queued to save to nextcard"
+          : state.saveStatus === "failed"
+            ? " · couldn’t save to nextcard"
+            : state.saveStatus === "saved"
+              ? " · saved to nextcard"
+              : "";
+      summary.textContent = `${outcome}${saveOutcome}`;
+    }
+  }
+}
+
+function resetOfferAccountUi() {
+  latestOfferSnapshot = { active: null, history: {} };
+  activeOfferRunIds.clear();
+  offerActivationUsage = null;
+  offerActivationUsageFetchedAt = 0;
+  offerActivationUsageRequest = null;
+  renderOfferActivationUsage();
+  const activity = document.getElementById("offerActivity");
+  if (activity) activity.hidden = true;
+  for (const issuer of ["chase", "amex", "citi", "capitalone"] as const) {
+    for (const panelName of ["Initial", "Loading", "Ready", "Running", "Done", "Error"]) {
+      const panel = document.getElementById(`${issuer}Offers${panelName}`);
+      if (panel) panel.style.display = panelName === "Initial" ? "" : "none";
+    }
+    const select = document.getElementById(`${issuer}OffersCardSelect`) as HTMLSelectElement | null;
+    if (select) select.innerHTML = "";
+    document.getElementById(`${issuer}OfferCardChoices`)?.remove();
+    const card = document.getElementById(`${issuer}OffersCard`);
+    const description = card?.querySelector(".provider-desc");
+    if (description) {
+      description.textContent = issuer === "capitalone"
+        ? "Find and save shopping offers"
+        : "Not checked · Check for offers";
+    }
+  }
+}
+
+function refreshOfferActivationUsage(force = false) {
+  if (!offersFirstUiEnabled) return Promise.resolve();
+  const isFresh =
+    offerActivationUsageFetchedAt > 0
+    && Date.now() - offerActivationUsageFetchedAt < OFFER_ACTIVATION_USAGE_REFRESH_MS;
+  if (!force && isFresh) return Promise.resolve();
+  if (offerActivationUsageRequest) return offerActivationUsageRequest;
+
+  // Mark the attempt immediately so the fast operation-status poll cannot
+  // create duplicate quota requests while this request is still in flight.
+  offerActivationUsageFetchedAt = Date.now();
+  offerActivationUsageRequest = chrome.runtime.sendMessage({
+    type: "GET_OFFER_ACTIVATION_USAGE",
+  }).catch(() => null).then((rawUsage) => {
+    if (
+      rawUsage
+      && typeof rawUsage === "object"
+      && typeof rawUsage.used === "number"
+      && (rawUsage.limit === null || typeof rawUsage.limit === "number")
+      && (rawUsage.remaining === null || typeof rawUsage.remaining === "number")
+    ) {
+      offerActivationUsage = {
+        used: Math.max(0, rawUsage.used),
+        limit: rawUsage.limit,
+        remaining: rawUsage.remaining,
+        accountLevel: rawUsage.accountLevel === "pro" ? "pro" : "free",
+      };
+      renderOfferActivationUsage();
+    }
+  }).finally(() => {
+    offerActivationUsageRequest = null;
+  });
+  return offerActivationUsageRequest;
+}
+
+async function refreshOfferOperationUi() {
+  if (!offersFirstUiEnabled) return;
+  void refreshOfferActivationUsage();
+  const raw = await chrome.runtime.sendMessage({
+    type: "GET_OFFER_OPERATION_STATUS",
+  }).catch(() => null);
+  const snapshot = normalizeOfferOperationSnapshot(raw);
+  latestOfferSnapshot = snapshot;
+  const active = snapshot.active;
+
+  if (active) activeOfferRunIds.set(active.issuer, active.runId);
+  updateIssuerCardStatus(snapshot);
+  renderBackgroundOwnedIssuerState(snapshot);
+
+  const activity = document.getElementById("offerActivity");
+  const cancelButton = document.getElementById("offerActivityCancel") as HTMLButtonElement | null;
+  if (activity) activity.hidden = !active;
+  if (active) {
+    renderOfferActivityMessage(
+      getOfferOperationStatusText(active),
+      active.phase === "adding"
+        ? "You can keep using nextcard while this finishes."
+        : "Keep the issuer tab open. You can return here at any time.",
+    );
+    if (cancelButton) {
+      cancelButton.hidden = false;
+      cancelButton.textContent = active.phase === "adding"
+        ? "Stop after current offer"
+        : "Cancel";
+    }
+  } else if (cancelButton) {
+    cancelButton.hidden = true;
+  }
+
+  const completedCheck = Object.values(snapshot.history).some((state) => (
+    state?.phase === "ready_to_add" || state?.phase === "completed"
+  ));
+  if (completedCheck && !offersSetupCompleted) {
+    offersSetupCompleted = true;
+    void chrome.storage.local.set({ offersSetupCompleted: true });
+  }
+
+  const recommendation = document.getElementById("offersRecommendation");
+  if (recommendation) recommendation.hidden = offersSetupCompleted;
+  document.querySelectorAll<HTMLButtonElement>("[data-offer-issuer]").forEach((button) => {
+    button.disabled = Boolean(active);
+  });
+  for (const issuer of ["chase", "amex", "citi", "capitalone"] as OfferIssuer[]) {
+    const card = document.getElementById(`${issuer}OffersCard`);
+    const shouldLockCard = Boolean(
+      active
+      && (
+        active.issuer !== issuer
+        || active.phase !== "ready_to_add"
+      ),
+    );
+    card?.classList.toggle("offer-operation-locked", shouldLockCard);
+    const action = document.getElementById(`${issuer}OffersDiscoverBtn`) as HTMLButtonElement | null;
+    if (action) {
+      action.disabled = Boolean(active);
+      action.textContent =
+        active?.issuer === issuer
+          ? "Working"
+          : active
+            ? "Busy"
+            : "Check";
+    }
+  }
+}
+
+document.getElementById("offerActivityCancel")?.addEventListener("click", () => {
+  const active = latestOfferSnapshot.active;
+  if (!active) return;
+  void chrome.runtime.sendMessage({
+    type: "CANCEL_OFFER_OPERATION",
+    runId: active.runId,
+  }).then(() => {
+    activeOfferRunIds.delete(active.issuer);
+    void refreshOfferOperationUi();
+  });
+});
+
+document.querySelectorAll<HTMLButtonElement>("[data-offer-issuer]").forEach((button) => {
+  button.addEventListener("click", () => {
+    const issuer = button.dataset.offerIssuer as OfferIssuer;
+    document.getElementById(`${issuer}OffersDiscoverBtn`)?.click();
+  });
+});
+
+for (const id of ["offersSetupSkip", "offersSetupUnsupported"]) {
+  document.getElementById(id)?.addEventListener("click", () => {
+    offersSetupCompleted = true;
+    void chrome.storage.local.set({ offersSetupCompleted: true });
+    const recommendation = document.getElementById("offersRecommendation");
+    if (recommendation) recommendation.hidden = true;
+    if (id === "offersSetupUnsupported") {
+      (document.getElementById("offersMore") as HTMLDetailsElement | null)?.setAttribute("open", "");
+    }
+  });
+}
+
+document.getElementById("offersCoachmarkDismiss")?.addEventListener("click", () => {
+  offersCoachmarkSeen = true;
+  void chrome.storage.local.set({ offersCoachmarkSeen: true });
+  const coachmark = document.getElementById("offersCoachmark");
+  if (coachmark) coachmark.hidden = true;
+});
 
 function showView(name: ViewName) {
   for (const [key, element] of Object.entries(views)) {
     element.classList.toggle("active", key === name);
   }
   currentView = name;
+}
+
+function showNextcardAuthWait() {
+  awaitingNextcardAuth = true;
+  authElements.loadingLabel.textContent = "Connecting to nextcard…";
+  authElements.loadingDetail.textContent = "Finish signing in in the tab that opened.";
+  showView("loading");
+
+  if (nextcardAuthWaitTimeout !== null) {
+    window.clearTimeout(nextcardAuthWaitTimeout);
+  }
+  nextcardAuthWaitTimeout = window.setTimeout(() => {
+    nextcardAuthWaitTimeout = null;
+    if (!awaitingNextcardAuth || currentAuth) return;
+    awaitingNextcardAuth = false;
+    showView("auth");
+  }, NEXTCARD_AUTH_WAIT_TIMEOUT_MS);
+}
+
+function finishNextcardAuthWait() {
+  awaitingNextcardAuth = false;
+  if (nextcardAuthWaitTimeout !== null) {
+    window.clearTimeout(nextcardAuthWaitTimeout);
+    nextcardAuthWaitTimeout = null;
+  }
+  authElements.loadingLabel.textContent = "Loading nextcard…";
+  authElements.loadingDetail.textContent = "";
 }
 
 for (const button of document.querySelectorAll("[data-back]")) {
@@ -1304,6 +2721,18 @@ document.addEventListener("click", (event) => {
 
 document.addEventListener("keydown", (event) => {
   if (event.key !== "Escape") return;
+  if (document.getElementById("offerLimitModal")?.classList.contains("visible")) {
+    closeOfferLimitDialog({ restoreFocus: true });
+    return;
+  }
+  if (document.getElementById("amexMultiEnrollDisclaimerModal")?.classList.contains("visible")) {
+    closeAmexMultiEnrollDisclaimer({ restoreFocus: true });
+    return;
+  }
+  if (document.getElementById("offerConfirmModal")?.classList.contains("visible")) {
+    closeOfferConfirmation({ restoreFocus: true });
+    return;
+  }
   document
     .querySelectorAll(".info-popover.visible")
     .forEach((element) => element.classList.remove("visible"));
@@ -1342,10 +2771,25 @@ function renderAllProviders(allStates: ProviderStateMap) {
 
 const onboardingController = createOnboardingController({
   onboardingBtn: onboardingElements.onboardingBtn,
+  getFinalLabel: () => currentAuth ? "Continue to Offers" : "Continue with nextcard",
   onComplete: () => {
     disclosureAccepted = true;
-    chrome.storage.local.set({ disclosureAccepted: true });
-    chrome.runtime.sendMessage({ type: "SIGN_IN_NEXTCARD" });
+    offersIntroVersion = CURRENT_OFFERS_INTRO_VERSION;
+    offersCoachmarkSeen = true;
+    chrome.storage.local.set({
+      disclosureAccepted: true,
+      offersIntroVersion: CURRENT_OFFERS_INTRO_VERSION,
+      offersCoachmarkSeen: true,
+      lastHomeDestination: "offers",
+    });
+    destinationRestored = true;
+    setDestination("offers", { persist: false });
+    if (currentAuth) {
+      renderAuthState(currentAuth);
+    } else {
+      showNextcardAuthWait();
+      chrome.runtime.sendMessage({ type: "SIGN_IN_NEXTCARD" });
+    }
   },
 });
 
@@ -1356,6 +2800,16 @@ async function recordConsent() {
     extensionVersion: chrome.runtime.getManifest().version,
     userAgent: navigator.userAgent,
   });
+}
+
+async function recordOfferConsent() {
+  const response = await chrome.runtime.sendMessage({
+    type: "RECORD_CONSENT",
+    consentType: `offers_privacy_v${CURRENT_OFFER_CONSENT_VERSION}`,
+    extensionVersion: chrome.runtime.getManifest().version,
+    userAgent: navigator.userAgent,
+  }).catch(() => null) as { ok?: boolean } | null;
+  return response?.ok === true;
 }
 
 async function startSyncFlow(
@@ -1381,7 +2835,6 @@ const consentController = createConsentController({
     void startSyncFlow(providerId, { showViewOnStart: true });
   },
   onActionContinue: (action) => {
-    markConsentAccepted();
     action();
   },
 });
@@ -1394,12 +2847,26 @@ function markConsentAccepted() {
 
 function requestToolConsent(action: () => void) {
   if (!consentGiven) {
-    consentController.requestAction(action);
+    consentController.requestAction(() => {
+      markConsentAccepted();
+      action();
+    });
     return false;
   }
 
   action();
   return true;
+}
+
+function requestOfferToolAction(action: () => void) {
+  if (
+    offersFirstUiEnabled
+    && offerConsentVersion >= CURRENT_OFFER_CONSENT_VERSION
+  ) {
+    action();
+    return true;
+  }
+  return requestToolConsent(action);
 }
 
 async function requestSync(providerId: ProviderId) {
@@ -1481,6 +2948,7 @@ function getInitials(name: string | null) {
 }
 
 let authConfirmed = false;
+let signedOutPollCount = 0;
 
 function renderPlanBadge() {
   let badge = document.getElementById("userPlanBadge") as HTMLSpanElement | null;
@@ -1498,19 +2966,43 @@ function renderPlanBadge() {
 
 function renderAuthState(auth: NextCardAuth | null) {
   if (!flagsLoaded) return;
+  currentAuth = auth;
 
   if (!auth) {
+    if (awaitingNextcardAuth) return;
+    if (renderedAccountKey !== null) {
+      resetOfferAccountUi();
+      renderedAccountKey = null;
+    }
     // Don't flash the disclosure view on first load — service worker may still be waking up.
     // Only show disclosure after a poll confirms auth is truly null.
     if (!authConfirmed) return;
-    if (currentView !== "disclosure") {
-      showView("disclosure");
+    const signedOutView =
+      disclosureAccepted
+      || offersIntroVersion >= CURRENT_OFFERS_INTRO_VERSION
+      ? "auth"
+      : "disclosure";
+    if (currentView !== signedOutView) {
+      showView(signedOutView);
     }
     return;
   }
+  finishNextcardAuthWait();
+  const accountKey = `${auth.email ?? ""}:${auth.signedInAt}`;
+  if (renderedAccountKey !== null && renderedAccountKey !== accountKey) {
+    resetOfferAccountUi();
+  }
+  renderedAccountKey = accountKey;
   authConfirmed = true;
+  applyOffersFirstMode(extensionProfile);
 
-  if (!disclosureAccepted) {
+  const needsOffersIntro =
+    offersFirstUiEnabled
+    && offersIntroVersion < CURRENT_OFFERS_INTRO_VERSION;
+  if (!disclosureAccepted || needsOffersIntro) {
+    onboardingElements.onboardingBtn.textContent = auth
+      ? "Continue to Offers"
+      : "Continue with nextcard";
     if (currentView !== "disclosure") {
       showView("disclosure");
     }
@@ -1525,12 +3017,25 @@ function renderAuthState(auth: NextCardAuth | null) {
   // Show tab bar when signed in
   if (tabBar) tabBar.classList.remove("hidden");
 
-  if (currentView === "auth" || currentView === "disclosure") {
+  if (
+    currentView === "loading"
+    || currentView === "auth"
+    || currentView === "disclosure"
+  ) {
     showView("home");
   }
+
+  const recommendation = document.getElementById("offersRecommendation");
+  if (recommendation) recommendation.hidden = offersSetupCompleted;
+  const coachmark = document.getElementById("offersCoachmark");
+  if (coachmark) {
+    coachmark.hidden = !offersFirstUiEnabled || offersCoachmarkSeen || offersIntroVersion === 0;
+  }
+  void refreshOfferOperationUi();
 }
 
 authElements.authSignInBtn.addEventListener("click", () => {
+  showNextcardAuthWait();
   chrome.runtime.sendMessage({ type: "SIGN_IN_NEXTCARD" });
 });
 
@@ -1539,15 +3044,13 @@ authElements.userSignOutBtn.addEventListener("click", () => {
     disclosureAccepted = false;
     consentGiven = false;
     firstSyncCompleted = false;
+    offerConsentVersion = 0;
     extensionProfile = null;
-    chrome.storage.local.remove([
-      "disclosureAccepted",
-      "consentGiven",
-      "firstSyncCompleted",
-      "getStartedShown",
-    ]);
-    onboardingController.reset();
-    showView("disclosure");
+    currentAuth = null;
+    finishNextcardAuthWait();
+    resetOfferAccountUi();
+    renderedAccountKey = null;
+    showView(offersIntroVersion >= CURRENT_OFFERS_INTRO_VERSION ? "auth" : "disclosure");
   });
 });
 
@@ -1565,7 +3068,12 @@ function maybeShowCongratsBanner(allStates: Record<ProviderId, ProviderSyncState
 }
 
 function updateActiveWalletButton(allStates: Record<ProviderId, ProviderSyncState>) {
-  if (currentView === "home" || currentView === "auth" || currentView === "disclosure") {
+  if (
+    currentView === "loading"
+    || currentView === "home"
+    || currentView === "auth"
+    || currentView === "disclosure"
+  ) {
     return;
   }
 
@@ -1597,6 +3105,12 @@ footerElements.versionFooter.addEventListener("click", () => {
 async function refreshPopupState() {
   try {
     const snapshot = await pollPopupSnapshot();
+    if (!snapshot.auth && !authConfirmed) {
+      signedOutPollCount += 1;
+      if (signedOutPollCount < SIGNED_OUT_CONFIRMATION_POLLS) return;
+    } else if (snapshot.auth) {
+      signedOutPollCount = 0;
+    }
     authConfirmed = true;
     extensionProfile = snapshot.extensionProfile;
     renderAuthState(snapshot.auth);
@@ -1612,14 +3126,39 @@ async function refreshPopupState() {
 }
 
 async function initializePopup() {
-  const [flags, initialSnapshot] = await Promise.all([
+  const [flags, initialSnapshot, uiState] = await Promise.all([
     loadOnboardingFlags(),
     loadInitialPopupState(),
+    chrome.storage.local.get([
+      "offersIntroVersion",
+      "offersSetupCompleted",
+      "offersCoachmarkSeen",
+      "offerConsentVersion",
+      "offersIntroQaResetVersion",
+    ]),
   ]);
 
   disclosureAccepted = flags.disclosureAccepted;
   consentGiven = flags.consentGiven;
   firstSyncCompleted = flags.firstSyncCompleted;
+  offersSetupCompleted = uiState.offersSetupCompleted === true;
+  offersCoachmarkSeen = uiState.offersCoachmarkSeen === true;
+  offerConsentVersion =
+    typeof uiState.offerConsentVersion === "number" ? uiState.offerConsentVersion : 0;
+  offersIntroVersion =
+    typeof uiState.offersIntroVersion === "number" ? uiState.offersIntroVersion : 0;
+  if (
+    __OFFERS_FIRST_UI_DEV_OVERRIDE__
+    && uiState.offersIntroQaResetVersion !== CURRENT_OFFERS_INTRO_VERSION
+  ) {
+    offersIntroVersion = 0;
+    offersCoachmarkSeen = false;
+    await chrome.storage.local.set({
+      offersIntroVersion: 0,
+      offersCoachmarkSeen: false,
+      offersIntroQaResetVersion: CURRENT_OFFERS_INTRO_VERSION,
+    });
+  }
   extensionProfile = initialSnapshot.extensionProfile;
   flagsLoaded = true;
 

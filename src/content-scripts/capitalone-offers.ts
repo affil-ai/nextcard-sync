@@ -867,20 +867,27 @@ async function discoverAllOffers(reportProgress = false): Promise<CapitalOneDisc
 
 async function syncDetected(card: CapitalOneCard, offers: CapitalOneOffer[]) {
   if (offers.length === 0) return;
-  await chrome.runtime.sendMessage({
+  const response = await chrome.runtime.sendMessage({
     type: "CAPITALONE_OFFERS_DETECTED",
+    runId: activeOfferRunId,
     accountId: card.id,
     cardName: card.name,
     cardLastDigits: card.lastDigits,
     detectedOffers: offers,
   });
+  if (response?.ok !== true) throw new Error("Detected offers could not be saved");
 }
 
 let cancelled = false;
 let lastDiscovery: CapitalOneDiscovery | null = null;
+let activeOfferRunId: string | null = null;
 
 function sendProgress(data: Record<string, unknown>) {
-  chrome.runtime.sendMessage({ type: "CAPITALONE_OFFERS_PROGRESS", ...data }).catch(() => {});
+  chrome.runtime.sendMessage({
+    type: "CAPITALONE_OFFERS_PROGRESS",
+    runId: activeOfferRunId,
+    ...data,
+  }).catch(() => {});
 }
 
 const capitalOneOffersWindow = window as Window & { [CAPITALONE_OFFERS_BOOTSTRAPPED_KEY]?: boolean };
@@ -890,6 +897,7 @@ if (!capitalOneOffersWindow[CAPITALONE_OFFERS_BOOTSTRAPPED_KEY]) {
 
   chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     if (message.type === "CAPITALONE_OFFERS_DISCOVER") {
+      activeOfferRunId = typeof message.runId === "string" ? message.runId : null;
       (async () => {
         cancelled = false;
         sendProgress({
@@ -948,6 +956,7 @@ if (!capitalOneOffersWindow[CAPITALONE_OFFERS_BOOTSTRAPPED_KEY]) {
     }
 
     if (message.type === "CAPITALONE_OFFERS_RUN") {
+      activeOfferRunId = typeof message.runId === "string" ? message.runId : activeOfferRunId;
       (async () => {
         cancelled = false;
         sendProgress({ status: "fetching", synced: 0, total: 0 });
@@ -968,6 +977,7 @@ if (!capitalOneOffersWindow[CAPITALONE_OFFERS_BOOTSTRAPPED_KEY]) {
 
         chrome.runtime.sendMessage({
           type: "CAPITALONE_OFFERS_COMPLETE",
+          runId: activeOfferRunId,
           synced,
           total,
         }).catch(() => {});
@@ -977,6 +987,14 @@ if (!capitalOneOffersWindow[CAPITALONE_OFFERS_BOOTSTRAPPED_KEY]) {
     }
 
     if (message.type === "CAPITALONE_OFFERS_STOP") {
+      if (
+        typeof message.runId === "string"
+        && activeOfferRunId
+        && message.runId !== activeOfferRunId
+      ) {
+        sendResponse({ ok: false });
+        return true;
+      }
       cancelled = true;
       sendResponse({ ok: true });
       return true;

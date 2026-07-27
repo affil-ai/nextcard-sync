@@ -3,7 +3,11 @@
 
 # nextcard sync
 
-nextcard sync connects your loyalty accounts and credit cards to your [nextcard](https://nextcard.com) wallet — giving you a single view of all your points, miles, elite status, and benefit credits.
+nextcard sync helps you find and add eligible card offers, get reminders while you shop, and connect loyalty accounts to your [nextcard](https://nextcard.com) wallet.
+
+## Card offers
+
+Check supported Chase, American Express, and Citi cards for eligible offers, review the card-specific results, and explicitly choose which offers to add. Capital One shopping offers can be found and saved for tracking. The extension never stores issuer passwords or verification codes.
 
 ## Supported providers
 

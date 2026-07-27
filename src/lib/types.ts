@@ -112,6 +112,7 @@ export interface ExtensionProfile {
   allowedProviders: ProviderId[];
   lockedProviders: ProviderId[];
   upgradeUrl: string;
+  offersFirstUiEnabled?: boolean;
 }
 
 export interface ProviderDataMap {
@@ -177,6 +178,44 @@ export type ExtensionMessage =
   | { type: "GET_AUTH_STATE" }
   | { type: "GET_EXTENSION_PROFILE" }
   | { type: "REFRESH_EXTENSION_PROFILE" }
+  | { type: "GET_OFFER_OPERATION_STATUS" }
+  | { type: "GET_OFFER_ACTIVATION_USAGE" }
+  | {
+      type: "RESERVE_OFFER_ACTIVATION";
+      runId: string;
+      requested: number;
+    }
+  | { type: "RELEASE_OFFER_ACTIVATION"; runId: string }
+  | { type: "START_OFFER_CHECK"; issuer: "chase" | "amex" | "citi" | "capitalone" }
+  | {
+      type: "PATCH_OFFER_OPERATION";
+      runId: string;
+      phase?: string;
+      ownedTabId?: number | null;
+      cards?: Array<{
+        key: string;
+        name: string;
+        lastDigits: string | null;
+        availableCount: number | null;
+        countStatus: "unknown" | "partial" | "complete";
+        sharedOfferCount?: number | null;
+      }>;
+      selectedCardKeys?: string[];
+      total?: number | null;
+      added?: number;
+      failed?: number;
+      remaining?: number | null;
+      error?: string | null;
+      saveStatus?: string;
+    }
+  | {
+      type: "START_OFFER_ENROLLMENT";
+      runId: string;
+      selectedCardKeys: string[];
+      total: number | null;
+      addMatchingOffersAcrossCards?: boolean;
+    }
+  | { type: "CANCEL_OFFER_OPERATION"; runId?: string }
   | { type: "OPEN_UPGRADE" }
   | {
       type: "RECORD_CONSENT";

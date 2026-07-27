@@ -1,10 +1,36 @@
 import type { ExtensionProfile, NextCardAuth, ProviderId } from "../../lib/types";
+import {
+  isOfferIssuer,
+  type OfferOperationCard,
+  type OfferOperationPhase,
+  type OfferSaveStatus,
+} from "../../lib/offer-operation";
 import type { ProviderDefinition, ProviderSyncStrategy } from "../../providers/provider-registry";
+import type { OfferOperationStore } from "../offer-operation-store";
+import type { OfferOperationCoordinator } from "../offer-operation-coordinator";
+import {
+  capOfferEnrollmentTotal,
+  getOfferActivationUsage,
+  recordOfferActivations,
+  reserveOfferActivations,
+} from "../../lib/offer-activation-usage";
+import {
+  AMEX_DEFAULT_RATE_LIMIT_DELAY_MS,
+  classifyAmexEnrollmentResponse,
+  evaluateAmexPrimaryResult,
+  type AmexEnrollmentEndpoint,
+  type AmexEnrollmentResult,
+  type AmexPrimaryFallbackState,
+} from "../amex-enrollment-policy";
 import type { createRuntimeStateStore } from "./runtime-state";
 
 type RuntimeStateStore = ReturnType<typeof createRuntimeStateStore>;
 
-const AMEX_ENROLL_EXECUTION_TIMEOUT_MS = 30_000;
+const AMEX_ENROLL_EXECUTION_TIMEOUT_MS = 65_000;
+
+function delay(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
 
 function withTimeout<T>(operation: Promise<T>, timeoutMs: number, message: string) {
   return new Promise<T>((resolve, reject) => {
@@ -20,6 +46,133 @@ function withTimeout<T>(operation: Promise<T>, timeoutMs: number, message: strin
       },
     );
   });
+}
+
+async function executeAmexEnrollmentRequest(
+  tabId: number,
+  endpoint: AmexEnrollmentEndpoint,
+  cardId: string,
+  offerId: string,
+  locale: string,
+): Promise<AmexEnrollmentResult> {
+  try {
+    const injected = await withTimeout(chrome.scripting.executeScript({
+      target: { tabId },
+      world: "MAIN",
+      func: async (
+        enrollmentEndpoint: AmexEnrollmentEndpoint,
+        enrollmentCardId: string,
+        enrollmentOfferId: string,
+        enrollmentLocale: string,
+      ) => {
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 20_000);
+        const userOffset = (() => {
+          const offsetMinutes = -new Date().getTimezoneOffset();
+          const sign = offsetMinutes >= 0 ? "+" : "-";
+          const absolute = Math.abs(offsetMinutes);
+          return `${sign}${String(Math.floor(absolute / 60)).padStart(2, "0")}:${String(absolute % 60).padStart(2, "0")}`;
+        })();
+        const requestDateTimeWithOffset = (() => {
+          const date = new Date();
+          const pad = (value: number) => String(value).padStart(2, "0");
+          return `${date.getFullYear()}-${pad(date.getMonth() + 1)}_${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}${userOffset}`;
+        })();
+        const request = enrollmentEndpoint === "offers_hub"
+          ? {
+              url: "https://functions.americanexpress.com/CreateOffersHubEnrollment.web.v1",
+              headers: {
+                accept: "application/json",
+                "content-type": "application/json",
+                "ce-source": "WEB",
+              },
+              body: {
+                accountNumberProxy: enrollmentCardId,
+                locale: enrollmentLocale,
+                offerId: enrollmentOfferId,
+                requestType: "OFFERSHUB_ENROLLMENT",
+                offerUnencrypted: false,
+                synchronizeOnly: false,
+                enrollmentTrigger: "OFFERSHUB_TILE",
+              },
+            }
+          : {
+              url: "https://functions.americanexpress.com/CreateCardAccountOfferEnrollment.v1",
+              headers: {
+                accept: "application/json",
+                "content-type": "application/json",
+                "ce-source": "offers.enroll",
+              },
+              body: {
+                accountNumberProxy: enrollmentCardId,
+                identifier: enrollmentOfferId,
+                locale: enrollmentLocale,
+                requestDateTimeWithOffset,
+                userOffset,
+              },
+            };
+
+        try {
+          const response = await fetch(request.url, {
+            method: "POST",
+            headers: request.headers,
+            cache: "no-store",
+            credentials: "include",
+            signal: controller.signal,
+            body: JSON.stringify(request.body),
+          });
+          let body: Record<string, unknown> | null = null;
+          try { body = await response.json() as Record<string, unknown>; } catch { /* non-JSON response */ }
+          return {
+            status: response.status,
+            body,
+            retryAfter: response.headers.get("retry-after"),
+          };
+        } catch (error) {
+          return {
+            status: 0,
+            body: null,
+            retryAfter: null,
+            error: error instanceof Error ? error.message : String(error),
+          };
+        } finally {
+          clearTimeout(timeout);
+        }
+      },
+      args: [endpoint, cardId, offerId, locale],
+    }), AMEX_ENROLL_EXECUTION_TIMEOUT_MS, "Amex enrollment timed out before Chrome completed the request");
+
+    const raw = injected?.[0]?.result as {
+      status?: number;
+      body?: Record<string, unknown> | null;
+      retryAfter?: string | null;
+      error?: string;
+    } | undefined;
+    return classifyAmexEnrollmentResponse({
+      endpoint,
+      status: raw?.status ?? 0,
+      body: raw?.body ?? null,
+      retryAfter: raw?.retryAfter,
+      error: raw?.error,
+    });
+  } catch (error) {
+    return classifyAmexEnrollmentResponse({
+      endpoint,
+      status: 0,
+      body: null,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+}
+
+async function waitAfterAmexRateLimit(result: AmexEnrollmentResult) {
+  if (result.failureReason !== "rate_limited") return result;
+  await delay(
+    (result.retryAfterMs ?? AMEX_DEFAULT_RATE_LIMIT_DELAY_MS)
+    + Math.floor(Math.random() * 101)
+    + 50,
+  );
+  return result;
 }
 
 export interface SyncHandlers {
@@ -87,9 +240,44 @@ export function createMessageRouter(options: {
   getExtensionProfile?: () => Promise<ExtensionProfile | null>;
   refreshExtensionProfile?: () => Promise<ExtensionProfile | null>;
   openUpgrade?: () => Promise<void>;
-  syncEnrolledOffers?: (issuer: string, message: Record<string, unknown>) => void | Promise<void>;
-  syncDetectedOffers?: (issuer: string, message: Record<string, unknown>) => void | Promise<void>;
+  offerOperations: OfferOperationStore;
+  offerCoordinator: OfferOperationCoordinator;
+  syncEnrolledOffers?: (
+    issuer: string,
+    message: Record<string, unknown>,
+  ) => void | OfferSaveStatus | Promise<void | OfferSaveStatus>;
+  syncDetectedOffers?: (
+    issuer: string,
+    message: Record<string, unknown>,
+  ) => void | OfferSaveStatus | Promise<void | OfferSaveStatus>;
 }) {
+  const amexEnrollmentFallbackRuns = new Map<string, AmexPrimaryFallbackState>();
+
+  async function saveDetectedForRun(
+    issuer: "chase" | "amex" | "citi" | "capitalone",
+    runId: string,
+    message: Record<string, unknown>,
+  ) {
+    await options.offerOperations.patchActiveRun(issuer, runId, {
+      saveStatus: "saving",
+    });
+    let saveStatus: OfferSaveStatus = "saved";
+    try {
+      const result = await options.syncDetectedOffers?.(issuer, message);
+      if (result === "queued_for_retry" || result === "failed") saveStatus = result;
+    } catch {
+      saveStatus = "failed";
+    }
+    const snapshot = await options.offerOperations.getSnapshot();
+    const current = snapshot.active?.runId === runId
+      ? snapshot.active
+      : snapshot.history[issuer];
+    if (current?.runId === runId && (current.saveStatus !== "failed" || saveStatus === "failed")) {
+      await options.offerOperations.patchActiveRun(issuer, runId, { saveStatus });
+    }
+    return saveStatus;
+  }
+
   return (message: Record<string, unknown>, sender: chrome.runtime.MessageSender, sendResponse: (response?: unknown) => void) => {
     switch (message.type) {
       case "REQUEST_SYNC": {
@@ -157,6 +345,238 @@ export function createMessageRouter(options: {
           return true;
         }
         sendResponse(null);
+        return true;
+
+      case "GET_OFFER_OPERATION_STATUS":
+        void options.offerCoordinator.resume()
+          .then(() => options.offerOperations.getSnapshot())
+          .then((snapshot) => sendResponse(snapshot));
+        return true;
+
+      case "GET_OFFER_ACTIVATION_USAGE":
+        void Promise.all([
+          options.getCachedAuth(),
+          options.getExtensionProfile?.() ?? Promise.resolve(null),
+        ]).then(async ([auth, profile]) => {
+          const usage = await getOfferActivationUsage(
+            auth?.email,
+            profile?.accountLevel === "pro",
+          );
+          sendResponse({ ...usage, accountLevel: profile?.accountLevel ?? "free" });
+        });
+        return true;
+
+      case "RESERVE_OFFER_ACTIVATION": {
+        const runId = typeof message.runId === "string" ? message.runId : "";
+        const requested =
+          typeof message.requested === "number" && Number.isFinite(message.requested)
+            ? Math.max(0, Math.floor(message.requested))
+            : 0;
+        if (!runId || requested === 0) {
+          sendResponse({ ok: false, error: "invalid_reservation" });
+          return true;
+        }
+        void Promise.all([
+          options.getCachedAuth(),
+          options.getExtensionProfile?.() ?? Promise.resolve(null),
+        ]).then(async ([auth, profile]) => {
+          const reservation = await reserveOfferActivations(
+            auth?.email,
+            profile?.accountLevel === "pro",
+            runId,
+            requested,
+          );
+          sendResponse(
+            reservation.ok
+              ? reservation
+              : {
+                  ...reservation,
+                  error: reservation.error ?? "quota_unavailable",
+                },
+          );
+        });
+        return true;
+      }
+
+      case "RELEASE_OFFER_ACTIVATION": {
+        const runId = typeof message.runId === "string" ? message.runId : "";
+        if (!runId) {
+          sendResponse({ ok: false, error: "missing_run_id" });
+          return true;
+        }
+        void options.getCachedAuth().then(async (auth) => {
+          await recordOfferActivations(auth?.email, runId, 0).catch(() => {});
+          sendResponse({ ok: true });
+        });
+        return true;
+      }
+
+      case "START_OFFER_CHECK": {
+        if (!isOfferIssuer(message.issuer)) {
+          sendResponse({ ok: false, error: "unsupported_issuer" });
+          return true;
+        }
+        void options.offerCoordinator.startCheck(message.issuer).then((result) => sendResponse(result));
+        return true;
+      }
+
+      case "REFRESH_OFFER_CHECK": {
+        const runId = typeof message.runId === "string" ? message.runId : "";
+        if (!runId) {
+          sendResponse({ ok: false, error: "missing_run_id" });
+          return true;
+        }
+        void options.offerCoordinator
+          .refreshCheck(runId)
+          .then((result) => sendResponse(result));
+        return true;
+      }
+
+      case "PATCH_OFFER_OPERATION": {
+        const runId = typeof message.runId === "string" ? message.runId : "";
+        if (!runId) {
+          sendResponse({ ok: false, error: "missing_run_id" });
+          return true;
+        }
+        const validPhases: OfferOperationPhase[] = [
+          "opening",
+          "waiting_for_login",
+          "checking",
+          "ready_to_add",
+          "adding",
+          "completed",
+          "cancelled",
+          "interrupted",
+          "failed",
+        ];
+        const validSaveStatuses: OfferSaveStatus[] = [
+          "not_started",
+          "saving",
+          "saved",
+          "queued_for_retry",
+          "failed",
+        ];
+        const cards: OfferOperationCard[] | undefined = Array.isArray(message.cards)
+          ? message.cards.flatMap((value) => {
+              if (
+                !value
+                || typeof value !== "object"
+                || typeof value.key !== "string"
+                || typeof value.name !== "string"
+              ) {
+                return [];
+              }
+              const record = value as Record<string, unknown>;
+              return [{
+                key: record.key as string,
+                name: record.name as string,
+                lastDigits: typeof record.lastDigits === "string" ? record.lastDigits : null,
+                availableCount:
+                  typeof record.availableCount === "number" && record.availableCount >= 0
+                    ? record.availableCount
+                    : null,
+                countStatus:
+                  record.countStatus === "complete" || record.countStatus === "partial"
+                    ? record.countStatus
+                    : "unknown",
+              } satisfies OfferOperationCard];
+            })
+          : undefined;
+        const phase = validPhases.includes(message.phase as OfferOperationPhase)
+          ? message.phase as OfferOperationPhase
+          : undefined;
+        const saveStatus = validSaveStatuses.includes(message.saveStatus as OfferSaveStatus)
+          ? message.saveStatus as OfferSaveStatus
+          : undefined;
+        void options.offerOperations.patch(runId, {
+          ...(phase ? { phase } : {}),
+          ...(typeof message.ownedTabId === "number" || message.ownedTabId === null
+            ? { ownedTabId: message.ownedTabId }
+            : {}),
+          ...(cards ? { cards } : {}),
+          ...(Array.isArray(message.selectedCardKeys)
+            ? { selectedCardKeys: message.selectedCardKeys.filter((key): key is string => typeof key === "string") }
+            : {}),
+          ...(typeof message.total === "number" || message.total === null ? { total: message.total } : {}),
+          ...(typeof message.added === "number" ? { added: Math.max(0, message.added) } : {}),
+          ...(typeof message.failed === "number" ? { failed: Math.max(0, message.failed) } : {}),
+          ...(typeof message.remaining === "number" || message.remaining === null
+            ? { remaining: message.remaining }
+            : {}),
+          ...(typeof message.error === "string" || message.error === null ? { error: message.error } : {}),
+          ...(saveStatus ? { saveStatus } : {}),
+        }).then((state) => sendResponse({ ok: Boolean(state), state }));
+        return true;
+      }
+
+      case "START_OFFER_ENROLLMENT": {
+        const runId = typeof message.runId === "string" ? message.runId : "";
+        if (!runId) {
+          sendResponse({ ok: false, error: "missing_run_id" });
+          return true;
+        }
+        const selectedCardKeys = Array.isArray(message.selectedCardKeys)
+          ? message.selectedCardKeys.filter((key): key is string => typeof key === "string")
+          : [];
+        const total = typeof message.total === "number" && message.total >= 0
+          ? message.total
+          : null;
+        const addMatchingOffersAcrossCards =
+          message.addMatchingOffersAcrossCards === true;
+        void (async () => {
+          const [auth, profile] = await Promise.all([
+            options.getCachedAuth(),
+            options.getExtensionProfile?.() ?? Promise.resolve(null),
+          ]);
+          const usage = await getOfferActivationUsage(
+            auth?.email,
+            profile?.accountLevel === "pro",
+          );
+          const requested =
+            addMatchingOffersAcrossCards
+              ? usage.remaining ?? total ?? 10_000
+              : total ?? usage.remaining ?? 10_000;
+          const reservation = await reserveOfferActivations(
+            auth?.email,
+            profile?.accountLevel === "pro",
+            runId,
+            requested,
+          );
+          const cappedTotal = capOfferEnrollmentTotal(total, reservation.granted);
+          if (!reservation.ok || reservation.granted === 0 || cappedTotal === 0) {
+            sendResponse({
+              ...reservation,
+              ok: false,
+              accountLevel: profile?.accountLevel ?? "free",
+              error: reservation.error ?? "quota_unavailable",
+            });
+            return;
+          }
+          const result = await options.offerCoordinator.startEnrollment(
+            runId,
+            selectedCardKeys,
+            cappedTotal,
+            {
+              addMatchingOffersAcrossCards,
+              maxOffers: reservation.granted,
+            },
+          );
+          if (!result.ok) {
+            await recordOfferActivations(auth?.email, runId, 0).catch(() => {});
+          }
+          sendResponse({
+            ...result,
+            granted: reservation.granted,
+            requested,
+          });
+        })();
+        return true;
+      }
+
+      case "CANCEL_OFFER_OPERATION":
+        void options.offerCoordinator.cancel(
+          typeof message.runId === "string" ? message.runId : undefined,
+        ).then((state) => sendResponse({ ok: Boolean(state), state }));
         return true;
 
       case "REFRESH_EXTENSION_PROFILE":
@@ -277,7 +697,10 @@ export function createMessageRouter(options: {
         return true;
 
       case "RECORD_CONSENT":
-        void options.recordConsent(message).then(() => sendResponse({ ok: true }));
+        void options.recordConsent(message).then(
+          () => sendResponse({ ok: true }),
+          () => sendResponse({ ok: false, error: "consent_record_failed" }),
+        );
         return true;
 
       case "GET_PROVIDER_STATUS": {
@@ -455,10 +878,10 @@ export function createMessageRouter(options: {
       }
 
       case "AMEX_OFFERS_ENROLL_ONE": {
-        // Enroll a single offer via executeScript in MAIN world.
         const enrollCardId = message.cardId as string;
         const enrollOfferId = message.offerId as string;
         const enrollLocale = (message.locale as string) ?? "en-US";
+        const runId = typeof message.runId === "string" ? message.runId : "legacy";
 
         (async () => {
           try {
@@ -477,76 +900,64 @@ export function createMessageRouter(options: {
             }
 
             const startedAt = Date.now();
-            console.info("[NextCard SW] AMEX_OFFERS_ENROLL_ONE started");
-            const results = await withTimeout(chrome.scripting.executeScript({
-              target: { tabId },
-              world: "MAIN",
-              func: async (cardId: string, offerId: string, locale: string) => {
-                const controller = new AbortController();
-                const timeout = setTimeout(() => controller.abort(), 20000);
-                const requestStartedAt = Date.now();
-                try {
-                  console.info("[NextCard Amex Offers] enrollment request started");
-                  const resp = await fetch("https://functions.americanexpress.com/CreateOffersHubEnrollment.web.v1", {
-                    method: "POST",
-                    headers: {
-                      "content-type": "application/json",
-                      accept: "application/json",
-                      "ce-source": "WEB",
-                    },
-                    cache: "no-store",
-                    credentials: "include",
-                    signal: controller.signal,
-                    body: JSON.stringify({
-                      accountNumberProxy: cardId,
-                      locale,
-                      offerId,
-                      requestType: "OFFERSHUB_ENROLLMENT",
-                      offerUnencrypted: false,
-                      synchronizeOnly: false,
-                      enrollmentTrigger: "OFFERSHUB_TILE",
-                    }),
-                  });
-                  let json: Record<string, unknown> | null = null;
-                  try { json = await resp.json(); } catch { /* */ }
-                  console.info("[NextCard Amex Offers] enrollment response:", {
-                    status: resp.status,
-                    elapsedMs: Date.now() - requestStartedAt,
-                  });
-                  const ok = resp.status === 200 && (
-                    (json?.status as Record<string, unknown> | undefined)?.purpose === "SUCCESS"
-                    || (json?.isEnrolled && json.isEnrolled !== "false")
-                  );
-                  const alreadyEnrolled = resp.status === 200 && (
-                    json?.explanationCode === "PZN4107"
-                  );
-                  if (ok) return { result: "added" };
-                  if (alreadyEnrolled) return { result: "skipped" };
-                  return {
-                    result: "failed",
-                    status: resp.status,
-                    purpose: (json?.status as Record<string, unknown> | undefined)?.purpose,
-                    message: (json?.status as Record<string, unknown> | undefined)?.message,
-                    explanationCode: json?.explanationCode,
-                  };
-                } catch (error) {
-                  return { result: "failed", error: String(error) };
-                } finally {
-                  clearTimeout(timeout);
-                }
-              },
-              args: [enrollCardId, enrollOfferId, enrollLocale],
-            }), AMEX_ENROLL_EXECUTION_TIMEOUT_MS, "Amex enrollment timed out before Chrome completed the request");
+            const fallbackState = amexEnrollmentFallbackRuns.get(runId) ?? {
+              consecutiveFailures: 0,
+              useOffersHubFallback: false,
+            };
+            let result: AmexEnrollmentResult;
 
-            const result = results?.[0]?.result as { result?: string } | undefined;
+            if (fallbackState.useOffersHubFallback) {
+              result = await waitAfterAmexRateLimit(
+                await executeAmexEnrollmentRequest(
+                  tabId,
+                  "offers_hub",
+                  enrollCardId,
+                  enrollOfferId,
+                  enrollLocale,
+                ),
+              );
+            } else {
+              const primaryResult = await executeAmexEnrollmentRequest(
+                tabId,
+                "card_account",
+                enrollCardId,
+                enrollOfferId,
+                enrollLocale,
+              );
+              const evaluated = evaluateAmexPrimaryResult(fallbackState, primaryResult);
+              amexEnrollmentFallbackRuns.set(runId, evaluated.state);
+              result = primaryResult;
+
+              if (evaluated.fallbackNow) {
+                const fallbackDelay =
+                  primaryResult.retryAfterMs
+                  ?? (primaryResult.failureReason === "network_or_cors"
+                    ? AMEX_DEFAULT_RATE_LIMIT_DELAY_MS
+                    : 0);
+                if (fallbackDelay > 0) {
+                  await delay(fallbackDelay + Math.floor(Math.random() * 101) + 50);
+                }
+                result = await waitAfterAmexRateLimit(
+                  await executeAmexEnrollmentRequest(
+                    tabId,
+                    "offers_hub",
+                    enrollCardId,
+                    enrollOfferId,
+                    enrollLocale,
+                  ),
+                );
+              }
+            }
+
             console.info("[NextCard SW] AMEX_OFFERS_ENROLL_ONE completed:", {
               elapsedMs: Date.now() - startedAt,
-              result: result?.result ?? "failed",
+              result: result.result,
+              endpoint: result.endpoint,
             });
-            if (result?.result === "failed") {
+            if (result.result === "failed" || result.result === "unknown") {
               console.warn("[NextCard SW] AMEX_OFFERS_ENROLL_ONE failed:", result);
             }
-            sendResponse(result ?? { result: "failed" });
+            sendResponse(result);
           } catch (error) {
             const errorMessage = error instanceof Error ? error.message : String(error);
             console.error("[NextCard SW] AMEX_OFFERS_ENROLL_ONE error:", errorMessage);
@@ -569,6 +980,7 @@ export function createMessageRouter(options: {
           : [];
         const locale = typeof message.locale === "string" ? message.locale : "en-US";
         const useOffersHubFallback = message.useOffersHubFallback === true;
+        const runId = typeof message.runId === "string" ? message.runId : "legacy-shared";
 
         if (targets.length === 0) {
           sendResponse({ results: [] });
@@ -591,115 +1003,74 @@ export function createMessageRouter(options: {
               return;
             }
 
-            const injected = await withTimeout(chrome.scripting.executeScript({
-              target: { tabId },
-              world: "MAIN",
-              func: async (
-                enrollmentTargets: Array<{ cardId: string; offerId: string }>,
-                enrollmentLocale: string,
-                useOffersHubFallback: boolean,
-              ) => {
-                const userOffset = (() => {
-                  const offsetMinutes = -new Date().getTimezoneOffset();
-                  const sign = offsetMinutes >= 0 ? "+" : "-";
-                  const absolute = Math.abs(offsetMinutes);
-                  return `${sign}${String(Math.floor(absolute / 60)).padStart(2, "0")}:${String(absolute % 60).padStart(2, "0")}`;
-                })();
-                const requestDateTimeWithOffset = (() => {
-                  const date = new Date();
-                  const pad = (value: number) => String(value).padStart(2, "0");
-                  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}_${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}${userOffset}`;
-                })();
-                const requests = enrollmentTargets.map(async (target) => {
-                  const controller = new AbortController();
-                  const timeout = setTimeout(() => controller.abort(), 20_000);
-                  try {
-                    const request = useOffersHubFallback
-                      ? {
-                          url: "https://functions.americanexpress.com/CreateOffersHubEnrollment.web.v1",
-                          headers: {
-                            accept: "application/json",
-                            "content-type": "application/json",
-                            "ce-source": "WEB",
-                          },
-                          body: {
-                            accountNumberProxy: target.cardId,
-                            locale: enrollmentLocale,
-                            offerId: target.offerId,
-                            requestType: "OFFERSHUB_ENROLLMENT",
-                            offerUnencrypted: false,
-                            synchronizeOnly: false,
-                            enrollmentTrigger: "OFFERSHUB_TILE",
-                          },
-                        }
-                      : {
-                          url: "https://functions.americanexpress.com/CreateCardAccountOfferEnrollment.v1",
-                          headers: {
-                            accept: "application/json",
-                            "content-type": "application/json",
-                            "ce-source": "offers.enroll",
-                          },
-                          body: {
-                            accountNumberProxy: target.cardId,
-                            identifier: target.offerId,
-                            locale: enrollmentLocale,
-                            requestDateTimeWithOffset,
-                            userOffset,
-                          },
-                        };
-                    return await fetch(
-                      request.url,
-                      {
-                        method: "POST",
-                        headers: request.headers,
-                        cache: "no-store",
-                        credentials: "include",
-                        signal: controller.signal,
-                        body: JSON.stringify(request.body),
-                      },
-                    );
-                  } finally {
-                    clearTimeout(timeout);
-                  }
-                });
-                const settled = await Promise.allSettled(requests);
-                return Promise.all(settled.map(async (outcome) => {
-                  if (outcome.status === "rejected") {
-                    return {
-                      result: "unknown",
-                      error: outcome.reason instanceof Error
-                        ? outcome.reason.message
-                        : String(outcome.reason),
-                    };
-                  }
-                  let body: Record<string, unknown> | null = null;
-                  try { body = await outcome.value.json() as Record<string, unknown>; } catch { /* non-JSON response */ }
-                  const status = outcome.value.status;
-                  const responseStatus = body?.status;
-                  const responseWasSuccessful =
-                    typeof responseStatus === "object"
-                    && responseStatus !== null
-                    && "purpose" in responseStatus
-                    && responseStatus.purpose === "SUCCESS";
-                  const enrolled =
-                    body?.isEnrolled === true
-                    || body?.isEnrolled === "true"
-                    || responseWasSuccessful;
-                  const alreadyEnrolled = body?.explanationCode === "PZN4107";
-                  if (status === 200 && enrolled) return { result: "added", status };
-                  if (status === 200 && alreadyEnrolled) return { result: "skipped", status };
-                  return {
-                    result: "failed",
-                    status,
-                    purpose: (body?.status as Record<string, unknown> | undefined)?.purpose,
-                    message: (body?.status as Record<string, unknown> | undefined)?.message,
-                    explanationCode: body?.explanationCode,
-                  };
-                }));
-              },
-              args: [targets, locale, useOffersHubFallback],
-            }), AMEX_ENROLL_EXECUTION_TIMEOUT_MS, "Amex enrollment group timed out before Chrome completed the request");
-            sendResponse({ results: injected?.[0]?.result ?? targets.map(() => ({ result: "failed" })) });
+            const fallbackState = amexEnrollmentFallbackRuns.get(runId) ?? {
+              consecutiveFailures: 0,
+              useOffersHubFallback: false,
+            };
+            const startWithFallback =
+              useOffersHubFallback || fallbackState.useOffersHubFallback;
+
+            if (startWithFallback) {
+              const results = await Promise.all(targets.map((target) =>
+                executeAmexEnrollmentRequest(
+                  tabId,
+                  "offers_hub",
+                  target.cardId,
+                  target.offerId,
+                  locale,
+                ).then(
+                  waitAfterAmexRateLimit,
+                )
+              ));
+              sendResponse({ results });
+              return;
+            }
+
+            const primaryResults = await Promise.all(targets.map((target) =>
+              executeAmexEnrollmentRequest(
+                tabId,
+                "card_account",
+                target.cardId,
+                target.offerId,
+                locale,
+              )
+            ));
+            let nextState = fallbackState;
+            const fallbackTargets = new Set<number>();
+            for (let index = 0; index < primaryResults.length; index += 1) {
+              const evaluated = evaluateAmexPrimaryResult(
+                nextState,
+                primaryResults[index],
+              );
+              nextState = evaluated.state;
+              if (evaluated.fallbackNow) fallbackTargets.add(index);
+            }
+            if (fallbackTargets.size > 0) {
+              nextState = { ...nextState, useOffersHubFallback: true };
+            }
+            amexEnrollmentFallbackRuns.set(runId, nextState);
+
+            const results = await Promise.all(primaryResults.map(async (result, index) => {
+              if (!fallbackTargets.has(index)) return result;
+              const fallbackDelay =
+                result.retryAfterMs
+                ?? (result.failureReason === "network_or_cors"
+                  ? AMEX_DEFAULT_RATE_LIMIT_DELAY_MS
+                  : 0);
+              if (fallbackDelay > 0) {
+                await delay(fallbackDelay + Math.floor(Math.random() * 101) + 50);
+              }
+              return executeAmexEnrollmentRequest(
+                tabId,
+                "offers_hub",
+                targets[index].cardId,
+                targets[index].offerId,
+                locale,
+              ).then(
+                waitAfterAmexRateLimit,
+              );
+            }));
+            sendResponse({ results });
           } catch (error) {
             const errorMessage = error instanceof Error ? error.message : "Amex enrollment group failed";
             sendResponse({ results: targets.map(() => ({ result: "failed", error: errorMessage })) });
@@ -720,27 +1091,99 @@ export function createMessageRouter(options: {
       }
 
       case "AMEX_OFFERS_PROGRESS":
+        if (typeof message.runId !== "string") {
+          sendResponse({ ok: true, legacy: true });
+          return true;
+        }
+        void options.offerOperations.patchActiveRun("amex", message.runId, {
+          phase: "adding",
+          added: typeof message.added === "number" ? Math.max(0, message.added) : 0,
+          failed: typeof message.failed === "number" ? Math.max(0, message.failed) : 0,
+          total: typeof message.total === "number" ? Math.max(0, message.total) : null,
+          remaining:
+            typeof message.total === "number"
+              ? Math.max(
+                  0,
+                  message.total
+                    - (typeof message.added === "number" ? message.added : 0)
+                    - (typeof message.failed === "number" ? message.failed : 0),
+                )
+              : null,
+        });
         sendResponse({ ok: true });
         return true;
 
       case "AMEX_OFFERS_COMPLETE": {
+        if (typeof message.runId !== "string") {
+          sendResponse({ ok: false, error: "missing_run_id" });
+          return true;
+        }
+        amexEnrollmentFallbackRuns.delete(message.runId);
         const enrolledByCard = Array.isArray(message.enrolledByCard) ? message.enrolledByCard : null;
         void (async () => {
+          const runId = message.runId as string;
+          const auth = await options.getCachedAuth();
+          await recordOfferActivations(
+            auth?.email,
+            runId,
+            Math.max(
+              0,
+              (typeof message.added === "number" ? message.added : 0)
+                - (typeof message.skipped === "number" ? message.skipped : 0),
+            ),
+          ).catch(() => {});
+          const hasOffersToSave = enrolledByCard
+            ? enrolledByCard.some((cardResult) => (
+                cardResult
+                && typeof cardResult === "object"
+                && Array.isArray((cardResult as Record<string, unknown>).enrolledOffers)
+                && ((cardResult as Record<string, unknown>).enrolledOffers as unknown[]).length > 0
+              ))
+            : Array.isArray(message.enrolledOffers) && message.enrolledOffers.length > 0;
+          await options.offerOperations.patchActiveRun("amex", runId, {
+            phase: message.cancelled === true ? "cancelled" : "completed",
+            added: typeof message.added === "number" ? Math.max(0, message.added) : 0,
+            failed: typeof message.failed === "number" ? Math.max(0, message.failed) : 0,
+            cancelled: message.cancelled === true,
+            error:
+              message.sessionExpired === true
+                ? "Sign in to Amex again to continue."
+                : typeof message.lastError === "string"
+                  ? message.lastError
+                  : null,
+            saveStatus: hasOffersToSave ? "saving" : "saved",
+            remaining:
+              typeof message.total === "number"
+                ? Math.max(
+                    0,
+                    message.total
+                      - (typeof message.added === "number" ? message.added : 0)
+                      - (typeof message.failed === "number" ? message.failed : 0),
+                  )
+                : null,
+          });
+
           let syncError: string | null = null;
+          let completionSaveStatus: OfferSaveStatus = "saved";
           if (enrolledByCard) {
             for (const cardResult of enrolledByCard) {
               if (!cardResult || typeof cardResult !== "object") continue;
               const record = cardResult as Record<string, unknown>;
               if (!Array.isArray(record.enrolledOffers) || record.enrolledOffers.length === 0) continue;
               try {
-                await options.syncEnrolledOffers?.("amex", record);
+                const result = await options.syncEnrolledOffers?.("amex", record);
+                if (result === "queued_for_retry") completionSaveStatus = result;
+                if (result === "failed") completionSaveStatus = result;
               } catch (error) {
                 syncError = error instanceof Error ? error.message : "Could not save one or more verified Amex offers";
               }
             }
           } else if (Array.isArray(message.enrolledOffers) && message.enrolledOffers.length > 0) {
             try {
-              await options.syncEnrolledOffers?.("amex", message);
+              const result = await options.syncEnrolledOffers?.("amex", message);
+              if (result === "queued_for_retry" || result === "failed") {
+                completionSaveStatus = result;
+              }
             } catch (error) {
               syncError = error instanceof Error ? error.message : "Could not save verified Amex offers";
             }
@@ -759,17 +1202,78 @@ export function createMessageRouter(options: {
             multiCard: enrolledByCard !== null,
             syncError,
           }).catch(() => {});
+          await options.offerOperations.patch(runId, {
+            saveStatus: syncError ? "failed" : completionSaveStatus,
+          });
           sendResponse({ ok: true });
         })();
         return true;
       }
 
       // ── Chase Offers (sync only — discovery/enrollment handled by content script) ──
-      case "CHASE_OFFERS_COMPLETE":
-        if (Array.isArray(message.enrolledOffers) && message.enrolledOffers.length > 0) {
-          options.syncEnrolledOffers?.("chase", message);
+      case "CHASE_OFFERS_PROGRESS":
+        if (typeof message.runId !== "string") {
+          sendResponse({ ok: true, legacy: true });
+          return true;
         }
+        void options.offerOperations.patchActiveRun("chase", message.runId, {
+          phase: "adding",
+          added: typeof message.added === "number" ? Math.max(0, message.added) : 0,
+          total: typeof message.total === "number" ? Math.max(0, message.total) : null,
+          remaining:
+            typeof message.total === "number"
+              ? Math.max(0, message.total - (typeof message.added === "number" ? message.added : 0))
+              : null,
+        });
         sendResponse({ ok: true });
+        return true;
+
+      case "CHASE_OFFERS_COMPLETE":
+        void (async () => {
+          const runId = typeof message.runId === "string" ? message.runId : null;
+          if (runId) {
+            const auth = await options.getCachedAuth();
+            await recordOfferActivations(
+              auth?.email,
+              runId,
+              typeof message.added === "number" ? message.added : 0,
+            ).catch(() => {});
+          }
+          const hasOffersToSave =
+            Array.isArray(message.enrolledOffers) && message.enrolledOffers.length > 0;
+          if (runId) {
+            await options.offerOperations.patchActiveRun("chase", runId, {
+              phase: message.cancelled === true ? "cancelled" : "completed",
+              added: typeof message.added === "number" ? Math.max(0, message.added) : 0,
+              failed: typeof message.failed === "number" ? Math.max(0, message.failed) : 0,
+              cancelled: message.cancelled === true,
+              saveStatus: hasOffersToSave ? "saving" : "saved",
+              remaining:
+                typeof message.total === "number"
+                  ? Math.max(
+                      0,
+                      message.total
+                        - (typeof message.added === "number" ? message.added : 0)
+                        - (typeof message.failed === "number" ? message.failed : 0),
+                    )
+                  : null,
+            });
+          }
+
+          let saveStatus: OfferSaveStatus = "saved";
+          if (hasOffersToSave) {
+            try {
+              const result = await options.syncEnrolledOffers?.("chase", message);
+              if (result === "queued_for_retry" || result === "failed") saveStatus = result;
+            } catch {
+              saveStatus = "failed";
+            }
+          }
+          if (runId) {
+            await options.offerOperations.patch(runId, { saveStatus });
+          }
+          sendResponse({ ok: true, saveStatus });
+        })();
         return true;
 
       // ── Citi Offers ──────────────────────────────────
@@ -829,61 +1333,191 @@ export function createMessageRouter(options: {
       }
 
       case "CITI_OFFERS_PROGRESS":
+        if (typeof message.runId !== "string") {
+          sendResponse({ ok: true, legacy: true });
+          return true;
+        }
+        void options.offerOperations.patchActiveRun("citi", message.runId, {
+          phase: "adding",
+          added: typeof message.added === "number" ? Math.max(0, message.added) : 0,
+          total: typeof message.total === "number" ? Math.max(0, message.total) : null,
+          remaining:
+            typeof message.total === "number"
+              ? Math.max(0, message.total - (typeof message.added === "number" ? message.added : 0))
+              : null,
+        });
         sendResponse({ ok: true });
         return true;
 
       case "CITI_OFFERS_COMPLETE":
-        if (Array.isArray(message.enrolledOffers) && message.enrolledOffers.length > 0) {
-          options.syncEnrolledOffers?.("citi", message);
-        }
-        sendResponse({ ok: true });
+        void (async () => {
+          const runId = typeof message.runId === "string" ? message.runId : null;
+          if (runId) {
+            const auth = await options.getCachedAuth();
+            await recordOfferActivations(
+              auth?.email,
+              runId,
+              typeof message.added === "number" ? message.added : 0,
+            ).catch(() => {});
+          }
+          const hasOffersToSave =
+            Array.isArray(message.enrolledOffers) && message.enrolledOffers.length > 0;
+          if (runId) {
+            await options.offerOperations.patchActiveRun("citi", runId, {
+              phase: message.cancelled === true ? "cancelled" : "completed",
+              added: typeof message.added === "number" ? Math.max(0, message.added) : 0,
+              failed: typeof message.failed === "number" ? Math.max(0, message.failed) : 0,
+              cancelled: message.cancelled === true,
+              saveStatus: hasOffersToSave ? "saving" : "saved",
+              remaining:
+                typeof message.total === "number"
+                  ? Math.max(
+                      0,
+                      message.total
+                        - (typeof message.added === "number" ? message.added : 0)
+                        - (typeof message.failed === "number" ? message.failed : 0),
+                    )
+                  : null,
+            });
+          }
+
+          let saveStatus: OfferSaveStatus = "saved";
+          if (hasOffersToSave) {
+            try {
+              const result = await options.syncEnrolledOffers?.("citi", message);
+              if (result === "queued_for_retry" || result === "failed") saveStatus = result;
+            } catch {
+              saveStatus = "failed";
+            }
+          }
+          if (runId) {
+            await options.offerOperations.patch(runId, { saveStatus });
+          }
+          sendResponse({ ok: true, saveStatus });
+        })();
         return true;
 
       // ── Capital One Offers (shopping offers are detected, not enrolled) ──
       case "CAPITALONE_OFFERS_PROGRESS":
+        if (typeof message.runId !== "string") {
+          sendResponse({ ok: true, legacy: true });
+          return true;
+        }
+        void options.offerOperations.patchActiveRun("capitalone", message.runId, {
+          phase: "checking",
+          total: typeof message.offersFound === "number"
+            ? Math.max(0, message.offersFound)
+            : null,
+        });
         sendResponse({ ok: true });
         return true;
 
       case "CAPITALONE_OFFERS_COMPLETE":
-        if (Array.isArray(message.detectedOffers) && message.detectedOffers.length > 0) {
-          options.syncDetectedOffers?.("capitalone", message);
-        }
-        sendResponse({ ok: true });
+        void (async () => {
+          const runId = typeof message.runId === "string" ? message.runId : null;
+          const hasOffersToSave =
+            Array.isArray(message.detectedOffers) && message.detectedOffers.length > 0;
+          if (runId) {
+            await options.offerOperations.patchActiveRun("capitalone", runId, {
+              phase: "completed",
+              added: 0,
+              total:
+                typeof message.synced === "number"
+                  ? Math.max(0, message.synced)
+                  : typeof message.offersFound === "number"
+                    ? Math.max(0, message.offersFound)
+                    : null,
+              saveStatus: hasOffersToSave ? "saving" : "saved",
+            });
+          }
+
+          let saveStatus: OfferSaveStatus = "saved";
+          try {
+            if (hasOffersToSave) {
+              const result = await options.syncDetectedOffers?.("capitalone", message);
+              if (result === "queued_for_retry" || result === "failed") saveStatus = result;
+            }
+          } catch {
+            saveStatus = "failed";
+          }
+          if (runId) {
+            await options.offerOperations.patch(runId, { saveStatus });
+          }
+          sendResponse({ ok: true, saveStatus });
+        })();
         return true;
 
       // ── Detected Offers (all providers) ───────────────
       case "CHASE_OFFERS_DETECTED":
+        if (
+          typeof message.runId === "string"
+          && Array.isArray(message.detectedOffers)
+          && message.detectedOffers.length > 0
+        ) {
+          void saveDetectedForRun("chase", message.runId, message)
+            .then((saveStatus) => sendResponse({ ok: saveStatus !== "failed", saveStatus }));
+          return true;
+        }
         if (Array.isArray(message.detectedOffers) && message.detectedOffers.length > 0) {
-          options.syncDetectedOffers?.("chase", message);
+          void Promise.resolve(options.syncDetectedOffers?.("chase", message))
+            .then((saveStatus) => sendResponse({ ok: saveStatus !== "failed", saveStatus }));
+          return true;
         }
         sendResponse({ ok: true });
         return true;
 
       case "AMEX_OFFERS_DETECTED":
         if (
-          Array.isArray(message.detectedOffers) &&
+          typeof message.runId === "string"
+          && Array.isArray(message.detectedOffers) &&
           (message.detectedOffers.length > 0 || message.snapshotComplete === true)
         ) {
-          options.syncDetectedOffers?.("amex", message);
+          void saveDetectedForRun("amex", message.runId, message)
+            .then((saveStatus) => sendResponse({ ok: saveStatus !== "failed", saveStatus }));
+          return true;
+        }
+        if (
+          Array.isArray(message.detectedOffers)
+          && (message.detectedOffers.length > 0 || message.snapshotComplete === true)
+        ) {
+          void Promise.resolve(options.syncDetectedOffers?.("amex", message))
+            .then((saveStatus) => sendResponse({ ok: saveStatus !== "failed", saveStatus }));
+          return true;
         }
         sendResponse({ ok: true });
         return true;
 
       case "CITI_OFFERS_DETECTED":
+        if (
+          typeof message.runId === "string"
+          && Array.isArray(message.detectedOffers)
+          && message.detectedOffers.length > 0
+        ) {
+          void saveDetectedForRun("citi", message.runId, message)
+            .then((saveStatus) => sendResponse({ ok: saveStatus !== "failed", saveStatus }));
+          return true;
+        }
         if (Array.isArray(message.detectedOffers) && message.detectedOffers.length > 0) {
-          options.syncDetectedOffers?.("citi", message);
+          void Promise.resolve(options.syncDetectedOffers?.("citi", message))
+            .then((saveStatus) => sendResponse({ ok: saveStatus !== "failed", saveStatus }));
+          return true;
         }
         sendResponse({ ok: true });
         return true;
 
       case "CAPITALONE_OFFERS_DETECTED":
+        if (
+          typeof message.runId === "string"
+          && Array.isArray(message.detectedOffers)
+          && message.detectedOffers.length > 0
+        ) {
+          void saveDetectedForRun("capitalone", message.runId, message)
+            .then((saveStatus) => sendResponse({ ok: saveStatus !== "failed", saveStatus }));
+          return true;
+        }
         if (Array.isArray(message.detectedOffers) && message.detectedOffers.length > 0) {
           void Promise.resolve(options.syncDetectedOffers?.("capitalone", message))
-            .then(() => sendResponse({ ok: true }))
-            .catch((error) => {
-              console.warn("[NextCard Capital One Offers] detected offers sync failed:", error);
-              sendResponse({ ok: false });
-            });
+            .then((saveStatus) => sendResponse({ ok: saveStatus !== "failed", saveStatus }));
           return true;
         }
         sendResponse({ ok: true });
@@ -891,7 +1525,10 @@ export function createMessageRouter(options: {
 
       // ── Open Side Panel to Tools Tab ────────────────
       case "OPEN_TOOLS_TAB":
-        chrome.storage.local.set({ pendingTab: "tools" });
+        chrome.storage.local.set({
+          pendingDestination: "offers",
+          pendingTab: "tools",
+        });
         chrome.action.setBadgeText({ text: "!" });
         chrome.action.setBadgeBackgroundColor({ color: "#d4943a" });
         sendResponse({ ok: true });

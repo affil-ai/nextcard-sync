@@ -5,6 +5,7 @@ const ONBOARDING_STEPS = 3;
 export function createOnboardingController(options: {
   onboardingBtn: HTMLButtonElement;
   onComplete: () => void;
+  getFinalLabel?: () => string;
 }) {
   let onboardingStep = 0;
   let maxVisitedStep = 0;
@@ -26,7 +27,7 @@ export function createOnboardingController(options: {
     }
 
     options.onboardingBtn.textContent = onboardingStep === ONBOARDING_STEPS - 1
-      ? "Get Started"
+      ? options.getFinalLabel?.() ?? "Continue with nextcard"
       : "Next";
     options.onboardingBtn.disabled = false;
   }
@@ -62,11 +63,40 @@ export function createConsentController(options: {
   consentModal: HTMLDivElement;
   consentCheckbox: HTMLInputElement;
   consentContinueBtn: HTMLButtonElement;
+  consentCancelBtn: HTMLButtonElement;
+  consentTitle: HTMLDivElement;
+  consentBody: HTMLDivElement;
   onContinue: (providerId: ProviderId) => void;
   onActionContinue?: (action: () => void) => void;
 }) {
   let pendingProvider: ProviderId | null = null;
   let pendingAction: (() => void) | null = null;
+  let previouslyFocused: HTMLElement | null = null;
+  const defaultBody = options.consentBody.innerHTML;
+
+  function focusableElements() {
+    return Array.from(options.consentModal.querySelectorAll<HTMLElement>(
+      'button:not([disabled]), input:not([disabled]), a[href], [tabindex]:not([tabindex="-1"])',
+    ));
+  }
+
+  function openModal() {
+    previouslyFocused = document.activeElement instanceof HTMLElement
+      ? document.activeElement
+      : null;
+    options.consentModal.classList.add("visible");
+    options.consentModal.setAttribute("aria-hidden", "false");
+    queueMicrotask(() => options.consentCheckbox.focus());
+  }
+
+  function closeModal(restoreFocus = true) {
+    options.consentModal.classList.remove("visible");
+    options.consentModal.setAttribute("aria-hidden", "true");
+    options.consentCheckbox.checked = false;
+    options.consentContinueBtn.disabled = true;
+    if (restoreFocus) previouslyFocused?.focus();
+    previouslyFocused = null;
+  }
 
   options.consentCheckbox.addEventListener("change", () => {
     options.consentContinueBtn.disabled = !options.consentCheckbox.checked;
@@ -78,9 +108,7 @@ export function createConsentController(options: {
     const action = pendingAction;
     pendingProvider = null;
     pendingAction = null;
-    options.consentModal.classList.remove("visible");
-    options.consentCheckbox.checked = false;
-    options.consentContinueBtn.disabled = true;
+    closeModal(false);
     if (action) {
       options.onActionContinue?.(action);
       return;
@@ -90,18 +118,59 @@ export function createConsentController(options: {
     }
   });
 
+  options.consentCancelBtn.addEventListener("click", () => {
+    pendingProvider = null;
+    pendingAction = null;
+    closeModal(true);
+  });
+
+  options.consentModal.addEventListener("keydown", (event) => {
+    if (!options.consentModal.classList.contains("visible")) return;
+    if (event.key === "Escape") {
+      event.preventDefault();
+      options.consentCancelBtn.click();
+      return;
+    }
+    if (event.key !== "Tab") return;
+    const elements = focusableElements();
+    if (elements.length === 0) return;
+    const first = elements[0];
+    const last = elements[elements.length - 1];
+    if (event.shiftKey && document.activeElement === first) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && document.activeElement === last) {
+      event.preventDefault();
+      first.focus();
+    }
+  });
+
+  function resetCopy() {
+    options.consentTitle.textContent = "Before we continue";
+    options.consentBody.innerHTML = defaultBody;
+    options.consentContinueBtn.textContent = "Agree & continue";
+  }
+
   return {
     request(providerId: ProviderId) {
+      resetCopy();
       pendingProvider = providerId;
       pendingAction = null;
-      options.consentModal.classList.add("visible");
+      openModal();
       options.consentCheckbox.checked = false;
       options.consentContinueBtn.disabled = true;
     },
-    requestAction(action: () => void) {
+    requestAction(
+      action: () => void,
+      copy?: { title?: string; body?: string; continueLabel?: string },
+    ) {
       pendingProvider = null;
       pendingAction = action;
-      options.consentModal.classList.add("visible");
+      resetCopy();
+      if (copy?.title) options.consentTitle.textContent = copy.title;
+      if (copy?.body) options.consentBody.innerHTML = copy.body;
+      if (copy?.continueLabel) options.consentContinueBtn.textContent = copy.continueLabel;
+      openModal();
       options.consentCheckbox.checked = false;
       options.consentContinueBtn.disabled = true;
     },

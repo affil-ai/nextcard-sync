@@ -273,8 +273,10 @@ function normalizeOffers(payload: OfferSyncPayload): OfferSyncPayload {
   };
 }
 
-export async function syncOffersToNextCard(payload: OfferSyncPayload): Promise<boolean> {
-  if (payload.offers.length === 0) return true;
+export type OfferSyncResult = "saved" | "queued_for_retry" | "failed";
+
+export async function syncOffersToNextCard(payload: OfferSyncPayload): Promise<OfferSyncResult> {
+  if (payload.offers.length === 0) return "saved";
 
   payload = normalizeOffers(payload);
 
@@ -287,13 +289,13 @@ export async function syncOffersToNextCard(payload: OfferSyncPayload): Promise<b
         } else {
           await updateOfferUrlCache(payload);
         }
-        return true;
+        return "saved";
       }
 
       // Auth errors won't resolve with retry
       if (result.error?.includes("token") || result.error?.includes("401")) {
         console.warn(`[NextCard Offers Sync] Auth error, skipping retry: ${result.error}`);
-        return persistForRetry(payload);
+        return await persistForRetry(payload) ? "queued_for_retry" : "failed";
       }
 
       console.warn(`[NextCard Offers Sync] Attempt ${attempt + 1} failed: ${result.error}`);
@@ -307,7 +309,7 @@ export async function syncOffersToNextCard(payload: OfferSyncPayload): Promise<b
   }
 
   // All retries exhausted — persist for later
-  return persistForRetry(payload);
+  return await persistForRetry(payload) ? "queued_for_retry" : "failed";
 }
 
 /** Retry any pending syncs stored from previous failures. Call on startup. */
@@ -340,14 +342,16 @@ export async function retryPendingOfferSyncs(): Promise<void> {
   }
 }
 
-export async function syncDetectedOffersToNextCard(payload: DetectedOfferSyncPayload): Promise<void> {
+export async function syncDetectedOffersToNextCard(
+  payload: DetectedOfferSyncPayload,
+): Promise<"saved" | "failed"> {
   const auth = await getAuth();
-  if (!auth) return;
+  if (!auth) return "failed";
 
   try {
     let latestOfferMap: OfferUrlCache | undefined;
     const issuerCardKey = await getIssuerCardKey(payload.issuer, payload.issuerCardId);
-    if (!issuerCardKey) return;
+    if (!issuerCardKey) return "failed";
     const chunkOffsets = payload.offers.length === 0 ? [0] : Array.from(
       { length: Math.ceil(payload.offers.length / DETECTED_OFFER_SYNC_CHUNK_SIZE) },
       (_, index) => index * DETECTED_OFFER_SYNC_CHUNK_SIZE,
@@ -384,7 +388,7 @@ export async function syncDetectedOffersToNextCard(payload: DetectedOfferSyncPay
           offset,
           count: offers.length,
         });
-        return;
+        return "failed";
       }
 
       const body = await response.json().catch(() => ({}));
@@ -402,8 +406,10 @@ export async function syncDetectedOffersToNextCard(payload: DetectedOfferSyncPay
     if (latestOfferMap) {
       await saveOfferMaps(latestOfferMap);
     }
+    return "saved";
   } catch (e) {
     console.warn("[NextCard Detected Offers] sync error:", e);
+    return "failed";
   }
 }
 

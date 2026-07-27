@@ -22,10 +22,11 @@ export function buildHomeSnapshot(
 
 export function populateOnboardingProviders(container: HTMLDivElement) {
   container.innerHTML = "";
+  const onboardingProviderIds: ProviderId[] = ["chase", "amex", "citi", "capitalone"];
 
   // Duplicate the provider set so the marquee loops without a seam.
   for (let copy = 0; copy < 2; copy += 1) {
-    for (const providerId of orderedProviderIds) {
+    for (const providerId of onboardingProviderIds) {
       const img = document.createElement("img");
       img.src = getProviderIconUrl(providerId);
       img.alt = providerRegistry[providerId].name;

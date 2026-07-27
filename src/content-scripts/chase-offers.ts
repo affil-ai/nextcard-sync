@@ -251,21 +251,35 @@ async function enrollOffer(offer: ChaseOffer, epi: string): Promise<boolean> {
 // ── Runner ─────────────────────────────────────────────────
 
 let cancelled = false;
+let activeOfferRunId: string | null = null;
 
 function sendProgress(data: Record<string, unknown>) {
-  chrome.runtime.sendMessage({ type: "CHASE_OFFERS_PROGRESS", ...data }).catch(() => {});
+  chrome.runtime.sendMessage({
+    type: "CHASE_OFFERS_PROGRESS",
+    runId: activeOfferRunId,
+    ...data,
+  }).catch(() => {});
 }
 
-async function runEnrollment(cardId: string, allCardIds: string[]) {
+async function runEnrollment(
+  cardId: string,
+  allCardIds: string[],
+  maxOffers: number | null,
+) {
   cancelled = false;
 
   sendProgress({ status: "fetching" });
   const observedOffers = await listOffers(allCardIds, cardId);
-  const offers = observedOffers.filter(isChaseActivatableOffer);
+  const availableOffers = observedOffers.filter(isChaseActivatableOffer);
+  const offers =
+    maxOffers == null
+      ? availableOffers
+      : availableOffers.slice(0, Math.max(0, maxOffers));
 
   if (offers.length === 0) {
     chrome.runtime.sendMessage({
       type: "CHASE_OFFERS_COMPLETE",
+      runId: activeOfferRunId,
       added: 0,
       failed: 0,
       cardId,
@@ -277,29 +291,39 @@ async function runEnrollment(cardId: string, allCardIds: string[]) {
 
   const epi = getEnterprisePartyId();
   if (!epi) {
-    chrome.runtime.sendMessage({ type: "CHASE_OFFERS_COMPLETE", added: 0 }).catch(() => {});
+    chrome.runtime.sendMessage({
+      type: "CHASE_OFFERS_COMPLETE",
+      runId: activeOfferRunId,
+      added: 0,
+    }).catch(() => {});
     return;
   }
-
-  // Fire all enrollments in parallel — Chase enrollment is a fast cross-origin GET
-  const results = await Promise.allSettled(
-    offers.map((offer) => enrollOffer(offer, epi)),
-  );
 
   let added = 0;
   let failed = 0;
   const enrolledOffers: ChaseOffer[] = [];
-  for (let i = 0; i < results.length; i++) {
-    const r = results[i];
-    if (r.status === "fulfilled" && r.value) { added++; enrolledOffers.push(offers[i]); }
-    else failed++;
+  for (const offer of offers) {
+    if (cancelled) break;
+    try {
+      if (await enrollOffer(offer, epi)) {
+        added++;
+        enrolledOffers.push(offer);
+      } else {
+        failed++;
+      }
+    } catch {
+      failed++;
+    }
+    sendProgress({ added, failed, total: offers.length });
   }
 
-  sendProgress({ added, failed, total: offers.length });
   chrome.runtime.sendMessage({
     type: "CHASE_OFFERS_COMPLETE",
+    runId: activeOfferRunId,
     added,
     failed,
+    total: offers.length,
+    cancelled,
     cardId,
     cardName: selectedCardName,
     cardLastDigits: selectedCardLastDigits,
@@ -328,6 +352,7 @@ let selectedCardLastDigits: string | null = null;
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (message.type === "CHASE_OFFERS_DISCOVER") {
+    activeOfferRunId = typeof message.runId === "string" ? message.runId : activeOfferRunId;
     (async () => {
       const cards = await discoverCards();
       if (cards.length === 0) {
@@ -352,6 +377,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         if (offers.length > 0) {
           chrome.runtime.sendMessage({
             type: "CHASE_OFFERS_DETECTED",
+            runId: activeOfferRunId,
             cardId: cards[i].id,
             cardName: cards[i].name,
             cardLastDigits: cards[i].lastDigits,
@@ -385,14 +411,29 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   }
 
   if (message.type === "CHASE_OFFERS_RUN") {
+    activeOfferRunId = typeof message.runId === "string" ? message.runId : null;
     selectedCardName = (message.cardName as string) ?? "";
     selectedCardLastDigits = (message.cardLastDigits as string) ?? null;
-    runEnrollment(message.cardId, message.allCardIds ?? [message.cardId]);
+    runEnrollment(
+      message.cardId,
+      message.allCardIds ?? [message.cardId],
+      typeof message.maxOffers === "number"
+        ? Math.max(0, Math.floor(message.maxOffers))
+        : null,
+    );
     sendResponse({ ok: true });
     return true;
   }
 
   if (message.type === "CHASE_OFFERS_STOP") {
+    if (
+      typeof message.runId === "string"
+      && activeOfferRunId
+      && message.runId !== activeOfferRunId
+    ) {
+      sendResponse({ ok: false });
+      return true;
+    }
     cancelled = true;
     sendResponse({ ok: true });
     return true;

@@ -117,6 +117,7 @@ async function listOffers(accountId: string): Promise<CitiOffer[]> {
 // ── Enrollment ─────────────────────────────────────────────
 
 let cancelled = false;
+let activeOfferRunId: string | null = null;
 let useFallbackUrl = false;
 
 async function enrollOffer(offerId: string, accountId: string): Promise<boolean> {
@@ -141,19 +142,34 @@ async function enrollOffer(offerId: string, accountId: string): Promise<boolean>
 // ── Runner ─────────────────────────────────────────────────
 
 function sendProgress(data: Record<string, unknown>) {
-  chrome.runtime.sendMessage({ type: "CITI_OFFERS_PROGRESS", ...data }).catch(() => {});
+  chrome.runtime.sendMessage({
+    type: "CITI_OFFERS_PROGRESS",
+    runId: activeOfferRunId,
+    ...data,
+  }).catch(() => {});
 }
 
-async function runEnrollment(accountId: string) {
+async function runEnrollment(accountId: string, maxOffers: number | null) {
   cancelled = false;
   useFallbackUrl = false;
   sendProgress({ status: "fetching" });
 
   const offers = await listOffers(accountId);
-  const eligible = offers.filter((o) => !o.enrolled);
+  const allEligible = offers.filter((o) => !o.enrolled);
+  const eligible =
+    maxOffers == null
+      ? allEligible
+      : allEligible.slice(0, Math.max(0, maxOffers));
 
   if (eligible.length === 0) {
-    chrome.runtime.sendMessage({ type: "CITI_OFFERS_COMPLETE", added: 0 }).catch(() => {});
+    chrome.runtime.sendMessage({
+      type: "CITI_OFFERS_COMPLETE",
+      runId: activeOfferRunId,
+      added: 0,
+      failed: 0,
+      total: 0,
+      cancelled: false,
+    }).catch(() => {});
     return;
   }
 
@@ -173,8 +189,11 @@ async function runEnrollment(accountId: string) {
 
   chrome.runtime.sendMessage({
     type: "CITI_OFFERS_COMPLETE",
+    runId: activeOfferRunId,
     added,
     failed,
+    total: eligible.length,
+    cancelled,
     accountId,
     cardName: selectedCardName,
     cardLastDigits: selectedCardLastDigits,
@@ -212,6 +231,7 @@ let selectedCardLastDigits: string | null = null;
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (message.type === "CITI_OFFERS_DISCOVER") {
+    activeOfferRunId = typeof message.runId === "string" ? message.runId : activeOfferRunId;
     (async () => {
       const cards = await discoverCards();
       if (cards.length === 0) {
@@ -226,6 +246,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         if (probes[i].length > 0) {
           chrome.runtime.sendMessage({
             type: "CITI_OFFERS_DETECTED",
+            runId: activeOfferRunId,
             accountId: cards[i].accountId,
             cardName: cards[i].name,
             cardLastDigits: cards[i].lastDigits,
@@ -261,17 +282,30 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   }
 
   if (message.type === "CITI_OFFERS_RUN") {
+    activeOfferRunId = typeof message.runId === "string" ? message.runId : null;
     selectedCardName = (message.cardName as string) ?? "";
     selectedCardLastDigits = (message.cardLastDigits as string) ?? null;
-    runEnrollment(message.accountId);
+    runEnrollment(
+      message.accountId,
+      typeof message.maxOffers === "number"
+        ? Math.max(0, Math.floor(message.maxOffers))
+        : null,
+    );
     sendResponse({ ok: true });
     return true;
   }
 
   if (message.type === "CITI_OFFERS_STOP") {
+    if (
+      typeof message.runId === "string"
+      && activeOfferRunId
+      && message.runId !== activeOfferRunId
+    ) {
+      sendResponse({ ok: false });
+      return true;
+    }
     cancelled = true;
     sendResponse({ ok: true });
     return true;
   }
 });
-

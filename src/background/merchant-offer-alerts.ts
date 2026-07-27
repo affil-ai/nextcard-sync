@@ -323,7 +323,10 @@ function injectOfferToast(
   if (hasDetectedOffers) {
     shadow.querySelector(".nc-toast")?.addEventListener("click", (e) => {
       if ((e.target as HTMLElement).closest(".nc-x")) return;
-      chrome.storage.local.set({ pendingTab: "tools" });
+      chrome.storage.local.set({
+        pendingDestination: "offers",
+        pendingTab: "tools",
+      });
       chrome.runtime.sendMessage({ type: "OPEN_TOOLS_TAB" }).catch(() => {});
       const body = shadow.querySelector(".nc-body");
       if (body) {

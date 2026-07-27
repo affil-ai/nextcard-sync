@@ -10,6 +10,7 @@ function getRequiredElement<T extends HTMLElement>(id: string) {
 }
 
 export const coreViews = {
+  loading: getRequiredElement<HTMLDivElement>("loadingView"),
   auth: getRequiredElement<HTMLDivElement>("authView"),
   disclosure: getRequiredElement<HTMLDivElement>("disclosureView"),
   home: getRequiredElement<HTMLDivElement>("homeView"),
@@ -42,6 +43,9 @@ export const views = {
 export const authElements = {
   authSignInBtn: getRequiredElement<HTMLButtonElement>("authSignInBtn"),
   authLogo: getRequiredElement<HTMLImageElement>("authLogo"),
+  loadingLogo: getRequiredElement<HTMLImageElement>("loadingLogo"),
+  loadingLabel: getRequiredElement<HTMLSpanElement>("loadingLabel"),
+  loadingDetail: getRequiredElement<HTMLSpanElement>("loadingDetail"),
   userAvatar: getRequiredElement<HTMLDivElement>("userAvatar"),
   userName: getRequiredElement<HTMLDivElement>("userName"),
   userEmail: getRequiredElement<HTMLDivElement>("userEmail"),
@@ -65,6 +69,9 @@ export const consentElements = {
   consentModal: getRequiredElement<HTMLDivElement>("consentModal"),
   consentCheckbox: getRequiredElement<HTMLInputElement>("consentCheckbox"),
   consentContinueBtn: getRequiredElement<HTMLButtonElement>("consentContinueBtn"),
+  consentCancelBtn: getRequiredElement<HTMLButtonElement>("consentCancelBtn"),
+  consentTitle: getRequiredElement<HTMLDivElement>("consentTitle"),
+  consentBody: getRequiredElement<HTMLDivElement>("consentBody"),
 };
 
 export const footerElements = {

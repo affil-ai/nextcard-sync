@@ -30,7 +30,25 @@ export async function setAuth(auth: NextCardAuth): Promise<void> {
 }
 
 export async function clearAuth(): Promise<void> {
-  await chrome.storage.local.clear();
+  const stored = await chrome.storage.local.get(null);
+  const accountScopedKeys = Object.keys(stored).filter((key) => (
+    key === STORAGE_KEY
+    || key === "nextcard_extension_profile"
+    || key === "nextcard_offer_operation_snapshot_v1"
+    || key === "offerUrlCache"
+    || key === "detectedOfferUrlCache"
+    || key === "pendingOfferSyncs"
+    || key === "disclosureAccepted"
+    || key === "consentGiven"
+    || key === "firstSyncCompleted"
+    || key === "offerConsentVersion"
+    || key === "pendingDestination"
+    || key === "pendingTab"
+    || key.startsWith("provider_")
+  ));
+  if (accountScopedKeys.length > 0) {
+    await chrome.storage.local.remove(accountScopedKeys);
+  }
 }
 
 /**

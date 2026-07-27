@@ -12,6 +12,10 @@
  */
 
 import type { MarriottLoyaltyData, LoginState, MarriottCertificate } from "../lib/types";
+import {
+  createMarriottCertificateKey,
+  extractMarriottAwardDescription,
+} from "../lib/marriott-certificate";
 import { createContentScriptRunControl } from "../lib/content-script-run-control";
 import { showOverlay, updateOverlay, updateOverlayProgress } from "../lib/overlay";
 import { createLoginStateMonitor } from "../lib/login-state-monitor";
@@ -510,21 +514,6 @@ function getAwardContextText(el: Element) {
   return texts.find((text) => EXPIRY_REGEX.test(text)) ?? texts[0] ?? "";
 }
 
-function extractAwardDescription(text: string, awardType: string) {
-  if (awardType === "Club Level Upgrade") {
-    const match = text.match(
-      /(Club\s+Level\s+Upgrade\s+Up\s+To\s+\d+\s+Nights?\s*-\s*\d+)/i
-    );
-    return match?.[1]?.replace(/\s+/g, " ").trim() ?? null;
-  }
-
-  const match = text.match(
-    /((?:Free|Suite)\s+Night\s+Award\s+valued\s+up\s+to\s+[\w\d,]+\s*(?:pts|points)?[^]*?)(?=\s*Expires?|\s*$)/i
-  );
-
-  return match?.[1]?.replace(/\s+/g, " ").trim() ?? null;
-}
-
 function scrapeEarnedRewards(): MarriottCertificate[] {
   const certs: MarriottCertificate[] = [];
 
@@ -536,7 +525,7 @@ function scrapeEarnedRewards(): MarriottCertificate[] {
     .filter((el) => (el as HTMLElement).offsetParent !== null)
     .sort((a, b) => (a.textContent?.length ?? 0) - (b.textContent?.length ?? 0));
 
-  const seenDescriptions = new Set<string>();
+  const seenCertificates = new Set<string>();
 
   for (const el of allElements) {
     const text = el.textContent?.trim() ?? "";
@@ -568,14 +557,18 @@ function scrapeEarnedRewards(): MarriottCertificate[] {
     if (el.querySelectorAll("*").length > 20) continue;
 
     // Extract the specific award description line
-    const description = extractAwardDescription(contextText, awardType);
+    const description = extractMarriottAwardDescription(contextText, awardType);
     if (!description) continue;
-
-    if (seenDescriptions.has(description)) continue;
-    seenDescriptions.add(description);
 
     const expiryMatch = contextText.match(EXPIRY_REGEX);
     const expiryDate = expiryMatch ? expiryMatch[1].trim() : null;
+    const certificateKey = createMarriottCertificateKey({
+      type: awardType,
+      description,
+      expiryDate,
+    });
+    if (seenCertificates.has(certificateKey)) continue;
+    seenCertificates.add(certificateKey);
 
     let propertyCategory: string | null = null;
     const ptsMatch = description.match(/up\s+to\s+([\d,]+K?)\s*(?:pts|points)/i);

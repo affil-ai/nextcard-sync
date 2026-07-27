@@ -248,7 +248,10 @@ function showToast(offers: CachedOffer[], dismissKey: string): void {
   if (hasDetectedOffers) {
     shadow.querySelector(".nc-toast")?.addEventListener("click", (e) => {
       if ((e.target as HTMLElement).closest(".nc-x")) return;
-      chrome.storage.local.set({ pendingTab: "tools" });
+      chrome.storage.local.set({
+        pendingDestination: "offers",
+        pendingTab: "tools",
+      });
       chrome.runtime.sendMessage({ type: "OPEN_TOOLS_TAB" }).catch(() => {});
       // Transform toast into a nudge to click the extension icon
       const body = shadow.querySelector(".nc-body");

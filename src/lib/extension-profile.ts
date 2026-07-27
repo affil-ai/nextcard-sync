@@ -46,13 +46,17 @@ export function normalizeExtensionProfile(value: unknown): ExtensionProfile | nu
   }
 
   return {
-    accountLevel,
+    accountLevel: __MOCK_FREE_PLAN__ ? "free" : accountLevel,
     allowedProviders: normalizeProviderList(value.allowedProviders),
     lockedProviders: normalizeProviderList(value.lockedProviders),
+    offersFirstUiEnabled:
+      typeof value.offersFirstUiEnabled === "boolean"
+        ? value.offersFirstUiEnabled
+        : undefined,
     upgradeUrl:
       typeof value.upgradeUrl === "string"
         ? value.upgradeUrl
-        : "/dashboard/settings?tab=account#billing",
+        : "/dashboard/settings?tab=billing",
   };
 }
 
@@ -140,6 +144,10 @@ export function isProviderLocked(profile: ExtensionProfile | null, providerId: P
 }
 
 export function getUpgradeUrl(profile: ExtensionProfile | null) {
-  const path = profile?.upgradeUrl ?? "/dashboard/settings?tab=account#billing";
+  const configuredPath = profile?.upgradeUrl;
+  const path =
+    !configuredPath || configuredPath === "/dashboard/settings?tab=account#billing"
+      ? "/dashboard/settings?tab=billing"
+      : configuredPath;
   return new URL(path, __NEXTCARD_URL__).toString();
 }

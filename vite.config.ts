@@ -38,6 +38,8 @@ export default defineConfig(({ mode }) => {
     define: {
       __NEXTCARD_URL__: JSON.stringify(NEXTCARD_URL),
       __CONVEX_SITE_URL__: JSON.stringify(CONVEX_SITE_URL),
+      __OFFERS_FIRST_UI_DEV_OVERRIDE__: JSON.stringify(mode === "development"),
+      __MOCK_FREE_PLAN__: JSON.stringify(mode === "development"),
     },
     build: {
       outDir: mode === "development" ? "dist-dev" : "dist",

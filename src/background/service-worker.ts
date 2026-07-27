@@ -17,6 +17,7 @@ import {
 } from "../lib/sync-to-nextcard";
 import { syncOffersToNextCard, syncDetectedOffersToNextCard, retryPendingOfferSyncs, pullOfferUrlCache } from "../lib/sync-offers-to-nextcard";
 import type { OfferSyncPayload, DetectedOfferSyncPayload } from "../lib/sync-offers-to-nextcard";
+import { retryPendingOfferActivationCompletions } from "../lib/offer-activation-usage";
 import { providerRegistry } from "../providers/provider-registry";
 import { createMessageRouter, createExternalMessageRouter } from "./core/message-router";
 import { createRuntimeStateStore } from "./core/runtime-state";
@@ -32,6 +33,8 @@ import { createChaseSync } from "./syncs/chase";
 import { createGenericSyncHandlers } from "./syncs/generic";
 import { createHyattSync } from "./syncs/hyatt";
 import { registerMerchantOfferAlertMonitor } from "./merchant-offer-alerts";
+import { createOfferOperationStore } from "./offer-operation-store";
+import { createOfferOperationCoordinator } from "./offer-operation-coordinator";
 
 const VERIFY_INTERVAL_MS = 5 * 60 * 1000;
 const BACKEND_PUSH_RETRY_COOLDOWN_MS = 30 * 1000;
@@ -43,9 +46,12 @@ let pendingProviderRetryPromise: Promise<void> | null = null;
 const providersRetriedThisSession = new Set<ProviderId>();
 
 const stateStore = createRuntimeStateStore();
+const offerOperations = createOfferOperationStore();
+const offerCoordinator = createOfferOperationCoordinator(offerOperations);
 const extensionNavigatingTabs = createExtensionNavigationState();
 
 const persistedStateHydrated = stateStore.hydratePersistedState();
+void offerCoordinator.resume();
 
 async function getCachedAuth() {
   const now = Date.now();
@@ -56,6 +62,7 @@ async function getCachedAuth() {
   const valid = await verifyAuth();
   lastVerifyAt = now;
   if (!valid) {
+    await offerCoordinator.clearAccountState();
     lastVerifyResult = null;
     return null;
   }
@@ -268,11 +275,11 @@ async function recordConsent(message: Record<string, unknown>) {
     console.warn(
       "[NextCard SW] Consent: no auth token available, skipping API call",
     );
-    return;
+    throw new Error("No authenticated nextcard account");
   }
 
   try {
-    await fetch(`${__CONVEX_SITE_URL__}/extension/consent`, {
+    const response = await fetch(`${__CONVEX_SITE_URL__}/extension/consent`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -284,8 +291,10 @@ async function recordConsent(message: Record<string, unknown>) {
         userAgent: message.userAgent,
       }),
     });
+    if (!response.ok) throw new Error(`Consent API returned ${response.status}`);
   } catch {
     console.warn("[NextCard SW] Consent API call failed");
+    throw new Error("Consent API call failed");
   }
 }
 
@@ -293,6 +302,7 @@ function onSignOut() {
   resetAuthCache();
   stateStore.resetAllStates();
   void setStoredExtensionProfile(null);
+  void offerCoordinator.clearAccountState();
 }
 
 async function pushScrapedData(providerId: ProviderId, data: unknown) {
@@ -504,6 +514,8 @@ chrome.runtime.onMessage.addListener(
     getExtensionProfile: getStoredExtensionProfile,
     refreshExtensionProfile,
     openUpgrade: openUpgradeTab,
+    offerOperations,
+    offerCoordinator,
     syncEnrolledOffers: async (issuer, message) => {
       // Reuse the sync payload shape so message handlers stay aligned with backend expectations.
       const enrolledOffers = message.enrolledOffers as EnrolledOfferSyncMessage[];
@@ -522,10 +534,11 @@ chrome.runtime.onMessage.addListener(
       // The router waits for this promise so every verified card has either
       // reached NextCard or been persisted for the existing retry path before
       // the Amex run is reported complete.
-      const syncedOrQueued = await syncOffersToNextCard(payload);
-      if (!syncedOrQueued) {
+      const syncResult = await syncOffersToNextCard(payload);
+      if (syncResult === "failed") {
         throw new Error("Could not persist the verified Amex offer sync for retry");
       }
+      return syncResult;
     },
     syncDetectedOffers: (issuer, message) => {
       type DetectedOfferMsg = Omit<DetectedOfferSyncPayload["offers"][number], "detectedAt">;
@@ -565,7 +578,11 @@ chrome.runtime.onMessage.addListener(
 chrome.runtime.onMessageExternal.addListener(
   createExternalMessageRouter({
     nextCardOrigin: new URL(__NEXTCARD_URL__).origin,
-    setAuth,
+    setAuth: async (auth) => {
+      await offerCoordinator.clearAccountState();
+      await setAuth(auth);
+      await retryPendingOfferActivationCompletions();
+    },
     resetAuthCache,
     hydrateFromNextCard: async () => {
       await persistedStateHydrated;
@@ -576,8 +593,14 @@ chrome.runtime.onMessageExternal.addListener(
 );
 
 chrome.alarms.create("pullOfferUrlCache", { periodInMinutes: 30 });
+chrome.alarms.create("retryOfferActivationCompletions", {
+  periodInMinutes: 5,
+});
 chrome.alarms.onAlarm.addListener((alarm) => {
   if (alarm.name === "pullOfferUrlCache") void pullOfferUrlCache();
+  if (alarm.name === "retryOfferActivationCompletions") {
+    void retryPendingOfferActivationCompletions();
+  }
 });
 
 void getAuth().then((auth) => {
@@ -588,6 +611,7 @@ void getAuth().then((auth) => {
       console.warn("[NextCard SW] Startup hydrate failed:", error);
     });
     void retryPendingOfferSyncs();
+    void retryPendingOfferActivationCompletions();
     void pullOfferUrlCache();
   }
 });
