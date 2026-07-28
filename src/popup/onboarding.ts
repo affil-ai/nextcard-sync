@@ -1,6 +1,6 @@
 import type { ProviderId } from "../lib/types";
 
-const ONBOARDING_STEPS = 3;
+const ONBOARDING_STEPS = 4;
 
 export function createOnboardingController(options: {
   onboardingBtn: HTMLButtonElement;

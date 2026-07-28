@@ -55,7 +55,6 @@ export const authElements = {
 
 export const homeElements = {
   providerList: getRequiredElement<HTMLDivElement>("providerList"),
-  onboardingProviders: getRequiredElement<HTMLDivElement>("onboardingProviders"),
   tourTooltip: getRequiredElement<HTMLDivElement>("tourTooltip"),
   congratsBanner: getRequiredElement<HTMLDivElement>("congratsBanner"),
   congratsBtn: getRequiredElement<HTMLButtonElement>("congratsBtn"),

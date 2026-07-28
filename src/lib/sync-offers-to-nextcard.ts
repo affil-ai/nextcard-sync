@@ -29,6 +29,7 @@ function getLegacyIssuerCardId(issuerCardId: string): string {
 }
 
 export interface OfferSyncPayload {
+  runId?: string;
   issuer: string;
   issuerCardId: string;
   issuerCardName: string;
@@ -273,33 +274,56 @@ function normalizeOffers(payload: OfferSyncPayload): OfferSyncPayload {
   };
 }
 
-export type OfferSyncResult = "saved" | "queued_for_retry" | "failed";
+export type OfferSyncStatus = "saved" | "queued_for_retry" | "failed";
+
+export interface OfferSyncResult {
+  status: OfferSyncStatus;
+  error: string | null;
+}
 
 export async function syncOffersToNextCard(payload: OfferSyncPayload): Promise<OfferSyncResult> {
-  if (payload.offers.length === 0) return "saved";
+  if (payload.offers.length === 0) return { status: "saved", error: null };
 
   payload = normalizeOffers(payload);
+  let lastError = "nextcard did not accept the offer update";
 
   for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
     try {
       const result = await postOfferSync(payload);
       if (result.ok) {
         if (result.offerMap) {
-          await saveOfferMaps(result.offerMap);
+          try {
+            await saveOfferMaps(result.offerMap);
+          } catch (error) {
+            // The remote write already succeeded. A local reminder-cache
+            // failure must not turn that successful write into a sync failure.
+            console.warn(
+              "[NextCard Offers Sync] Saved remotely; local offer cache will refresh later:",
+              error,
+            );
+          }
         } else {
           await updateOfferUrlCache(payload);
         }
-        return "saved";
+        return { status: "saved", error: null };
       }
+      lastError = result.error ?? lastError;
 
       // Auth errors won't resolve with retry
       if (result.error?.includes("token") || result.error?.includes("401")) {
         console.warn(`[NextCard Offers Sync] Auth error, skipping retry: ${result.error}`);
-        return await persistForRetry(payload) ? "queued_for_retry" : "failed";
+        const queued = await persistForRetry(payload);
+        return queued
+          ? { status: "queued_for_retry", error: lastError }
+          : {
+              status: "failed",
+              error: "Couldn’t queue the nextcard save for retry. Reload the extension and try again.",
+            };
       }
 
       console.warn(`[NextCard Offers Sync] Attempt ${attempt + 1} failed: ${result.error}`);
     } catch (e) {
+      lastError = e instanceof Error ? e.message : "Unexpected nextcard sync error";
       console.warn(`[NextCard Offers Sync] Attempt ${attempt + 1} network error:`, e);
     }
 
@@ -309,15 +333,25 @@ export async function syncOffersToNextCard(payload: OfferSyncPayload): Promise<O
   }
 
   // All retries exhausted — persist for later
-  return await persistForRetry(payload) ? "queued_for_retry" : "failed";
+  const queued = await persistForRetry(payload);
+  return queued
+    ? { status: "queued_for_retry", error: lastError }
+    : {
+        status: "failed",
+        error: "Couldn’t queue the nextcard save for retry. Reload the extension and try again.",
+      };
 }
 
 /** Retry any pending syncs stored from previous failures. Call on startup. */
-export async function retryPendingOfferSyncs(): Promise<void> {
+export async function retryPendingOfferSyncs(): Promise<{
+  savedRunIds: string[];
+  remainingRunIds: string[];
+}> {
+  const savedRunIds: string[] = [];
   try {
     const stored = await chrome.storage.local.get(STORAGE_KEY);
     const pending: OfferSyncPayload[] = stored[STORAGE_KEY] ?? [];
-    if (pending.length === 0) return;
+    if (pending.length === 0) return { savedRunIds, remainingRunIds: [] };
 
 
     const remaining: OfferSyncPayload[] = [];
@@ -327,9 +361,18 @@ export async function retryPendingOfferSyncs(): Promise<void> {
       if (!result.ok) {
         remaining.push(payload);
       } else if (result.offerMap) {
-        await saveOfferMaps(result.offerMap);
+        try {
+          await saveOfferMaps(result.offerMap);
+        } catch (error) {
+          console.warn(
+            "[NextCard Offers Sync] Retry saved remotely; local offer cache will refresh later:",
+            error,
+          );
+        }
+        if (payload.runId) savedRunIds.push(payload.runId);
       } else {
         await updateOfferUrlCache(payload);
+        if (payload.runId) savedRunIds.push(payload.runId);
       }
     }
 
@@ -337,8 +380,13 @@ export async function retryPendingOfferSyncs(): Promise<void> {
     if (remaining.length > 0) {
       console.warn(`[NextCard Offers Sync] ${remaining.length} syncs still pending after retry`);
     }
+    return {
+      savedRunIds,
+      remainingRunIds: remaining.flatMap((payload) => payload.runId ? [payload.runId] : []),
+    };
   } catch (e) {
     console.error("[NextCard Offers Sync] retryPendingOfferSyncs error:", e);
+    return { savedRunIds, remainingRunIds: [] };
   }
 }
 

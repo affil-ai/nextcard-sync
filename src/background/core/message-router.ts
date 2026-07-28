@@ -260,13 +260,20 @@ export function createMessageRouter(options: {
   ) {
     await options.offerOperations.patchActiveRun(issuer, runId, {
       saveStatus: "saving",
+      saveError: null,
     });
     let saveStatus: OfferSaveStatus = "saved";
     try {
       const result = await options.syncDetectedOffers?.(issuer, message);
       if (result === "queued_for_retry" || result === "failed") saveStatus = result;
-    } catch {
+    } catch (error) {
       saveStatus = "failed";
+      await options.offerOperations.patchActiveRun(issuer, runId, {
+        saveError:
+          error instanceof Error
+            ? error.message
+            : "Couldn’t save detected offers to nextcard.",
+      });
     }
     const snapshot = await options.offerOperations.getSnapshot();
     const current = snapshot.active?.runId === runId
@@ -1204,6 +1211,7 @@ export function createMessageRouter(options: {
           }).catch(() => {});
           await options.offerOperations.patch(runId, {
             saveStatus: syncError ? "failed" : completionSaveStatus,
+            saveError: syncError,
           });
           sendResponse({ ok: true });
         })();
@@ -1261,16 +1269,21 @@ export function createMessageRouter(options: {
           }
 
           let saveStatus: OfferSaveStatus = "saved";
+          let saveError: string | null = null;
           if (hasOffersToSave) {
             try {
               const result = await options.syncEnrolledOffers?.("chase", message);
               if (result === "queued_for_retry" || result === "failed") saveStatus = result;
-            } catch {
+            } catch (error) {
               saveStatus = "failed";
+              saveError =
+                error instanceof Error
+                  ? error.message
+                  : "Couldn’t save Chase offers to nextcard.";
             }
           }
           if (runId) {
-            await options.offerOperations.patch(runId, { saveStatus });
+            await options.offerOperations.patch(runId, { saveStatus, saveError });
           }
           sendResponse({ ok: true, saveStatus });
         })();
@@ -1382,16 +1395,21 @@ export function createMessageRouter(options: {
           }
 
           let saveStatus: OfferSaveStatus = "saved";
+          let saveError: string | null = null;
           if (hasOffersToSave) {
             try {
               const result = await options.syncEnrolledOffers?.("citi", message);
               if (result === "queued_for_retry" || result === "failed") saveStatus = result;
-            } catch {
+            } catch (error) {
               saveStatus = "failed";
+              saveError =
+                error instanceof Error
+                  ? error.message
+                  : "Couldn’t save Citi offers to nextcard.";
             }
           }
           if (runId) {
-            await options.offerOperations.patch(runId, { saveStatus });
+            await options.offerOperations.patch(runId, { saveStatus, saveError });
           }
           sendResponse({ ok: true, saveStatus });
         })();

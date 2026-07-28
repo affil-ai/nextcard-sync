@@ -265,11 +265,21 @@ export function createBankRenderers(
       ? `<ul class="certs-list" style="margin-top:8px">${trackableBenefits
           .map((benefit) => {
             const parts: string[] = [];
+            const isAnnualTravelCredit =
+              benefit.name.toLowerCase() === "annual travel credit";
             if (benefit.amountUsed != null && benefit.totalAmount != null) {
-              parts.push(`$${benefit.amountUsed.toFixed(2)} spent of $${benefit.totalAmount}`);
+              parts.push(
+                isAnnualTravelCredit
+                  ? `$${benefit.amountUsed.toFixed(2)} used of $${benefit.totalAmount.toFixed(2)}`
+                  : `$${benefit.amountUsed.toFixed(2)} spent of $${benefit.totalAmount.toFixed(2)}`,
+              );
             }
             if (benefit.remaining != null) {
-              parts.push(`$${benefit.remaining.toFixed(2)} remaining`);
+              parts.push(
+                `$${benefit.remaining.toFixed(2)} ${
+                  isAnnualTravelCredit ? "available" : "remaining"
+                }`,
+              );
             }
             if (benefit.period) {
               parts.push(escapeHtml(benefit.period));

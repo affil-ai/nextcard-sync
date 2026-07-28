@@ -46,6 +46,7 @@ export interface OfferOperationState {
   cancelled: boolean;
   error: string | null;
   saveStatus: OfferSaveStatus;
+  saveError: string | null;
 }
 
 export interface OfferOperationSnapshot {
@@ -113,6 +114,7 @@ export function createOfferOperation(
     cancelled: false,
     error: null,
     saveStatus: "not_started",
+    saveError: null,
   };
 }
 
@@ -242,6 +244,8 @@ export function normalizeOfferOperation(value: unknown): OfferOperationState | n
     saveStatus: validSaveStatuses.includes(value.saveStatus as OfferSaveStatus)
       ? value.saveStatus as OfferSaveStatus
       : "not_started",
+    saveError:
+      typeof value.saveError === "string" ? value.saveError.slice(0, 240) : null,
   };
 }
 

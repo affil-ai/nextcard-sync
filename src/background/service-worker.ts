@@ -521,6 +521,7 @@ chrome.runtime.onMessage.addListener(
       const enrolledOffers = message.enrolledOffers as EnrolledOfferSyncMessage[];
 
       const payload: OfferSyncPayload = {
+        runId: typeof message.runId === "string" ? message.runId : undefined,
         issuer,
         issuerCardId: String(message.cardId ?? message.accountId ?? ""),
         issuerCardName: String(message.cardName ?? ""),
@@ -535,10 +536,12 @@ chrome.runtime.onMessage.addListener(
       // reached NextCard or been persisted for the existing retry path before
       // the Amex run is reported complete.
       const syncResult = await syncOffersToNextCard(payload);
-      if (syncResult === "failed") {
-        throw new Error("Could not persist the verified Amex offer sync for retry");
+      if (syncResult.status === "failed") {
+        throw new Error(
+          syncResult.error ?? "Couldn’t save the verified offers to nextcard.",
+        );
       }
-      return syncResult;
+      return syncResult.status;
     },
     syncDetectedOffers: (issuer, message) => {
       type DetectedOfferMsg = Omit<DetectedOfferSyncPayload["offers"][number], "detectedAt">;
@@ -596,12 +599,26 @@ chrome.alarms.create("pullOfferUrlCache", { periodInMinutes: 30 });
 chrome.alarms.create("retryOfferActivationCompletions", {
   periodInMinutes: 5,
 });
+chrome.alarms.create("retryPendingOfferSyncs", {
+  periodInMinutes: 5,
+});
 chrome.alarms.onAlarm.addListener((alarm) => {
   if (alarm.name === "pullOfferUrlCache") void pullOfferUrlCache();
+  if (alarm.name === "retryPendingOfferSyncs") void retryQueuedOfferSyncs();
   if (alarm.name === "retryOfferActivationCompletions") {
     void retryPendingOfferActivationCompletions();
   }
 });
+
+async function retryQueuedOfferSyncs() {
+  const result = await retryPendingOfferSyncs();
+  await Promise.all(result.savedRunIds.map((runId) =>
+    offerOperations.patch(runId, {
+      saveStatus: "saved",
+      saveError: null,
+    })
+  ));
+}
 
 void getAuth().then((auth) => {
   if (auth) {
@@ -610,7 +627,7 @@ void getAuth().then((auth) => {
     ).catch((error) => {
       console.warn("[NextCard SW] Startup hydrate failed:", error);
     });
-    void retryPendingOfferSyncs();
+    void retryQueuedOfferSyncs();
     void retryPendingOfferActivationCompletions();
     void pullOfferUrlCache();
   }

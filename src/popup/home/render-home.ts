@@ -10,6 +10,7 @@ export function buildHomeSnapshot(
   allStates: Record<ProviderId, ProviderSyncState>,
   firstSyncCompleted: boolean,
   extensionProfile: ExtensionProfile | null,
+  previewRewardsGuide = false,
 ) {
   return orderedProviderIds
     .map((providerId) => {
@@ -17,28 +18,14 @@ export function buildHomeSnapshot(
       return `${providerId}:${state?.status ?? "idle"}:${state?.lastSyncedAt ?? ""}`;
     })
     .join("|")
-    + `|tour:${firstSyncCompleted}|plan:${extensionProfile?.accountLevel ?? "unknown"}|locked:${extensionProfile?.lockedProviders.join(",") ?? ""}`;
-}
-
-export function populateOnboardingProviders(container: HTMLDivElement) {
-  container.innerHTML = "";
-  const onboardingProviderIds: ProviderId[] = ["chase", "amex", "citi", "capitalone"];
-
-  // Duplicate the provider set so the marquee loops without a seam.
-  for (let copy = 0; copy < 2; copy += 1) {
-    for (const providerId of onboardingProviderIds) {
-      const img = document.createElement("img");
-      img.src = getProviderIconUrl(providerId);
-      img.alt = providerRegistry[providerId].name;
-      container.appendChild(img);
-    }
-  }
+    + `|tour:${firstSyncCompleted}|preview:${previewRewardsGuide}|plan:${extensionProfile?.accountLevel ?? "unknown"}|locked:${extensionProfile?.lockedProviders.join(",") ?? ""}`;
 }
 
 export function createHomeRenderer(options: {
   providerList: HTMLDivElement;
   tourTooltip: HTMLDivElement;
   getFirstSyncCompleted: () => boolean;
+  getRewardsGuidePreview?: () => boolean;
   getExtensionProfile: () => ExtensionProfile | null;
   markFirstSyncCompleted: () => void;
   onProviderSelected: (providerId: ProviderId) => void;
@@ -48,9 +35,15 @@ export function createHomeRenderer(options: {
 
   return (allStates: Record<ProviderId, ProviderSyncState>) => {
     const firstSyncCompleted = options.getFirstSyncCompleted();
+    const previewRewardsGuide = options.getRewardsGuidePreview?.() ?? false;
     const extensionProfile = options.getExtensionProfile();
     const lockedProviders = new Set(extensionProfile?.lockedProviders ?? []);
-    const snapshot = buildHomeSnapshot(allStates, firstSyncCompleted, extensionProfile);
+    const snapshot = buildHomeSnapshot(
+      allStates,
+      firstSyncCompleted,
+      extensionProfile,
+      previewRewardsGuide,
+    );
     if (snapshot === lastHomeSnapshot) return;
     lastHomeSnapshot = snapshot;
 
@@ -70,7 +63,8 @@ export function createHomeRenderer(options: {
         const definition = providerRegistry[providerId];
         const state = allStates[providerId];
         const locked = lockedProviders.has(providerId);
-        const card = document.createElement("div");
+        const card = document.createElement("button");
+        card.type = "button";
         card.className = locked ? "provider-card provider-card-locked" : "provider-card";
         card.addEventListener("click", () => {
           if (locked) {
@@ -126,11 +120,12 @@ export function createHomeRenderer(options: {
         || status === "waiting_for_login"
       );
     });
-    const shouldLock = !firstSyncCompleted && !isSyncing;
+    const shouldLock =
+      previewRewardsGuide || (!firstSyncCompleted && !isSyncing);
     options.providerList.classList.toggle("tour-locked", shouldLock);
     options.tourTooltip.classList.toggle("visible", shouldLock);
 
-    if (!firstSyncCompleted) {
+    if (!firstSyncCompleted && !previewRewardsGuide) {
       const anyDone = orderedProviderIds.some(
         (providerId) => allStates[providerId]?.status === "done",
       );

@@ -18,7 +18,7 @@ import { homeElements, authElements, views, onboardingElements, consentElements,
 import { createAirlineRenderers } from "./renderers/airlines";
 import { createBankRenderers } from "./renderers/banks";
 import { createHotelRenderers } from "./renderers/hotels";
-import { openRewards, openWallet, updateWalletBtn } from "./renderers/shared";
+import { openOffers, openRewards, updateWalletBtn } from "./renderers/shared";
 import {
   loadInitialPopupState,
   loadOnboardingFlags,
@@ -27,7 +27,12 @@ import {
   subscribeToOnboardingFlags,
 } from "./state";
 import { createConsentController, createOnboardingController } from "./onboarding";
-import { createHomeRenderer, populateOnboardingProviders } from "./home/render-home";
+import { createHomeRenderer } from "./home/render-home";
+import {
+  getOffersSetupCompletedStorageKey,
+  getOffersSetupState,
+  isOffersSetupComplete,
+} from "./offers-setup";
 
 type ViewName = keyof typeof views;
 
@@ -38,8 +43,9 @@ const toolsTabPanel = document.getElementById("toolsTabPanel");
 let offersFirstUiEnabled = false;
 let activeDestination: "offers" | "rewards" = "offers";
 let offerConsentVersion = 0;
-const CURRENT_OFFERS_INTRO_VERSION = 9;
+const CURRENT_OFFERS_INTRO_VERSION = 10;
 const CURRENT_OFFER_CONSENT_VERSION = 1;
+const CURRENT_FULL_FLOW_QA_RESET_VERSION = 1;
 const SIGNED_OUT_CONFIRMATION_POLLS = 3;
 const NEXTCARD_AUTH_WAIT_TIMEOUT_MS = 45_000;
 const OFFER_ACTIVATION_USAGE_REFRESH_MS = 3 * 60 * 1000;
@@ -672,6 +678,11 @@ if (tabBar) {
   });
 
   chrome.storage.local.get(["pendingDestination", "pendingTab", "lastHomeDestination"]).then((stored) => {
+    if (__REWARDS_GUIDE_QA_PREVIEW__) {
+      destinationRestored = true;
+      setDestination("rewards", { persist: false });
+      return;
+    }
     if (stored.pendingDestination === "offers" || stored.pendingTab === "tools") {
       destinationRestored = true;
       setDestination("offers", { persist: false });
@@ -2149,10 +2160,17 @@ let consentGiven = false;
 let firstSyncCompleted = false;
 let flagsLoaded = false;
 let tourSyncProvider: ProviderId | null = null;
+let tourSyncBaselineLastSyncedAt: string | null = null;
+let tourSyncObservedInProgress = false;
+let latestProviderStates: ProviderStateMap | null = null;
 let extensionProfile: ExtensionProfile | null = null;
 let offersSetupCompleted = false;
+let offersSetupCompletedStorageKey: string | null = null;
+let guidedOfferIssuer: OfferIssuer | null = null;
 let offersCoachmarkSeen = false;
 let offersIntroVersion = 0;
+let replayingOnboarding = false;
+let rewardsGuideQaPreviewActive = __REWARDS_GUIDE_QA_PREVIEW__;
 let latestOfferSnapshot: OfferOperationSnapshot = { active: null, history: {} };
 let appliedOffersFirstMode: boolean | null = null;
 let currentAuth: NextCardAuth | null = null;
@@ -2457,7 +2475,7 @@ function renderBackgroundOwnedIssuerState(snapshot: OfferOperationSnapshot) {
         state.saveStatus === "queued_for_retry"
           ? " · queued to save to nextcard"
           : state.saveStatus === "failed"
-            ? " · couldn’t save to nextcard"
+            ? ` · ${state.saveError ?? "couldn’t save to nextcard"}`
             : state.saveStatus === "saved"
               ? " · saved to nextcard"
               : "";
@@ -2472,6 +2490,7 @@ function resetOfferAccountUi() {
   offerActivationUsage = null;
   offerActivationUsageFetchedAt = 0;
   offerActivationUsageRequest = null;
+  guidedOfferIssuer = null;
   renderOfferActivationUsage();
   const activity = document.getElementById("offerActivity");
   if (activity) activity.hidden = true;
@@ -2528,6 +2547,112 @@ function refreshOfferActivationUsage(force = false) {
   return offerActivationUsageRequest;
 }
 
+function renderOffersSetupHierarchy(snapshot: OfferOperationSnapshot) {
+  const setup = getOffersSetupState(
+    snapshot,
+    firstSyncCompleted,
+    guidedOfferIssuer,
+  );
+  if (setup.issuer) guidedOfferIssuer = setup.issuer;
+
+  const recommendation = document.getElementById("offersRecommendation");
+  const panel = document.getElementById("toolsTabPanel");
+  const guidedSetupActive =
+    offersFirstUiEnabled
+    && !offersSetupCompleted
+    && setup.stage !== "complete";
+  if (recommendation) recommendation.hidden = !guidedSetupActive;
+  panel?.classList.toggle("offers-guided-setup", guidedSetupActive);
+  if (guidedSetupActive) {
+    panel?.setAttribute("data-guided-stage", setup.stage);
+  } else {
+    panel?.removeAttribute("data-guided-stage");
+  }
+
+  const issuerActions = document.getElementById("offersIssuerActions");
+  if (issuerActions) issuerActions.hidden = setup.stage !== "choose_issuer";
+  const milestone = document.getElementById("offersSetupMilestone");
+  if (milestone) milestone.hidden = setup.stage !== "sync_rewards";
+  const setupActions = document.getElementById("offersSetupActions");
+  if (setupActions) setupActions.hidden = setup.stage !== "choose_issuer";
+  const rewardsActions = document.getElementById("offersSetupRewardsActions");
+  if (rewardsActions) rewardsActions.hidden = setup.stage !== "sync_rewards";
+  const operationIsRunning = Boolean(
+    snapshot.active
+    && snapshot.active.phase !== "ready_to_add",
+  );
+  const setupStatus = document.getElementById("offersSetupStatus");
+  if (setupStatus) setupStatus.hidden = !operationIsRunning;
+  const setupStatusText = document.getElementById("offersSetupStatusText");
+  if (setupStatusText && snapshot.active) {
+    setupStatusText.textContent = snapshot.active.phase === "adding"
+      ? "You can close this popup while we finish."
+      : "Keep the issuer tab open. You can come back anytime.";
+  }
+  const setupCancel = document.getElementById("offersSetupCancel");
+  if (setupCancel && snapshot.active) {
+    setupCancel.textContent = snapshot.active.phase === "adding"
+      ? "Stop after this offer"
+      : "Cancel";
+  }
+
+  for (const issuer of ["chase", "amex", "citi"] as const) {
+    const showGuidedIssuer = (
+      setup.stage === "check_offers" && !snapshot.active
+    ) || (
+      setup.stage === "review_offers"
+      && setup.operation?.phase === "ready_to_add"
+    );
+    document
+      .getElementById(`${issuer}OffersCard`)
+      ?.classList.toggle(
+        "guided-active-issuer",
+        guidedSetupActive && showGuidedIssuer && guidedOfferIssuer === issuer,
+      );
+  }
+
+  const title = document.getElementById("offersRecommendationTitle");
+  const text = document.getElementById("offersRecommendationText");
+  const eyebrow = document.getElementById("offersRecommendationEyebrow");
+  const issuerName = setup.issuer === "amex"
+    ? "Amex"
+    : setup.issuer === "citi"
+      ? "Citi"
+      : "Chase";
+  if (!title || !text) return;
+  if (setup.stage === "check_offers") {
+    const needsRetry =
+      setup.operation?.phase === "failed"
+      || setup.operation?.phase === "interrupted"
+      || setup.operation?.phase === "cancelled";
+    if (eyebrow) eyebrow.textContent = "Step 2 of 3";
+    title.textContent = needsRetry
+      ? `Try ${issuerName} again`
+      : setup.operation && operationIsRunning
+        ? getOfferOperationStatusText(setup.operation)
+        : `Check your ${issuerName} card`;
+    text.textContent = needsRetry
+      ? "The check didn’t finish. Use the card below to try again."
+      : "We’ll find the offers currently available on your card.";
+  } else if (setup.stage === "review_offers") {
+    if (eyebrow) eyebrow.textContent = "Step 3 of 3";
+    title.textContent = setup.operation?.phase === "adding"
+      ? getOfferOperationStatusText(setup.operation)
+      : `Review your ${issuerName} offers`;
+    text.textContent = setup.operation?.phase === "adding"
+      ? "We’re activating your selections securely in the background."
+      : "Choose a card, confirm the count, and add its offers.";
+  } else if (setup.stage === "sync_rewards") {
+    if (eyebrow) eyebrow.textContent = "Offers are ready";
+    title.textContent = "One last step";
+    text.textContent = "Connect one rewards program to keep your points, credits, and benefits together.";
+  } else {
+    if (eyebrow) eyebrow.textContent = "Step 1 of 3";
+    title.textContent = "Choose a card issuer";
+    text.textContent = "Start with one issuer. We’ll guide you through the rest.";
+  }
+}
+
 async function refreshOfferOperationUi() {
   if (!offersFirstUiEnabled) return;
   void refreshOfferActivationUsage();
@@ -2562,16 +2687,15 @@ async function refreshOfferOperationUi() {
     cancelButton.hidden = true;
   }
 
-  const completedCheck = Object.values(snapshot.history).some((state) => (
-    state?.phase === "ready_to_add" || state?.phase === "completed"
-  ));
-  if (completedCheck && !offersSetupCompleted) {
+  const setup = getOffersSetupState(snapshot, firstSyncCompleted, guidedOfferIssuer);
+  if (isOffersSetupComplete(setup.stage) && !offersSetupCompleted) {
     offersSetupCompleted = true;
-    void chrome.storage.local.set({ offersSetupCompleted: true });
+    if (offersSetupCompletedStorageKey) {
+      void chrome.storage.local.set({ [offersSetupCompletedStorageKey]: true });
+    }
   }
 
-  const recommendation = document.getElementById("offersRecommendation");
-  if (recommendation) recommendation.hidden = offersSetupCompleted;
+  renderOffersSetupHierarchy(snapshot);
   document.querySelectorAll<HTMLButtonElement>("[data-offer-issuer]").forEach((button) => {
     button.disabled = Boolean(active);
   });
@@ -2598,7 +2722,7 @@ async function refreshOfferOperationUi() {
   }
 }
 
-document.getElementById("offerActivityCancel")?.addEventListener("click", () => {
+function cancelActiveOfferOperation() {
   const active = latestOfferSnapshot.active;
   if (!active) return;
   void chrome.runtime.sendMessage({
@@ -2608,26 +2732,62 @@ document.getElementById("offerActivityCancel")?.addEventListener("click", () => 
     activeOfferRunIds.delete(active.issuer);
     void refreshOfferOperationUi();
   });
-});
+}
+
+document
+  .getElementById("offerActivityCancel")
+  ?.addEventListener("click", cancelActiveOfferOperation);
+document
+  .getElementById("offersSetupCancel")
+  ?.addEventListener("click", cancelActiveOfferOperation);
 
 document.querySelectorAll<HTMLButtonElement>("[data-offer-issuer]").forEach((button) => {
   button.addEventListener("click", () => {
     const issuer = button.dataset.offerIssuer as OfferIssuer;
+    guidedOfferIssuer = issuer;
+    renderOffersSetupHierarchy(latestOfferSnapshot);
     document.getElementById(`${issuer}OffersDiscoverBtn`)?.click();
   });
 });
 
+function completeOffersSetup() {
+  offersSetupCompleted = true;
+  if (offersSetupCompletedStorageKey) {
+    void chrome.storage.local.set({ [offersSetupCompletedStorageKey]: true });
+  }
+  renderOffersSetupHierarchy(latestOfferSnapshot);
+}
+
 for (const id of ["offersSetupSkip", "offersSetupUnsupported"]) {
   document.getElementById(id)?.addEventListener("click", () => {
-    offersSetupCompleted = true;
-    void chrome.storage.local.set({ offersSetupCompleted: true });
-    const recommendation = document.getElementById("offersRecommendation");
-    if (recommendation) recommendation.hidden = true;
+    completeOffersSetup();
     if (id === "offersSetupUnsupported") {
       (document.getElementById("offersMore") as HTMLDetailsElement | null)?.setAttribute("open", "");
     }
   });
 }
+
+document.getElementById("offersRewardsHandoffStart")?.addEventListener("click", (event) => {
+  const button = event.currentTarget as HTMLButtonElement;
+  button.disabled = true;
+  button.textContent = "Opening Rewards…";
+  setDestination("rewards");
+  syncTabPanel?.classList.remove("rewards-handoff-enter");
+  requestAnimationFrame(() => {
+    window.scrollTo({ top: 0, behavior: "auto" });
+    syncTabPanel?.classList.add("rewards-handoff-enter");
+    homeElements.tourTooltip.focus({ preventScroll: true });
+  });
+  window.setTimeout(() => {
+    syncTabPanel?.classList.remove("rewards-handoff-enter");
+    button.disabled = false;
+    button.innerHTML = 'Continue to Rewards <span aria-hidden="true">→</span>';
+  }, 520);
+});
+
+document.getElementById("offersRewardsHandoffDismiss")?.addEventListener("click", () => {
+  completeOffersSetup();
+});
 
 document.getElementById("offersCoachmarkDismiss")?.addEventListener("click", () => {
   offersCoachmarkSeen = true;
@@ -2656,7 +2816,8 @@ function showNextcardAuthWait() {
     nextcardAuthWaitTimeout = null;
     if (!awaitingNextcardAuth || currentAuth) return;
     awaitingNextcardAuth = false;
-    showView("auth");
+    updateOnboardingSkipVisibility();
+    showView("disclosure");
   }, NEXTCARD_AUTH_WAIT_TIMEOUT_MS);
 }
 
@@ -2678,7 +2839,8 @@ for (const button of document.querySelectorAll(".wallet-btn")) {
   button.addEventListener("click", () => openRewards());
 }
 
-document.getElementById("homeWalletBtn")?.addEventListener("click", () => openWallet());
+document.getElementById("homeOffersBtn")?.addEventListener("click", () => openOffers());
+document.getElementById("homeRewardsBtn")?.addEventListener("click", () => openRewards());
 
 document.addEventListener("click", (event) => {
   const target = event.target as HTMLElement;
@@ -2743,7 +2905,9 @@ document.addEventListener("keydown", (event) => {
 
 homeElements.congratsBtn.addEventListener("click", () => {
   homeElements.congratsBanner.classList.remove("visible");
+  setDestination("rewards");
   showView("home");
+  window.scrollTo({ top: 0, behavior: "smooth" });
 });
 
 const hotelRenderers = createHotelRenderers(requestSync);
@@ -2771,8 +2935,17 @@ function renderAllProviders(allStates: ProviderStateMap) {
 
 const onboardingController = createOnboardingController({
   onboardingBtn: onboardingElements.onboardingBtn,
-  getFinalLabel: () => currentAuth ? "Continue to Offers" : "Continue with nextcard",
+  getFinalLabel: () => replayingOnboarding
+    ? "Back to Offers"
+    : currentAuth
+      ? "Continue to Offers"
+      : "Continue with nextcard",
   onComplete: () => {
+    replayingOnboarding = false;
+    const replayClose = document.getElementById("onboardingReplayClose");
+    if (replayClose) replayClose.hidden = true;
+    const skipButton = document.getElementById("onboardingSkipBtn");
+    if (skipButton) skipButton.hidden = true;
     disclosureAccepted = true;
     offersIntroVersion = CURRENT_OFFERS_INTRO_VERSION;
     offersCoachmarkSeen = true;
@@ -2791,6 +2964,51 @@ const onboardingController = createOnboardingController({
       chrome.runtime.sendMessage({ type: "SIGN_IN_NEXTCARD" });
     }
   },
+});
+
+const replayGuideButton = document.getElementById("onboardingReplayBtn");
+const replayGuideClose = document.getElementById("onboardingReplayClose");
+const onboardingSkipButton = document.getElementById("onboardingSkipBtn");
+
+function updateOnboardingSkipVisibility() {
+  if (!onboardingSkipButton) return;
+  const returningSignedOutUser =
+    !currentAuth
+    && offersIntroVersion >= CURRENT_OFFERS_INTRO_VERSION;
+  onboardingSkipButton.hidden =
+    replayingOnboarding || !returningSignedOutUser;
+}
+
+function closeOnboardingReplay() {
+  if (!replayingOnboarding) return;
+  replayingOnboarding = false;
+  if (replayGuideClose) replayGuideClose.hidden = true;
+  updateOnboardingSkipVisibility();
+  showView("home");
+  requestAnimationFrame(() => replayGuideButton?.focus());
+}
+
+replayGuideButton?.addEventListener("click", () => {
+  replayingOnboarding = true;
+  onboardingController.reset();
+  if (replayGuideClose) replayGuideClose.hidden = false;
+  updateOnboardingSkipVisibility();
+  showView("disclosure");
+  requestAnimationFrame(() => replayGuideClose?.focus());
+});
+
+replayGuideClose?.addEventListener("click", closeOnboardingReplay);
+
+onboardingSkipButton?.addEventListener("click", () => {
+  onboardingSkipButton.hidden = true;
+  showNextcardAuthWait();
+  chrome.runtime.sendMessage({ type: "SIGN_IN_NEXTCARD" });
+});
+
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape" && replayingOnboarding) {
+    closeOnboardingReplay();
+  }
 });
 
 async function recordConsent() {
@@ -2816,11 +3034,20 @@ async function startSyncFlow(
   providerId: ProviderId,
   options: { showViewOnStart: boolean },
 ) {
-  if (!firstSyncCompleted) {
+  if (!firstSyncCompleted || rewardsGuideQaPreviewActive) {
     tourSyncProvider = providerId;
+    tourSyncBaselineLastSyncedAt =
+      latestProviderStates?.[providerId]?.lastSyncedAt ?? null;
+    tourSyncObservedInProgress = false;
   }
+  rewardsGuideQaPreviewActive = false;
 
   const started = await startProviderSync(providerId);
+  if (!started && tourSyncProvider === providerId) {
+    tourSyncProvider = null;
+    tourSyncBaselineLastSyncedAt = null;
+    tourSyncObservedInProgress = false;
+  }
   if (started && options.showViewOnStart) {
     showView(providerId);
   }
@@ -2895,7 +3122,7 @@ function handleProviderSelected(providerId: ProviderId) {
     return;
   }
 
-  if (!firstSyncCompleted) {
+  if (!firstSyncCompleted || rewardsGuideQaPreviewActive) {
     void requestSync(providerId);
     return;
   }
@@ -2926,16 +3153,16 @@ const renderHome = createHomeRenderer({
   providerList: homeElements.providerList,
   tourTooltip: homeElements.tourTooltip,
   getFirstSyncCompleted: () => firstSyncCompleted,
+  getRewardsGuidePreview: () => rewardsGuideQaPreviewActive,
   getExtensionProfile: () => extensionProfile,
   markFirstSyncCompleted: () => {
     firstSyncCompleted = true;
     chrome.storage.local.set({ firstSyncCompleted: true });
+    renderOffersSetupHierarchy(latestOfferSnapshot);
   },
   onProviderSelected: handleProviderSelected,
   onLockedProviderSelected: handleLockedProviderSelected,
 });
-
-populateOnboardingProviders(homeElements.onboardingProviders);
 
 function getInitials(name: string | null) {
   if (!name) return "?";
@@ -2967,6 +3194,7 @@ function renderPlanBadge() {
 function renderAuthState(auth: NextCardAuth | null) {
   if (!flagsLoaded) return;
   currentAuth = auth;
+  updateOnboardingSkipVisibility();
 
   if (!auth) {
     if (awaitingNextcardAuth) return;
@@ -2977,17 +3205,25 @@ function renderAuthState(auth: NextCardAuth | null) {
     // Don't flash the disclosure view on first load — service worker may still be waking up.
     // Only show disclosure after a poll confirms auth is truly null.
     if (!authConfirmed) return;
-    const signedOutView =
-      disclosureAccepted
-      || offersIntroVersion >= CURRENT_OFFERS_INTRO_VERSION
-      ? "auth"
-      : "disclosure";
-    if (currentView !== signedOutView) {
-      showView(signedOutView);
+    if (currentView !== "disclosure") {
+      onboardingController.reset();
+      showView("disclosure");
     }
     return;
   }
   finishNextcardAuthWait();
+  const nextOffersSetupStorageKey = getOffersSetupCompletedStorageKey(auth);
+  if (offersSetupCompletedStorageKey !== nextOffersSetupStorageKey) {
+    offersSetupCompletedStorageKey = nextOffersSetupStorageKey;
+    offersSetupCompleted = false;
+    if (nextOffersSetupStorageKey) {
+      void chrome.storage.local.get(nextOffersSetupStorageKey).then((stored) => {
+        if (offersSetupCompletedStorageKey !== nextOffersSetupStorageKey) return;
+        offersSetupCompleted = stored[nextOffersSetupStorageKey] === true;
+        renderOffersSetupHierarchy(latestOfferSnapshot);
+      });
+    }
+  }
   const accountKey = `${auth.email ?? ""}:${auth.signedInAt}`;
   if (renderedAccountKey !== null && renderedAccountKey !== accountKey) {
     resetOfferAccountUi();
@@ -3020,13 +3256,12 @@ function renderAuthState(auth: NextCardAuth | null) {
   if (
     currentView === "loading"
     || currentView === "auth"
-    || currentView === "disclosure"
+    || (currentView === "disclosure" && !replayingOnboarding)
   ) {
     showView("home");
   }
 
-  const recommendation = document.getElementById("offersRecommendation");
-  if (recommendation) recommendation.hidden = offersSetupCompleted;
+  renderOffersSetupHierarchy(latestOfferSnapshot);
   const coachmark = document.getElementById("offersCoachmark");
   if (coachmark) {
     coachmark.hidden = !offersFirstUiEnabled || offersCoachmarkSeen || offersIntroVersion === 0;
@@ -3044,25 +3279,60 @@ authElements.userSignOutBtn.addEventListener("click", () => {
     disclosureAccepted = false;
     consentGiven = false;
     firstSyncCompleted = false;
+    tourSyncProvider = null;
+    tourSyncBaselineLastSyncedAt = null;
+    tourSyncObservedInProgress = false;
+    latestProviderStates = null;
+    offersSetupCompleted = false;
+    offersSetupCompletedStorageKey = null;
     offerConsentVersion = 0;
     extensionProfile = null;
     currentAuth = null;
     finishNextcardAuthWait();
     resetOfferAccountUi();
     renderedAccountKey = null;
-    showView(offersIntroVersion >= CURRENT_OFFERS_INTRO_VERSION ? "auth" : "disclosure");
+    onboardingController.reset();
+    updateOnboardingSkipVisibility();
+    showView("disclosure");
   });
 });
 
 function maybeShowCongratsBanner(allStates: Record<ProviderId, ProviderSyncState>) {
-  if (!tourSyncProvider || allStates[tourSyncProvider]?.status !== "done") {
+  if (!tourSyncProvider) {
     return;
   }
 
+  const state = allStates[tourSyncProvider];
+  if (
+    state?.status === "detecting_login"
+    || state?.status === "waiting_for_login"
+    || state?.status === "extracting"
+  ) {
+    tourSyncObservedInProgress = true;
+    return;
+  }
+  if (state?.status === "error" || state?.status === "cancelled") {
+    tourSyncProvider = null;
+    tourSyncBaselineLastSyncedAt = null;
+    tourSyncObservedInProgress = false;
+    return;
+  }
+
+  const hasFreshCompletion =
+    state?.status === "done"
+    && (
+      tourSyncObservedInProgress
+      || state.lastSyncedAt !== tourSyncBaselineLastSyncedAt
+    );
+  if (!hasFreshCompletion) return;
+
   const providerId = tourSyncProvider;
   tourSyncProvider = null;
+  tourSyncBaselineLastSyncedAt = null;
+  tourSyncObservedInProgress = false;
   firstSyncCompleted = true;
   chrome.storage.local.set({ firstSyncCompleted: true });
+  renderOffersSetupHierarchy(latestOfferSnapshot);
   showView(providerId);
   homeElements.congratsBanner.classList.add("visible");
 }
@@ -3116,6 +3386,7 @@ async function refreshPopupState() {
     renderAuthState(snapshot.auth);
     if (!snapshot.auth || !snapshot.allStates) return;
 
+    latestProviderStates = snapshot.allStates;
     renderHome(snapshot.allStates);
     renderAllProviders(snapshot.allStates);
     updateActiveWalletButton(snapshot.allStates);
@@ -3126,6 +3397,34 @@ async function refreshPopupState() {
 }
 
 async function initializePopup() {
+  if (__REWARDS_GUIDE_QA_PREVIEW__) {
+    const qaResetState = await chrome.storage.local.get("fullFlowQaResetVersion");
+    if (qaResetState.fullFlowQaResetVersion !== CURRENT_FULL_FLOW_QA_RESET_VERSION) {
+      const stored = await chrome.storage.local.get(null);
+      const resetKeys = Object.keys(stored).filter((key) => (
+        key === "disclosureAccepted"
+        || key === "consentGiven"
+        || key === "firstSyncCompleted"
+        || key === "offerConsentVersion"
+        || key === "offersIntroVersion"
+        || key === "offersIntroQaResetVersion"
+        || key === "offersCoachmarkSeen"
+        || key === "offersSetupCompleted"
+        || key === "lastHomeDestination"
+        || key === "pendingDestination"
+        || key === "pendingTab"
+        || key === "nextcard_offer_operation_snapshot_v1"
+        || key.startsWith("offersSetupCompleted:")
+      ));
+      if (resetKeys.length > 0) {
+        await chrome.storage.local.remove(resetKeys);
+      }
+      await chrome.storage.local.set({
+        fullFlowQaResetVersion: CURRENT_FULL_FLOW_QA_RESET_VERSION,
+      });
+    }
+  }
+
   const [flags, initialSnapshot, uiState] = await Promise.all([
     loadOnboardingFlags(),
     loadInitialPopupState(),
@@ -3141,7 +3440,23 @@ async function initializePopup() {
   disclosureAccepted = flags.disclosureAccepted;
   consentGiven = flags.consentGiven;
   firstSyncCompleted = flags.firstSyncCompleted;
-  offersSetupCompleted = uiState.offersSetupCompleted === true;
+  offersSetupCompletedStorageKey =
+    getOffersSetupCompletedStorageKey(initialSnapshot.auth);
+  if (offersSetupCompletedStorageKey) {
+    const scopedSetupState =
+      await chrome.storage.local.get(offersSetupCompletedStorageKey);
+    offersSetupCompleted =
+      scopedSetupState[offersSetupCompletedStorageKey] === true;
+    if (!offersSetupCompleted && uiState.offersSetupCompleted === true) {
+      offersSetupCompleted = true;
+      await chrome.storage.local.set({
+        [offersSetupCompletedStorageKey]: true,
+      });
+    }
+  }
+  if (Object.prototype.hasOwnProperty.call(uiState, "offersSetupCompleted")) {
+    await chrome.storage.local.remove("offersSetupCompleted");
+  }
   offersCoachmarkSeen = uiState.offersCoachmarkSeen === true;
   offerConsentVersion =
     typeof uiState.offerConsentVersion === "number" ? uiState.offerConsentVersion : 0;
@@ -3170,6 +3485,7 @@ async function initializePopup() {
 
   renderAuthState(initialSnapshot.auth);
   if (initialSnapshot.auth) {
+    latestProviderStates = initialSnapshot.allStates;
     renderHome(initialSnapshot.allStates);
     renderAllProviders(initialSnapshot.allStates);
     updateActiveWalletButton(initialSnapshot.allStates);

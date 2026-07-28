@@ -5,8 +5,7 @@ const confirmModalTitle = document.getElementById("confirmModalTitle") as HTMLDi
 const confirmModalCancel = document.getElementById("confirmModalCancel") as HTMLButtonElement;
 const confirmModalConfirm = document.getElementById("confirmModalConfirm") as HTMLButtonElement;
 
-// Keep the extension's wallet CTA aligned with the current NextCard dashboard route.
-export const WALLET_URL = `${__NEXTCARD_URL__}/dashboard/wallet`;
+export const OFFERS_URL = `${__NEXTCARD_URL__}/dashboard/offers`;
 export const REWARDS_URL = `${__NEXTCARD_URL__}/dashboard/rewards`;
 
 const SUPPORT_EMAIL = "help@nextcard.com";
@@ -81,8 +80,8 @@ export function showConfirmDelete(providerName: string) {
   });
 }
 
-export function openWallet() {
-  chrome.tabs.create({ url: WALLET_URL });
+export function openOffers() {
+  chrome.tabs.create({ url: OFFERS_URL });
 }
 
 export function openRewards() {

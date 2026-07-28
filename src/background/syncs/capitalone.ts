@@ -56,6 +56,71 @@ function readString(value: unknown) {
   return typeof value === "string" ? value : null;
 }
 
+function parseDollarAmount(value: string) {
+  const match = value.match(/\$([\d,]+(?:\.\d{1,2})?)/);
+  if (!match) return null;
+
+  const amount = Number.parseFloat(match[1].replace(/,/g, ""));
+  return Number.isFinite(amount) ? amount : null;
+}
+
+function parseCapturedDollarAmount(value: string | undefined) {
+  if (!value) return null;
+  const amount = Number.parseFloat(value.replace(/,/g, ""));
+  return Number.isFinite(amount) ? amount : null;
+}
+
+function findDollarNearLabel(lines: string[], label: RegExp) {
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index];
+    const labelMatch = line.match(label);
+    if (!labelMatch) continue;
+
+    const labelIndex = labelMatch.index ?? 0;
+    const afterLabel = line.slice(labelIndex + labelMatch[0].length);
+    const beforeLabel = line.slice(0, labelIndex);
+    const inlineAmount =
+      parseDollarAmount(afterLabel) ?? parseDollarAmount(beforeLabel);
+    if (inlineAmount != null) return inlineAmount;
+
+    for (const candidate of [lines[index + 1] ?? "", lines[index - 1] ?? ""]) {
+      const amount = parseDollarAmount(candidate);
+      if (amount != null) return amount;
+    }
+  }
+
+  return null;
+}
+
+export function parseCapitalOneTravelCreditSnapshot(input: {
+  topLines: string[];
+  activityLines: string[];
+}): TravelCreditData | null {
+  const activityText = input.activityLines.join("\n");
+  const remaining = findDollarNearLabel(
+    input.topLines,
+    /available\s+to\s+spend\s+on\s+travel|available/i,
+  );
+  if (remaining == null) return null;
+
+  const grantMatch = activityText.match(
+    /ANNUAL TRAVEL CREDIT[\s\S]{0,240}?\+\s*\$([\d,]+(?:\.\d{1,2})?)/i,
+  );
+  const grantedAmount = parseCapturedDollarAmount(grantMatch?.[1]);
+  const displayedAnnualAmount = findDollarNearLabel(
+    input.topLines,
+    /^annual\s+travel\s+credit$/i,
+  );
+  const total = Math.max(
+    remaining,
+    grantedAmount ?? displayedAnnualAmount ?? remaining,
+  );
+
+  const renewLine = input.topLines.find((line) => /^Renews\s+/i.test(line));
+  const period = renewLine ? renewLine.trim() : null;
+  return { remaining, total, period };
+}
+
 function readSummaryCards(value: unknown): CapitalOneSummaryCard[] {
   if (!Array.isArray(value)) {
     return [];
@@ -173,23 +238,6 @@ export function createCapitalOneSync(options: CapitalOneSyncDeps) {
     const scrapeResults = await chrome.scripting.executeScript({
       target: { tabId },
       func: () => {
-        function parseDollarAmount(value: string) {
-          const match = value.match(/\$([\d,]+(?:\.\d{1,2})?)/);
-          if (!match) return null;
-
-          const amount = Number.parseFloat(match[1].replace(/,/g, ""));
-          return Number.isFinite(amount) ? amount : null;
-        }
-
-        function parseLastDollarAmount(value: string) {
-          const matches = Array.from(value.matchAll(/\$([\d,]+(?:\.\d{1,2})?)/g));
-          const lastMatch = matches.at(-1);
-          if (!lastMatch) return null;
-
-          const amount = Number.parseFloat(lastMatch[1].replace(/,/g, ""));
-          return Number.isFinite(amount) ? amount : null;
-        }
-
         function getVisibleLines(element: Element) {
           const text = element instanceof HTMLElement
             ? element.innerText
@@ -198,32 +246,6 @@ export function createCapitalOneSync(options: CapitalOneSyncDeps) {
             .split("\n")
             .map((line) => line.trim())
             .filter(Boolean);
-        }
-
-        function findDollarNearLabel(lines: string[], label: RegExp) {
-          for (let index = 0; index < lines.length; index += 1) {
-            const line = lines[index];
-            const labelMatch = line.match(label);
-            if (!labelMatch) continue;
-
-            const labelIndex = labelMatch.index ?? 0;
-            const afterLabel = line.slice(labelIndex + labelMatch[0].length);
-            const beforeLabel = line.slice(0, labelIndex);
-            const inlineAmount =
-              parseDollarAmount(afterLabel) ?? parseLastDollarAmount(beforeLabel);
-            if (inlineAmount != null) return inlineAmount;
-
-            const candidates = [
-              lines[index + 1] ?? "",
-              lines[index - 1] ?? "",
-            ];
-            for (const candidate of candidates) {
-              const amount = parseDollarAmount(candidate);
-              if (amount != null) return amount;
-            }
-          }
-
-          return null;
         }
 
         const modal = document.querySelector(
@@ -241,27 +263,11 @@ export function createCapitalOneSync(options: CapitalOneSyncDeps) {
         }
 
         const topLines = getVisibleLines(topSection);
-        const text = topLines.join("\n");
-        const remaining = findDollarNearLabel(
-          topLines,
-          /available\s+to\s+spend\s+on\s+travel|available/i,
-        ) ?? 0;
-
         const bottomSection = modal.querySelector(
           ".travel-credit-history-modal-bottom-section",
         );
         const bottomLines = bottomSection ? getVisibleLines(bottomSection) : [];
-        const bottomText = bottomLines.join("\n");
-        const total = findDollarNearLabel(topLines, /^annual\s+travel\s+credit$/i)
-          ?? parseDollarAmount(
-            bottomText.match(/ANNUAL TRAVEL CREDIT[^+]*\+\s*\$[\d,]+(?:\.\d{2})?/i)?.[0] ?? "",
-          )
-          ?? 300;
-
-        const renewMatch = text.match(/Renews\s+(.+?)(?:\s*$|\s*Travel)/);
-        const period = renewMatch ? `Renews ${renewMatch[1].trim()}` : null;
-
-        return { remaining, total, period };
+        return { topLines, activityLines: bottomLines };
       },
     });
 
@@ -269,18 +275,20 @@ export function createCapitalOneSync(options: CapitalOneSyncDeps) {
     if (!isRecord(scraped)) {
       return null;
     }
-
-    const remaining = readNumber(scraped.remaining);
-    const total = readNumber(scraped.total);
-    if (remaining == null || total == null) {
+    const topLines = Array.isArray(scraped.topLines)
+      ? scraped.topLines.filter((line): line is string => typeof line === "string")
+      : [];
+    const activityLines = Array.isArray(scraped.activityLines)
+      ? scraped.activityLines.filter((line): line is string => typeof line === "string")
+      : [];
+    const travelCredit = parseCapitalOneTravelCreditSnapshot({
+      topLines,
+      activityLines,
+    });
+    if (!travelCredit) {
       return null;
     }
-
-    return {
-      remaining,
-      total,
-      period: readString(scraped.period),
-    } satisfies TravelCreditData;
+    return travelCredit;
   }
 
   async function capitalOneFinalize(
