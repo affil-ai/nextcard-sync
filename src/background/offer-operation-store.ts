@@ -135,15 +135,25 @@ export function createOfferOperationStore() {
     runId: string,
     cards: OfferOperationCard[],
   ) {
+    await hydrate();
+    const current = snapshot.active?.runId === runId
+      ? snapshot.active
+      : null;
+    const preserveRecentCompletion =
+      current?.phase === "checking"
+      && current.added > 0
+      && current.saveStatus === "saved";
     return patch(runId, {
       phase: "ready_to_add",
       cards,
       checkedAt: new Date().toISOString(),
       error: null,
       total: null,
-      added: 0,
-      failed: 0,
+      added: preserveRecentCompletion ? current.added : 0,
+      failed: preserveRecentCompletion ? current.failed : 0,
       remaining: null,
+      saveStatus: preserveRecentCompletion ? "saved" : "not_started",
+      saveError: null,
     });
   }
 
@@ -205,6 +215,59 @@ export function createOfferOperationStore() {
       : { ok: false as const, error: "invalid_transition" };
   }
 
+  async function continueAfterSavedEnrollment(runId: string) {
+    await hydrate();
+    const completed = Object.values(snapshot.history).find(
+      (state) => state?.runId === runId,
+    ) ?? null;
+    if (
+      !completed
+      || completed.phase !== "completed"
+      || completed.saveStatus !== "saved"
+      || completed.cards.length === 0
+      || completed.selectedCardKeys.length === 0
+    ) {
+      return null;
+    }
+
+    const selectedKeys = new Set(completed.selectedCardKeys);
+    const refreshAllCounts = completed.issuer === "amex";
+    const cards = completed.cards.map((card) => {
+      if (refreshAllCounts) {
+        return {
+          ...card,
+          availableCount: null,
+          countStatus: "unknown" as const,
+          sharedOfferCount: null,
+        };
+      }
+      if (!selectedKeys.has(card.key) || card.availableCount == null) return card;
+      return {
+        ...card,
+        availableCount: Math.max(0, card.availableCount - completed.added),
+      };
+    });
+    const now = new Date().toISOString();
+    const next: OfferOperationState = {
+      ...createOfferOperation(completed.issuer, crypto.randomUUID(), now),
+      phase: refreshAllCounts ? "checking" : "ready_to_add",
+      ownedTabId: completed.ownedTabId,
+      checkedAt: completed.checkedAt ?? now,
+      cards,
+      selectedCardKeys: completed.selectedCardKeys,
+      added: completed.added,
+      failed: completed.failed,
+      saveStatus: "saved",
+      saveError: null,
+    };
+    snapshot = {
+      active: next,
+      history: { ...snapshot.history, [completed.issuer]: next },
+    };
+    await persist();
+    return next;
+  }
+
   async function cancel(runId?: string, closeTab = true) {
     await hydrate();
     const active = snapshot.active;
@@ -242,6 +305,7 @@ export function createOfferOperationStore() {
     patchActiveIssuer,
     patchActiveRun,
     beginEnrollment,
+    continueAfterSavedEnrollment,
     markReady,
     cancel,
     clearAccountState,

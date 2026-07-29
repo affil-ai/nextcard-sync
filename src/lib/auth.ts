@@ -10,6 +10,7 @@
  */
 
 import type { NextCardAuth } from "./types";
+import { REWARDS_SUMMARIES_STORAGE_KEY } from "./rewards-summary";
 
 const STORAGE_KEY = "nextcard_auth";
 
@@ -34,6 +35,7 @@ export async function clearAuth(): Promise<void> {
   const accountScopedKeys = Object.keys(stored).filter((key) => (
     key === STORAGE_KEY
     || key === "nextcard_extension_profile"
+    || key === REWARDS_SUMMARIES_STORAGE_KEY
     || key === "nextcard_offer_operation_snapshot_v1"
     || key === "offerUrlCache"
     || key === "detectedOfferUrlCache"

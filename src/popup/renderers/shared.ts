@@ -84,8 +84,11 @@ export function openOffers() {
   chrome.tabs.create({ url: OFFERS_URL });
 }
 
-export function openRewards() {
-  chrome.tabs.create({ url: REWARDS_URL });
+export function openRewards(dashboardPath = "/dashboard/rewards") {
+  const safePath = dashboardPath.startsWith("/dashboard/rewards")
+    ? dashboardPath
+    : "/dashboard/rewards";
+  chrome.tabs.create({ url: new URL(safePath, __NEXTCARD_URL__).toString() });
 }
 
 export function updateWalletBtn(providerId: string, status: string) {

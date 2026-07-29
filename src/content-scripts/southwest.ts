@@ -7,6 +7,7 @@ import type { SouthwestLoyaltyData, LoginState } from "../lib/types";
 import { createContentScriptRunControl } from "../lib/content-script-run-control";
 import { showOverlay, updateOverlay, updateOverlayProgress, stopOverlayPoll } from "../lib/overlay";
 import { createLoginStateMonitor } from "../lib/login-state-monitor";
+import { summarizeSouthwestFlightCredits } from "../lib/southwest-flight-credits";
 
 const runControl = createContentScriptRunControl("southwest");
 
@@ -255,9 +256,8 @@ function scrapeAccountPage(): SouthwestLoyaltyData {
   }
 
   try {
-    // Southwest currently renders a human-readable sentence when there are no flight credits.
-    const summary = normalizeText(flightCreditsSection);
-    data.flightCreditsSummary = summary || null;
+    data.flightCreditsSummary =
+      summarizeSouthwestFlightCredits(flightCreditsSection);
   } catch (error) {
     console.warn("[NextCard Southwest] Failed to read flight credits:", error);
   }

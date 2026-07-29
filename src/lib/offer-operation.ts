@@ -56,6 +56,7 @@ export interface OfferOperationSnapshot {
 
 export const OFFER_OPERATION_STORAGE_KEY = "nextcard_offer_operation_snapshot_v1";
 export const OFFER_RESULT_FRESHNESS_MS = 15 * 60 * 1000;
+export const OFFER_SAVE_FAILURE_GRACE_MS = 5_000;
 
 const ALLOWED_PHASE_TRANSITIONS: Record<OfferOperationPhase, OfferOperationPhase[]> = {
   opening: ["waiting_for_login", "checking", "cancelled", "interrupted", "failed"],
@@ -90,6 +91,16 @@ export function isOfferResultFresh(
   if (state.phase !== "ready_to_add" || !state.checkedAt) return false;
   const checkedAt = new Date(state.checkedAt).getTime();
   return Number.isFinite(checkedAt) && now - checkedAt <= OFFER_RESULT_FRESHNESS_MS;
+}
+
+export function isOfferCompletionContinuing(state: OfferOperationState) {
+  return (
+    state.phase === "completed"
+    && state.added > 0
+    && state.cards.length > 0
+    && state.selectedCardKeys.length > 0
+    && (state.saveStatus === "saving" || state.saveStatus === "saved")
+  );
 }
 
 export function createOfferOperation(
@@ -319,5 +330,30 @@ export function getOfferOperationStatusText(
       return "Check interrupted — try again";
     case "failed":
       return state.error ?? `Couldn’t check ${issuerName}`;
+  }
+}
+
+export function getOfferSaveStatusText(
+  state: OfferOperationState,
+  now = Date.now(),
+) {
+  switch (state.saveStatus) {
+    case "saving":
+    case "queued_for_retry":
+      return "finishing save to nextcard";
+    case "saved":
+      return "saved to nextcard";
+    case "failed": {
+      const updatedAt = new Date(state.updatedAt).getTime();
+      if (
+        Number.isFinite(updatedAt)
+        && now - updatedAt < OFFER_SAVE_FAILURE_GRACE_MS
+      ) {
+        return "finishing save to nextcard";
+      }
+      return state.saveError ?? "couldn’t save to nextcard";
+    }
+    case "not_started":
+      return "";
   }
 }

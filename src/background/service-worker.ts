@@ -15,6 +15,7 @@ import {
   pushToNextCard,
   validateProviderData,
 } from "../lib/sync-to-nextcard";
+import { REWARDS_SUMMARIES_STORAGE_KEY } from "../lib/rewards-summary";
 import { syncOffersToNextCard, syncDetectedOffersToNextCard, retryPendingOfferSyncs, pullOfferUrlCache } from "../lib/sync-offers-to-nextcard";
 import type { OfferSyncPayload, DetectedOfferSyncPayload } from "../lib/sync-offers-to-nextcard";
 import { retryPendingOfferActivationCompletions } from "../lib/offer-activation-usage";
@@ -126,7 +127,17 @@ async function cancelRun(providerId: ProviderId, error: string | null = null) {
 
 async function hydrateFromNextCard() {
   const result = await pullFromNextCard();
-  if (!result.ok || !Array.isArray(result.accounts) || result.accounts.length === 0) {
+  if (!result.ok) {
+    return;
+  }
+
+  if (result.summaries) {
+    await chrome.storage.local.set({
+      [REWARDS_SUMMARIES_STORAGE_KEY]: result.summaries,
+    });
+  }
+
+  if (!Array.isArray(result.accounts) || result.accounts.length === 0) {
     return;
   }
 
@@ -322,8 +333,33 @@ async function pushScrapedData(providerId: ProviderId, data: unknown) {
 
   const result = await pushToNextCard(providerId, validated.data);
   updateProviderFromBackendPush(providerId, result);
+  if (result.ok) {
+    try {
+      await hydrateFromNextCard();
+    } catch (error) {
+      console.warn(
+        "[NextCard SW] Rewards summary refresh after sync failed:",
+        error,
+      );
+    }
+  }
   if (!result.ok && result.error === "selection_locked") {
     await refreshExtensionProfile();
+  }
+  return result;
+}
+
+async function deleteProviderFromNextCard(providerId: ProviderId) {
+  const result = await deleteFromNextCard(providerId);
+  if (result.ok) {
+    try {
+      await hydrateFromNextCard();
+    } catch (error) {
+      console.warn(
+        "[NextCard SW] Rewards summary refresh after delete failed:",
+        error,
+      );
+    }
   }
   return result;
 }
@@ -492,7 +528,7 @@ chrome.runtime.onMessage.addListener(
     onSignOut,
     recordConsent,
     pushToNextCard: pushScrapedData,
-    deleteFromNextCard,
+    deleteFromNextCard: deleteProviderFromNextCard,
     isProviderLocked: async (providerId) => {
       const profile = await getBestAvailableExtensionProfile();
       if (isProviderLocked(profile, providerId)) {
@@ -612,12 +648,14 @@ chrome.alarms.onAlarm.addListener((alarm) => {
 
 async function retryQueuedOfferSyncs() {
   const result = await retryPendingOfferSyncs();
-  await Promise.all(result.savedRunIds.map((runId) =>
-    offerOperations.patch(runId, {
+  await Promise.all(result.savedRunIds.map(async (runId) => {
+    await offerOperations.patch(runId, {
       saveStatus: "saved",
       saveError: null,
-    })
-  ));
+    });
+    await offerOperations.continueAfterSavedEnrollment(runId);
+    void offerCoordinator.resume();
+  }));
 }
 
 void getAuth().then((auth) => {

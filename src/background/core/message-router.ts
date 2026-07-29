@@ -1213,6 +1213,10 @@ export function createMessageRouter(options: {
             saveStatus: syncError ? "failed" : completionSaveStatus,
             saveError: syncError,
           });
+          if (!syncError && completionSaveStatus === "saved") {
+            await options.offerOperations.continueAfterSavedEnrollment(runId);
+            void options.offerCoordinator.resume();
+          }
           sendResponse({ ok: true });
         })();
         return true;
@@ -1284,6 +1288,10 @@ export function createMessageRouter(options: {
           }
           if (runId) {
             await options.offerOperations.patch(runId, { saveStatus, saveError });
+            if (saveStatus === "saved") {
+              await options.offerOperations.continueAfterSavedEnrollment(runId);
+              void options.offerCoordinator.resume();
+            }
           }
           sendResponse({ ok: true, saveStatus });
         })();
@@ -1410,6 +1418,10 @@ export function createMessageRouter(options: {
           }
           if (runId) {
             await options.offerOperations.patch(runId, { saveStatus, saveError });
+            if (saveStatus === "saved") {
+              await options.offerOperations.continueAfterSavedEnrollment(runId);
+              void options.offerCoordinator.resume();
+            }
           }
           sendResponse({ ok: true, saveStatus });
         })();

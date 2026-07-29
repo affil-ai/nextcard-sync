@@ -1,4 +1,5 @@
 import type {
+  ExtensionRewardsSummary,
   ExtensionProfile,
   NextCardAuth,
   ProviderId,
@@ -27,6 +28,10 @@ import {
 } from "../contracts/loyalty-provider-data";
 import { orderedProviderIds } from "../providers/provider-groups";
 import { normalizeExtensionProfile } from "../lib/extension-profile";
+import {
+  normalizeRewardsSummaries,
+  REWARDS_SUMMARIES_STORAGE_KEY,
+} from "../lib/rewards-summary";
 
 export interface PopupOnboardingFlags {
   disclosureAccepted: boolean;
@@ -38,6 +43,7 @@ export interface PopupSnapshot {
   auth: NextCardAuth | null;
   allStates: ProviderStateMap;
   extensionProfile: ExtensionProfile | null;
+  rewardsSummaries: ExtensionRewardsSummary[];
 }
 
 function emptyProviderState<T>(): ProviderSyncState<T> {
@@ -215,6 +221,28 @@ export async function loadStoredProviderStates() {
   return hydrateStoredProviderStates(result);
 }
 
+export async function loadStoredRewardsSummaries() {
+  const result = await chrome.storage.local.get(
+    REWARDS_SUMMARIES_STORAGE_KEY,
+  );
+  return normalizeRewardsSummaries(result[REWARDS_SUMMARIES_STORAGE_KEY]);
+}
+
+export function subscribeToRewardsSummaries(
+  onChange: (summaries: ExtensionRewardsSummary[]) => void,
+) {
+  const listener: Parameters<typeof chrome.storage.onChanged.addListener>[0] = (
+    changes,
+  ) => {
+    const change = changes[REWARDS_SUMMARIES_STORAGE_KEY];
+    if (!change) return;
+    onChange(normalizeRewardsSummaries(change.newValue));
+  };
+
+  chrome.storage.onChanged.addListener(listener);
+  return () => chrome.storage.onChanged.removeListener(listener);
+}
+
 export async function getAuthState() {
   const auth = await chrome.runtime.sendMessage({ type: "GET_AUTH_STATE" });
   return normalizeAuth(auth);
@@ -231,13 +259,16 @@ export async function refreshExtensionProfile() {
 }
 
 export async function loadInitialPopupState(): Promise<PopupSnapshot> {
-  const [auth, allStates, extensionProfile] = await Promise.all([
-    getAuthState(),
-    loadStoredProviderStates(),
-    refreshExtensionProfile(),
-  ]);
+  const [auth, allStates, extensionProfile, rewardsSummaries] = await Promise.all(
+    [
+      getAuthState(),
+      loadStoredProviderStates(),
+      refreshExtensionProfile(),
+      loadStoredRewardsSummaries(),
+    ],
+  );
 
-  return { auth, allStates, extensionProfile };
+  return { auth, allStates, extensionProfile, rewardsSummaries };
 }
 
 export async function pollPopupSnapshot() {

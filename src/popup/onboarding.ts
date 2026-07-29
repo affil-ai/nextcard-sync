@@ -2,6 +2,22 @@ import type { ProviderId } from "../lib/types";
 
 const ONBOARDING_STEPS = 4;
 
+export function getOnboardingCompletionAction(
+  replaying: boolean,
+  signedIn: boolean,
+) {
+  if (replaying) {
+    return {
+      label: "Set up Rewards",
+      destination: "rewards" as const,
+    };
+  }
+  return {
+    label: signedIn ? "Continue to Offers" : "Continue with nextcard",
+    destination: "offers" as const,
+  };
+}
+
 export function createOnboardingController(options: {
   onboardingBtn: HTMLButtonElement;
   onComplete: () => void;

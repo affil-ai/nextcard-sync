@@ -1,4 +1,5 @@
 import type {
+  ExtensionRewardsSummary,
   ExtensionProfile,
   NextCardAuth,
   ProviderId,
@@ -7,6 +8,8 @@ import type {
 } from "../lib/types";
 import {
   getOfferOperationStatusText,
+  getOfferSaveStatusText,
+  isOfferCompletionContinuing,
   isOfferOperationActive,
   isOfferResultFresh,
   normalizeOfferOperationSnapshot,
@@ -25,8 +28,13 @@ import {
   pollPopupSnapshot,
   startProviderSync,
   subscribeToOnboardingFlags,
+  subscribeToRewardsSummaries,
 } from "./state";
-import { createConsentController, createOnboardingController } from "./onboarding";
+import {
+  createConsentController,
+  createOnboardingController,
+  getOnboardingCompletionAction,
+} from "./onboarding";
 import { createHomeRenderer } from "./home/render-home";
 import {
   getOffersSetupCompletedStorageKey,
@@ -45,7 +53,7 @@ let activeDestination: "offers" | "rewards" = "offers";
 let offerConsentVersion = 0;
 const CURRENT_OFFERS_INTRO_VERSION = 10;
 const CURRENT_OFFER_CONSENT_VERSION = 1;
-const CURRENT_FULL_FLOW_QA_RESET_VERSION = 1;
+const CURRENT_FULL_FLOW_QA_RESET_VERSION = 2;
 const SIGNED_OUT_CONFIRMATION_POLLS = 3;
 const NEXTCARD_AUTH_WAIT_TIMEOUT_MS = 45_000;
 const OFFER_ACTIVATION_USAGE_REFRESH_MS = 3 * 60 * 1000;
@@ -60,6 +68,7 @@ let offerActivationUsage: {
 } | null = null;
 let offerActivationUsageFetchedAt = 0;
 let offerActivationUsageRequest: Promise<void> | null = null;
+const usageRefreshedOfferRunIds = new Set<string>();
 let offerLimitDialogTrigger: HTMLElement | null = null;
 
 function setDestination(destination: "offers" | "rewards", options: { persist?: boolean } = {}) {
@@ -888,7 +897,6 @@ function initAmexOffers() {
     });
   }
 
-  const amexCard = document.getElementById("amexOffersCard");
   function handleAmexDiscover() {
     const gen = ++amexDiscoverGen;
     showState("Loading");
@@ -901,7 +909,6 @@ function initAmexOffers() {
     });
   }
   discoverBtn?.addEventListener("click", (e) => { e.stopPropagation(); requestOfferCheck("amex", handleAmexDiscover); });
-  amexCard?.addEventListener("click", () => { if (panels.Initial?.style.display !== "none") requestOfferCheck("amex", handleAmexDiscover); });
   document.getElementById("amexOffersLoadingCancel")?.addEventListener("click", (e) => {
     e.stopPropagation();
     amexDiscoverGen++;
@@ -1263,7 +1270,6 @@ function initChaseOffers() {
     });
   }
 
-  const chaseCard = document.getElementById("chaseOffersCard");
   function handleChaseDiscover() {
     const gen = ++chaseDiscoverGen;
     showState("Loading");
@@ -1276,7 +1282,6 @@ function initChaseOffers() {
     });
   }
   document.getElementById("chaseOffersDiscoverBtn")?.addEventListener("click", (e) => { e.stopPropagation(); requestOfferCheck("chase", handleChaseDiscover); });
-  chaseCard?.addEventListener("click", () => { if (states.Initial?.style.display !== "none") requestOfferCheck("chase", handleChaseDiscover); });
   document.getElementById("chaseOffersLoadingCancel")?.addEventListener("click", (e) => {
     e.stopPropagation();
     chaseDiscoverGen++;
@@ -1546,7 +1551,6 @@ function initCitiOffers() {
     });
   }
 
-  const citiCard = document.getElementById("citiOffersCard");
   function handleCitiDiscover() {
     const gen = ++citiDiscoverGen;
     showState("Loading");
@@ -1559,7 +1563,6 @@ function initCitiOffers() {
     });
   }
   document.getElementById("citiOffersDiscoverBtn")?.addEventListener("click", (e) => { e.stopPropagation(); requestOfferCheck("citi", handleCitiDiscover); });
-  citiCard?.addEventListener("click", () => { if (states.Initial?.style.display !== "none") requestOfferCheck("citi", handleCitiDiscover); });
   document.getElementById("citiOffersLoadingCancel")?.addEventListener("click", (e) => {
     e.stopPropagation();
     citiDiscoverGen++;
@@ -1852,7 +1855,6 @@ function initCapitalOneOffers() {
     });
   }
 
-  const capitalOneCard = document.getElementById("capitaloneOffersCard");
   function handleDiscover() {
     const gen = ++capitalOneDiscoverGen;
     showState("Loading");
@@ -1888,7 +1890,6 @@ function initCapitalOneOffers() {
   }
 
   document.getElementById("capitaloneOffersDiscoverBtn")?.addEventListener("click", (e) => { e.stopPropagation(); requestOfferCheck("capitalone", handleDiscover); });
-  capitalOneCard?.addEventListener("click", () => { if (states.Initial?.style.display !== "none") requestOfferCheck("capitalone", handleDiscover); });
   document.getElementById("capitaloneOffersLoadingCancel")?.addEventListener("click", (e) => {
     e.stopPropagation();
     capitalOneDiscoverGen++;
@@ -2163,6 +2164,7 @@ let tourSyncProvider: ProviderId | null = null;
 let tourSyncBaselineLastSyncedAt: string | null = null;
 let tourSyncObservedInProgress = false;
 let latestProviderStates: ProviderStateMap | null = null;
+let latestRewardsSummaries: ExtensionRewardsSummary[] = [];
 let extensionProfile: ExtensionProfile | null = null;
 let offersSetupCompleted = false;
 let offersSetupCompletedStorageKey: string | null = null;
@@ -2216,6 +2218,7 @@ function renderOfferActivityMessage(title: string, detail: string) {
   const detailElement = document.getElementById("offerActivityDetail");
   if (!container || !titleElement || !detailElement) return;
   container.hidden = false;
+  container.removeAttribute("data-operation-active");
   titleElement.textContent = title;
   detailElement.textContent = detail;
 }
@@ -2313,9 +2316,14 @@ function renderBackgroundOwnedIssuerState(snapshot: OfferOperationSnapshot) {
       ? snapshot.active
       : snapshot.history[issuer];
     if (!state) continue;
+    const completionContinuing = isOfferCompletionContinuing(state);
     const panelNames = ["Initial", "Loading", "Ready", "Running", "Done", "Error"] as const;
+    const refreshingAfterCompletion =
+      state.phase === "checking"
+      && state.added > 0
+      && state.saveStatus === "saved";
     const targetPanel =
-      state.phase === "ready_to_add"
+      state.phase === "ready_to_add" || refreshingAfterCompletion
         ? "Ready"
         : state.phase === "adding"
           ? "Running"
@@ -2381,7 +2389,14 @@ function renderBackgroundOwnedIssuerState(snapshot: OfferOperationSnapshot) {
           : remaining == null
             ? availableCount
             : Math.min(availableCount, remaining);
-      if (refreshButton) refreshButton.textContent = fresh ? "Refresh" : "Check again";
+      if (refreshButton) {
+        refreshButton.textContent = refreshingAfterCompletion
+          ? "Refreshing…"
+          : fresh
+            ? "Refresh"
+            : "Check again";
+        refreshButton.disabled = refreshingAfterCompletion;
+      }
       if (issuer === "amex") {
         const sharedOption = document.getElementById("amexOffersSharedOption");
         const sharedCheckbox = document.getElementById(
@@ -2401,7 +2416,9 @@ function renderBackgroundOwnedIssuerState(snapshot: OfferOperationSnapshot) {
       }
       if (countElement) {
         countElement.textContent =
-          availableCount == null
+          refreshingAfterCompletion
+            ? "Refreshing availability across your Amex cards…"
+            : availableCount == null
             ? "Offer count unavailable for this card. Check again."
             : availableCount > 0
               ? `${formatAvailableToActivate(availableCount)} on this card`
@@ -2464,6 +2481,17 @@ function renderBackgroundOwnedIssuerState(snapshot: OfferOperationSnapshot) {
         ? `${state.added} added`
         : `${state.added} of ${state.total} added`;
     }
+    const recentResult = document.getElementById(`${issuer}OffersRecentResult`);
+    if (recentResult) {
+      recentResult.hidden = !(
+        (state.phase === "ready_to_add" || refreshingAfterCompletion)
+        && state.added > 0
+      );
+      if (!recentResult.hidden) {
+        const saveOutcome = getOfferSaveStatusText(state);
+        recentResult.textContent = `${state.added} ${state.added === 1 ? "offer" : "offers"} added${saveOutcome ? ` · ${saveOutcome}` : ""}. Choose another card to keep going.`;
+      }
+    }
     const summary = document.getElementById(`${issuer}OffersSummary`);
     if (summary && (state.phase === "completed" || state.phase === "cancelled")) {
       const outcome = state.phase === "cancelled"
@@ -2471,15 +2499,22 @@ function renderBackgroundOwnedIssuerState(snapshot: OfferOperationSnapshot) {
         : state.failed > 0
           ? `${state.added} added · ${state.failed} couldn’t be added`
           : `${state.added} offers added`;
-      const saveOutcome =
-        state.saveStatus === "queued_for_retry"
-          ? " · queued to save to nextcard"
-          : state.saveStatus === "failed"
-            ? ` · ${state.saveError ?? "couldn’t save to nextcard"}`
-            : state.saveStatus === "saved"
-              ? " · saved to nextcard"
-              : "";
+      const saveStatusText =
+        completionContinuing && state.saveStatus === "saved"
+          ? "refreshing your cards…"
+          : getOfferSaveStatusText(state);
+      const saveOutcome = saveStatusText ? ` · ${saveStatusText}` : "";
       summary.textContent = `${outcome}${saveOutcome}`;
+    }
+    const donePanel = document.getElementById(`${issuer}OffersDone`);
+    const doneActions = donePanel?.querySelector<HTMLElement>(".offer-done-actions");
+    if (doneActions) doneActions.hidden = completionContinuing;
+    if (donePanel) {
+      if (completionContinuing) {
+        donePanel.setAttribute("aria-busy", "true");
+      } else {
+        donePanel.removeAttribute("aria-busy");
+      }
     }
   }
 }
@@ -2561,7 +2596,19 @@ function renderOffersSetupHierarchy(snapshot: OfferOperationSnapshot) {
     offersFirstUiEnabled
     && !offersSetupCompleted
     && setup.stage !== "complete";
-  if (recommendation) recommendation.hidden = !guidedSetupActive;
+  const operationIsRunning = Boolean(
+    snapshot.active
+    && snapshot.active.phase !== "ready_to_add",
+  );
+  if (recommendation) {
+    const showRecommendation =
+      guidedSetupActive
+      && (
+        setup.stage === "choose_issuer"
+        || setup.stage === "sync_rewards"
+      );
+    recommendation.hidden = !showRecommendation;
+  }
   panel?.classList.toggle("offers-guided-setup", guidedSetupActive);
   if (guidedSetupActive) {
     panel?.setAttribute("data-guided-stage", setup.stage);
@@ -2577,31 +2624,18 @@ function renderOffersSetupHierarchy(snapshot: OfferOperationSnapshot) {
   if (setupActions) setupActions.hidden = setup.stage !== "choose_issuer";
   const rewardsActions = document.getElementById("offersSetupRewardsActions");
   if (rewardsActions) rewardsActions.hidden = setup.stage !== "sync_rewards";
-  const operationIsRunning = Boolean(
-    snapshot.active
-    && snapshot.active.phase !== "ready_to_add",
-  );
-  const setupStatus = document.getElementById("offersSetupStatus");
-  if (setupStatus) setupStatus.hidden = !operationIsRunning;
-  const setupStatusText = document.getElementById("offersSetupStatusText");
-  if (setupStatusText && snapshot.active) {
-    setupStatusText.textContent = snapshot.active.phase === "adding"
-      ? "You can close this popup while we finish."
-      : "Keep the issuer tab open. You can come back anytime.";
-  }
-  const setupCancel = document.getElementById("offersSetupCancel");
-  if (setupCancel && snapshot.active) {
-    setupCancel.textContent = snapshot.active.phase === "adding"
-      ? "Stop after this offer"
-      : "Cancel";
-  }
-
   for (const issuer of ["chase", "amex", "citi"] as const) {
     const showGuidedIssuer = (
       setup.stage === "check_offers" && !snapshot.active
     ) || (
       setup.stage === "review_offers"
       && setup.operation?.phase === "ready_to_add"
+    ) || (
+      snapshot.active?.issuer === issuer
+      && (
+        setup.stage === "check_offers"
+        || setup.stage === "review_offers"
+      )
     );
     document
       .getElementById(`${issuer}OffersCard`)
@@ -2655,7 +2689,6 @@ function renderOffersSetupHierarchy(snapshot: OfferOperationSnapshot) {
 
 async function refreshOfferOperationUi() {
   if (!offersFirstUiEnabled) return;
-  void refreshOfferActivationUsage();
   const raw = await chrome.runtime.sendMessage({
     type: "GET_OFFER_OPERATION_STATUS",
   }).catch(() => null);
@@ -2664,27 +2697,53 @@ async function refreshOfferOperationUi() {
   const active = snapshot.active;
 
   if (active) activeOfferRunIds.set(active.issuer, active.runId);
+  const completedUsageState = [
+    snapshot.active,
+    ...Object.values(snapshot.history),
+  ].find((state) => (
+    state
+    && state.added > 0
+    && (
+      state.phase === "completed"
+      || (state.phase === "ready_to_add" && state.saveStatus === "saved")
+    )
+    && !usageRefreshedOfferRunIds.has(state.runId)
+  ));
+  if (completedUsageState) {
+    usageRefreshedOfferRunIds.add(completedUsageState.runId);
+    offerActivationUsageFetchedAt = 0;
+    await refreshOfferActivationUsage(true);
+  } else {
+    void refreshOfferActivationUsage();
+  }
   updateIssuerCardStatus(snapshot);
   renderBackgroundOwnedIssuerState(snapshot);
 
   const activity = document.getElementById("offerActivity");
+  const activityTitle = document.getElementById("offerActivityTitle");
+  const activityDetail = document.getElementById("offerActivityDetail");
   const cancelButton = document.getElementById("offerActivityCancel") as HTMLButtonElement | null;
-  if (activity) activity.hidden = !active;
-  if (active) {
-    renderOfferActivityMessage(
-      getOfferOperationStatusText(active),
+  if (activity && activityTitle && activityDetail && active) {
+    activity.hidden = false;
+    activity.setAttribute("data-operation-active", "true");
+    activityTitle.textContent =
+      active.cancelled && active.phase === "adding"
+        ? `Stopping ${offerIssuerNames[active.issuer]}…`
+        : getOfferOperationStatusText(active);
+    activityDetail.textContent =
       active.phase === "adding"
-        ? "You can keep using nextcard while this finishes."
-        : "Keep the issuer tab open. You can return here at any time.",
-    );
-    if (cancelButton) {
-      cancelButton.hidden = false;
-      cancelButton.textContent = active.phase === "adding"
-        ? "Stop after current offer"
-        : "Cancel";
-    }
-  } else if (cancelButton) {
-    cancelButton.hidden = true;
+        ? active.cancelled
+          ? "We’ll stop safely after the current offer finishes."
+          : "Already-submitted offers can’t be undone. Stop to switch providers."
+        : "Cancel this check to choose another provider.";
+  } else if (activity?.dataset.operationActive === "true") {
+    activity.hidden = true;
+    activity.removeAttribute("data-operation-active");
+  }
+  if (cancelButton) {
+    cancelButton.hidden = !active || active.cancelled;
+    cancelButton.disabled = false;
+    cancelButton.textContent = active?.phase === "adding" ? "Stop" : "Cancel";
   }
 
   const setup = getOffersSetupState(snapshot, firstSyncCompleted, guidedOfferIssuer);
@@ -2701,13 +2760,7 @@ async function refreshOfferOperationUi() {
   });
   for (const issuer of ["chase", "amex", "citi", "capitalone"] as OfferIssuer[]) {
     const card = document.getElementById(`${issuer}OffersCard`);
-    const shouldLockCard = Boolean(
-      active
-      && (
-        active.issuer !== issuer
-        || active.phase !== "ready_to_add"
-      ),
-    );
+    const shouldLockCard = Boolean(active && active.issuer !== issuer);
     card?.classList.toggle("offer-operation-locked", shouldLockCard);
     const action = document.getElementById(`${issuer}OffersDiscoverBtn`) as HTMLButtonElement | null;
     if (action) {
@@ -2725,12 +2778,22 @@ async function refreshOfferOperationUi() {
 function cancelActiveOfferOperation() {
   const active = latestOfferSnapshot.active;
   if (!active) return;
+  const cancelButton = document.getElementById("offerActivityCancel") as HTMLButtonElement | null;
+  if (cancelButton) {
+    cancelButton.disabled = true;
+    cancelButton.textContent = active.phase === "adding" ? "Stopping…" : "Cancelling…";
+  }
   void chrome.runtime.sendMessage({
     type: "CANCEL_OFFER_OPERATION",
     runId: active.runId,
   }).then(() => {
     activeOfferRunIds.delete(active.issuer);
     void refreshOfferOperationUi();
+  }).catch(() => {
+    if (cancelButton) {
+      cancelButton.disabled = false;
+      cancelButton.textContent = active.phase === "adding" ? "Stop" : "Cancel";
+    }
   });
 }
 
@@ -2840,7 +2903,7 @@ for (const button of document.querySelectorAll(".wallet-btn")) {
 }
 
 document.getElementById("homeOffersBtn")?.addEventListener("click", () => openOffers());
-document.getElementById("homeRewardsBtn")?.addEventListener("click", () => openRewards());
+document.getElementById("rewardsDashboardBtn")?.addEventListener("click", () => openRewards());
 
 document.addEventListener("click", (event) => {
   const target = event.target as HTMLElement;
@@ -2935,12 +2998,15 @@ function renderAllProviders(allStates: ProviderStateMap) {
 
 const onboardingController = createOnboardingController({
   onboardingBtn: onboardingElements.onboardingBtn,
-  getFinalLabel: () => replayingOnboarding
-    ? "Back to Offers"
-    : currentAuth
-      ? "Continue to Offers"
-      : "Continue with nextcard",
+  getFinalLabel: () => getOnboardingCompletionAction(
+    replayingOnboarding,
+    Boolean(currentAuth),
+  ).label,
   onComplete: () => {
+    const completion = getOnboardingCompletionAction(
+      replayingOnboarding,
+      Boolean(currentAuth),
+    );
     replayingOnboarding = false;
     const replayClose = document.getElementById("onboardingReplayClose");
     if (replayClose) replayClose.hidden = true;
@@ -2953,10 +3019,10 @@ const onboardingController = createOnboardingController({
       disclosureAccepted: true,
       offersIntroVersion: CURRENT_OFFERS_INTRO_VERSION,
       offersCoachmarkSeen: true,
-      lastHomeDestination: "offers",
+      lastHomeDestination: completion.destination,
     });
     destinationRestored = true;
-    setDestination("offers", { persist: false });
+    setDestination(completion.destination, { persist: false });
     if (currentAuth) {
       renderAuthState(currentAuth);
     } else {
@@ -3032,7 +3098,6 @@ async function recordOfferConsent() {
 
 async function startSyncFlow(
   providerId: ProviderId,
-  options: { showViewOnStart: boolean },
 ) {
   if (!firstSyncCompleted || rewardsGuideQaPreviewActive) {
     tourSyncProvider = providerId;
@@ -3048,8 +3113,10 @@ async function startSyncFlow(
     tourSyncBaselineLastSyncedAt = null;
     tourSyncObservedInProgress = false;
   }
-  if (started && options.showViewOnStart) {
-    showView(providerId);
+  if (started) {
+    destinationRestored = true;
+    setDestination("rewards");
+    showView("home");
   }
 
   return started;
@@ -3059,7 +3126,7 @@ const consentController = createConsentController({
   ...consentElements,
   onContinue: (providerId) => {
     markConsentAccepted();
-    void startSyncFlow(providerId, { showViewOnStart: true });
+    void startSyncFlow(providerId);
   },
   onActionContinue: (action) => {
     action();
@@ -3110,7 +3177,7 @@ async function requestSync(providerId: ProviderId) {
     return false;
   }
 
-  return startSyncFlow(providerId, { showViewOnStart: false });
+  return startSyncFlow(providerId);
 }
 
 function handleProviderSelected(providerId: ProviderId) {
@@ -3122,12 +3189,7 @@ function handleProviderSelected(providerId: ProviderId) {
     return;
   }
 
-  if (!firstSyncCompleted || rewardsGuideQaPreviewActive) {
-    void requestSync(providerId);
-    return;
-  }
-
-  showView(providerId);
+  void requestSync(providerId);
 }
 
 let upgradeRequestInFlight = false;
@@ -3155,6 +3217,7 @@ const renderHome = createHomeRenderer({
   getFirstSyncCompleted: () => firstSyncCompleted,
   getRewardsGuidePreview: () => rewardsGuideQaPreviewActive,
   getExtensionProfile: () => extensionProfile,
+  getRewardsSummaries: () => latestRewardsSummaries,
   markFirstSyncCompleted: () => {
     firstSyncCompleted = true;
     chrome.storage.local.set({ firstSyncCompleted: true });
@@ -3162,6 +3225,10 @@ const renderHome = createHomeRenderer({
   },
   onProviderSelected: handleProviderSelected,
   onLockedProviderSelected: handleLockedProviderSelected,
+  onSummarySelected: (summary) => openRewards(summary.dashboardPath),
+  onSummarySyncRequested: (providerId) => {
+    void requestSync(providerId);
+  },
 });
 
 function getInitials(name: string | null) {
@@ -3326,14 +3393,15 @@ function maybeShowCongratsBanner(allStates: Record<ProviderId, ProviderSyncState
     );
   if (!hasFreshCompletion) return;
 
-  const providerId = tourSyncProvider;
   tourSyncProvider = null;
   tourSyncBaselineLastSyncedAt = null;
   tourSyncObservedInProgress = false;
   firstSyncCompleted = true;
   chrome.storage.local.set({ firstSyncCompleted: true });
   renderOffersSetupHierarchy(latestOfferSnapshot);
-  showView(providerId);
+  destinationRestored = true;
+  setDestination("rewards");
+  showView("home");
   homeElements.congratsBanner.classList.add("visible");
 }
 
@@ -3482,9 +3550,16 @@ async function initializePopup() {
     if (patch.consentGiven != null) consentGiven = patch.consentGiven;
     if (patch.firstSyncCompleted != null) firstSyncCompleted = patch.firstSyncCompleted;
   });
+  subscribeToRewardsSummaries((summaries) => {
+    latestRewardsSummaries = summaries;
+    if (latestProviderStates) {
+      renderHome(latestProviderStates);
+    }
+  });
 
   renderAuthState(initialSnapshot.auth);
   if (initialSnapshot.auth) {
+    latestRewardsSummaries = initialSnapshot.rewardsSummaries;
     latestProviderStates = initialSnapshot.allStates;
     renderHome(initialSnapshot.allStates);
     renderAllProviders(initialSnapshot.allStates);

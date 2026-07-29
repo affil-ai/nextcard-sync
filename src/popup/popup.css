@@ -172,10 +172,10 @@
           0 1px 2px rgba(0, 0, 0, 0.02);
       }
       .provider-card:focus-visible {
-        border-color: #8b6ce0;
+        border-color: #f6b156;
         outline: none;
         box-shadow:
-          0 0 0 3px rgba(139, 108, 224, 0.16),
+          0 0 0 3px rgba(246, 177, 86, 0.2),
           0 4px 12px rgba(0, 0, 0, 0.08);
       }
 
@@ -185,6 +185,139 @@
         gap: 14px;
         width: 100%;
         min-width: 0;
+      }
+
+      .rewards-summary-heading {
+        margin-top: 16px;
+      }
+
+      .rewards-summary-card {
+        width: 100%;
+        padding: 13px;
+        border: 1px solid #eadfd6;
+        border-radius: 15px;
+        background:
+          linear-gradient(145deg, rgba(255, 251, 247, 0.96), #fff 56%);
+        box-shadow:
+          0 4px 14px rgba(62, 42, 29, 0.06),
+          0 1px 2px rgba(62, 42, 29, 0.03);
+      }
+
+      .rewards-summary-header {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+      }
+
+      .rewards-summary-title {
+        display: flex;
+        min-width: 0;
+        flex: 1;
+        flex-direction: column;
+        gap: 1px;
+      }
+
+      .rewards-summary-title strong {
+        overflow: hidden;
+        color: #39271f;
+        font-size: 13.5px;
+        line-height: 1.25;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .rewards-summary-title span {
+        overflow: hidden;
+        color: #958378;
+        font-size: 10.5px;
+        line-height: 1.25;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .rewards-summary-body {
+        display: flex;
+        align-items: center;
+        flex-wrap: wrap;
+        gap: 6px 9px;
+        margin: 9px 0;
+      }
+
+      .rewards-summary-balance {
+        color: #39271f;
+        font-size: 21px;
+        font-weight: 800;
+        letter-spacing: -0.025em;
+        line-height: 1.1;
+      }
+
+      .rewards-summary-status {
+        padding: 2px 7px;
+        border-radius: 999px;
+        background: #fff0de;
+        color: #9a5726;
+        font-size: 10px;
+        font-weight: 800;
+      }
+
+      .rewards-summary-meta {
+        color: #75645a;
+        font-size: 11px;
+        font-weight: 700;
+      }
+
+      .rewards-summary-body .provider-last-sync {
+        margin: 0 0 0 auto;
+        font-size: 10.5px;
+      }
+
+      .rewards-summary-actions {
+        display: flex;
+        gap: 7px;
+        padding-top: 9px;
+        border-top: 1px solid #f0e8e2;
+      }
+
+      .rewards-summary-actions button {
+        min-height: 33px;
+        border-radius: 10px;
+        font: 800 11px/1 "Nunito", sans-serif;
+        cursor: pointer;
+      }
+
+      .rewards-summary-primary {
+        flex: 1;
+        border: 0;
+        background: #f6ad4e;
+        color: #39271f;
+      }
+
+      .rewards-summary-primary:hover,
+      .rewards-summary-primary:focus-visible {
+        background: #f3a33a;
+      }
+
+      .rewards-summary-secondary {
+        border: 1px solid #e7ddd5;
+        background: #fff;
+        color: #75645a;
+        padding: 0 10px;
+      }
+
+      .rewards-summary-secondary:hover,
+      .rewards-summary-secondary:focus-visible {
+        border-color: #d7c8bc;
+        background: #fcfaf8;
+      }
+
+      .rewards-summary-actions button:focus-visible {
+        outline: 3px solid rgba(246, 177, 86, 0.24);
+        outline-offset: 1px;
+      }
+
+      .rewards-summary-actions button:disabled {
+        cursor: wait;
+        opacity: 0.6;
       }
 
       .provider-card-locked {
@@ -962,8 +1095,8 @@
       .onboarding-step-icon.rewards {
         border-radius: 50%;
         padding: 0;
-        color: #6b4cc5;
-        background: #f1edff;
+        color: #9a5726;
+        background: #fff0de;
         font-size: 24px;
         letter-spacing: 0;
       }
@@ -1246,8 +1379,8 @@
       .onboarding-dashboard-header small {
         padding: 3px 6px;
         border-radius: 5px;
-        background: #ede8ff;
-        color: #6b4cc5;
+        background: #fff0de;
+        color: #9a5726;
         font-size: 8.5px;
         letter-spacing: 0.3px;
       }
@@ -1336,20 +1469,62 @@
       }
       /* Privacy (consent modal) */
       .onboarding-privacy {
-        font-size: 13px;
+        font-size: 12px;
         color: #8c7a6e;
-        line-height: 1.55;
+        line-height: 1.4;
         text-align: left;
         max-width: 280px;
-        margin-bottom: 20px;
+        margin-bottom: 14px;
       }
 
       .onboarding-privacy p {
-        margin: 0 0 12px;
+        margin: 0 0 10px;
       }
 
       .onboarding-privacy strong {
         color: #342019;
+        font-weight: 700;
+      }
+
+      .privacy-summary {
+        display: grid;
+        gap: 0;
+        margin: 0;
+      }
+
+      .privacy-summary > div {
+        display: grid;
+        grid-template-columns: 72px minmax(0, 1fr);
+        gap: 8px;
+        padding: 8px 0;
+        border-bottom: 1px solid #f0e8e1;
+      }
+
+      .privacy-summary > div:first-child {
+        padding-top: 0;
+      }
+
+      .privacy-summary dt {
+        color: #342019;
+        font-weight: 800;
+      }
+
+      .privacy-summary dd {
+        margin: 0;
+      }
+
+      .privacy-tool-note {
+        margin: 0 !important;
+        padding-top: 9px;
+        color: #75645a;
+        font-size: 11px;
+        line-height: 1.4;
+      }
+
+      .privacy-tool-note a {
+        display: inline-block;
+        margin-left: 3px;
+        color: #9b551e;
         font-weight: 700;
       }
 
@@ -1566,6 +1741,19 @@
         margin-top: 4px;
       }
 
+      #consentModal .consent-modal {
+        padding: 20px;
+      }
+
+      #consentModal .onboarding-check-row {
+        margin-bottom: 12px;
+      }
+
+      #consentModal .onboarding-check-label {
+        font-size: 11.5px;
+        line-height: 1.35;
+      }
+
 
       /* ── Wallet button ── */
 
@@ -1627,22 +1815,22 @@
       .rewards-setup-intro {
         margin-bottom: 12px;
         padding: 14px 15px;
-        border: 1px solid #ded5f5;
+        border: 1px solid #eadfd6;
         border-radius: 16px;
         background:
-          radial-gradient(circle at 90% -20%, rgba(139, 108, 224, 0.18), transparent 48%),
-          #faf8ff;
-        color: #30283b;
-        box-shadow: 0 4px 14px rgba(73, 50, 119, 0.07);
+          radial-gradient(circle at 90% -20%, rgba(246, 177, 86, 0.2), transparent 48%),
+          #fffaf5;
+        color: #342019;
+        box-shadow: 0 4px 14px rgba(62, 42, 29, 0.06);
       }
 
       .rewards-setup-intro:focus-visible {
-        outline: 3px solid rgba(139, 108, 224, 0.2);
+        outline: 3px solid rgba(246, 177, 86, 0.24);
         outline-offset: 2px;
       }
 
       .rewards-setup-intro .offers-eyebrow {
-        color: #6b4cc5;
+        color: #9a5726;
       }
 
       .rewards-setup-intro h2 {
@@ -1653,9 +1841,38 @@
 
       .rewards-setup-intro p {
         margin: 0;
-        color: #70637d;
+        color: #6f5b50;
         font-size: 11.5px;
         line-height: 1.45;
+      }
+
+      .section-dashboard-action {
+        display: flex;
+        justify-content: flex-end;
+        margin: 0 0 12px;
+      }
+
+      .section-dashboard-btn {
+        min-height: 38px;
+        padding: 0 13px;
+        border: 1px solid #e7ddd5;
+        border-radius: 11px;
+        background: #fff;
+        color: #5f4f44;
+        font: 800 11.5px/1 "Nunito", sans-serif;
+        cursor: pointer;
+      }
+
+      .section-dashboard-btn:hover,
+      .section-dashboard-btn:focus-visible {
+        border-color: #f6b156;
+        background: #fef9f3;
+      }
+
+      .rewards-setup-intro .section-dashboard-btn {
+        margin-top: 11px;
+        border-color: #e7ddd5;
+        color: #5f4f44;
       }
 
       #syncTabPanel.rewards-handoff-enter {
@@ -1679,12 +1896,12 @@
 
       @keyframes rewards-handoff-focus {
         0% {
-          border-color: #c8b9ed;
-          box-shadow: 0 0 0 4px rgba(114, 84, 203, 0.12);
+          border-color: #f6b156;
+          box-shadow: 0 0 0 4px rgba(246, 177, 86, 0.16);
         }
         100% {
-          border-color: #ded5f5;
-          box-shadow: 0 4px 14px rgba(73, 50, 119, 0.07);
+          border-color: #eadfd6;
+          box-shadow: 0 4px 14px rgba(62, 42, 29, 0.06);
         }
       }
 
@@ -1954,25 +2171,38 @@
 #toolsTabPanel {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 8px;
 }
 .tool-card {
   flex-wrap: wrap;
   cursor: default;
+  gap: 10px 12px;
+  padding: 12px 14px;
 }
 .tool-card:hover {
   border-color: #e0d8d0;
 }
 .tool-expand {
   flex-basis: 100%;
-  margin-top: 2px;
-  padding-top: 12px;
+  margin-top: 0;
+  padding-top: 9px;
   border-top: 1px solid #f0ece8;
 }
 .tool-status {
   font-size: 12px;
   color: #8c7a6e;
   margin-bottom: 4px;
+}
+
+.offer-recent-result {
+  margin-bottom: 10px;
+  padding: 9px 10px;
+  border: 1px solid rgba(52, 199, 89, 0.28);
+  border-radius: 10px;
+  background: rgba(52, 199, 89, 0.08);
+  color: #27663a;
+  font-size: 12px;
+  line-height: 1.4;
 }
 
 .tool-expand .sync-btn {
@@ -2001,6 +2231,31 @@
   font-weight: 600;
   text-decoration: none;
   padding: 0;
+}
+
+.offer-done-actions {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  margin-top: 7px;
+}
+
+.offer-done-actions[hidden] {
+  display: none;
+}
+
+.offer-done-actions .sync-btn {
+  min-height: 36px;
+  margin: 0;
+  padding: 8px 10px;
+  text-align: center;
+  text-decoration: none;
+}
+
+.offer-done-actions .tool-link-btn {
+  min-height: 36px;
+  padding: 0 6px;
+  white-space: nowrap;
 }
 .tool-dashboard-link {
   display: inline-block;
@@ -2369,6 +2624,7 @@
 }
 
 .offers-guided-setup #offerUsageCard,
+.offers-guided-setup .offers-dashboard-action,
 .offers-guided-setup > #offerActivity,
 .offers-guided-setup #offersMore,
 .offers-guided-setup .offers-wallet-links,
@@ -2408,15 +2664,15 @@
 .offers-handoff-actions button:first-child {
   flex: 1;
   border: 0;
-  background: #7254cb;
-  color: #fff;
-  box-shadow: 0 7px 18px rgba(89, 61, 167, 0.2);
+  background: #f6ad4e;
+  color: #39271f;
+  box-shadow: 0 7px 18px rgba(166, 93, 30, 0.16);
   transition: transform 0.15s ease, box-shadow 0.15s ease, opacity 0.15s ease;
 }
 
 .offers-handoff-actions button:first-child:hover:not(:disabled) {
   transform: translateY(-1px);
-  box-shadow: 0 9px 22px rgba(89, 61, 167, 0.25);
+  box-shadow: 0 9px 22px rgba(166, 93, 30, 0.2);
 }
 
 .offers-handoff-actions button:first-child:active:not(:disabled) {
@@ -2431,7 +2687,7 @@
 .offers-handoff-actions button:last-child {
   border: 0;
   background: transparent;
-  color: #70637d;
+  color: #6f5b50;
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -2447,9 +2703,9 @@
 
 .offer-usage-card {
   display: grid;
-  gap: 10px;
-  margin-top: 12px;
-  padding: 14px;
+  gap: 8px;
+  margin-top: 4px;
+  padding: 12px 13px;
   border: 1px solid #eadfd6;
   border-radius: 14px;
   background: #fff;
@@ -2514,6 +2770,38 @@
   font-size: 13px !important;
   font-weight: 800;
   white-space: nowrap;
+}
+
+.offer-usage-summary {
+  display: grid;
+  flex: none;
+  justify-items: end;
+  gap: 0;
+}
+
+.offer-usage-dashboard {
+  min-height: 28px;
+  margin: -2px 0 -6px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: #9b551e;
+  font: 800 11px/1 "Nunito", sans-serif;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.offer-usage-dashboard:hover,
+.offer-usage-dashboard:focus-visible {
+  color: #713a13;
+  outline: none;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.offers-card-heading {
+  margin-top: 2px;
+  margin-bottom: 2px;
 }
 
 .offer-usage-track {

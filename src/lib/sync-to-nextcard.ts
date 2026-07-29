@@ -9,7 +9,7 @@
  *   - Credit card issuers (Chase/Amex/CapitalOne) → StandardizedIssuerData
  */
 
-import type { ProviderId, MarriottLoyaltyData, AtmosLoyaltyData, ChaseURData, AALoyaltyData, DeltaLoyaltyData, UnitedLoyaltyData, SouthwestLoyaltyData, IHGLoyaltyData, HyattLoyaltyData, AmexLoyaltyData, CapitalOneLoyaltyData, HiltonLoyaltyData, FrontierLoyaltyData, BiltLoyaltyData, DiscoverLoyaltyData, CitiLoyaltyData, PushToNextCardResult } from "./types";
+import type { ExtensionRewardsSummary, ProviderId, MarriottLoyaltyData, AtmosLoyaltyData, ChaseURData, AALoyaltyData, DeltaLoyaltyData, UnitedLoyaltyData, SouthwestLoyaltyData, IHGLoyaltyData, HyattLoyaltyData, AmexLoyaltyData, CapitalOneLoyaltyData, HiltonLoyaltyData, FrontierLoyaltyData, BiltLoyaltyData, DiscoverLoyaltyData, CitiLoyaltyData, PushToNextCardResult } from "./types";
 import { extractLastFourDigits } from "./card-digits";
 import {
   atmosProviderDataSchema,
@@ -31,6 +31,7 @@ import {
 } from "../contracts/loyalty-provider-data";
 import type { StandardizedLoyaltyData, StandardizedIssuerData, QualifyingMetric, Stat } from "../contracts/loyalty-provider-data";
 import { getAuth } from "./auth";
+import { normalizeRewardsSummaries } from "./rewards-summary";
 
 function maskId(value: string | null | undefined): string | null {
   if (!value || value.length <= 4) return value ?? null;
@@ -124,6 +125,14 @@ export function validateProviderData(
 function formatNumber(n: number | null | undefined): string {
   if (n == null) return "0";
   return new Intl.NumberFormat("en-US").format(n);
+}
+
+function parseNumericValue(value: string | null | undefined): number | null {
+  if (!value) return null;
+  const normalized = value.replace(/[^0-9.-]/g, "");
+  if (!normalized) return null;
+  const parsed = Number(normalized);
+  return Number.isFinite(parsed) ? parsed : null;
 }
 
 function toStandardizedLoyaltyData(provider: ProviderId, data: AnyProviderData): StandardizedLoyaltyData {
@@ -301,8 +310,40 @@ function toStandardizedLoyaltyData(provider: ProviderId, data: AnyProviderData):
   if (provider === "hilton") {
     const d = data as HiltonLoyaltyData;
     const metrics: QualifyingMetric[] = [];
-    if (d.nightsThisYear != null) {
-      metrics.push({ label: "Nights This Year", current: d.nightsThisYear, target: d.nightsToNextTier, unit: "nights" });
+    if (d.nightsThisYear != null || d.nightsToNextTier != null) {
+      metrics.push({
+        label: "Nights This Year",
+        current: d.nightsThisYear,
+        target:
+          d.nightsThisYear != null && d.nightsToNextTier != null
+            ? d.nightsThisYear + d.nightsToNextTier
+            : null,
+        unit: "nights",
+      });
+    }
+    if (d.staysThisYear != null || d.staysToNextTier != null) {
+      metrics.push({
+        label: "Stays This Year",
+        current: d.staysThisYear,
+        target:
+          d.staysThisYear != null && d.staysToNextTier != null
+            ? d.staysThisYear + d.staysToNextTier
+            : null,
+        unit: "stays",
+      });
+    }
+    const spendThisYear = parseNumericValue(d.spendThisYear);
+    const spendToNextTier = parseNumericValue(d.spendToNextTier);
+    if (spendThisYear != null || spendToNextTier != null) {
+      metrics.push({
+        label: "Eligible Spend",
+        current: spendThisYear,
+        target:
+          spendThisYear != null && spendToNextTier != null
+            ? spendThisYear + spendToNextTier
+            : null,
+        unit: "$",
+      });
     }
     const stats: Stat[] = [];
     if (d.lifetimeNights != null) stats.push({ label: "Lifetime Nights", value: formatNumber(d.lifetimeNights) });
@@ -631,7 +672,12 @@ export type PulledAccount = {
   lastSyncedAt: string;
 };
 
-export async function pullFromNextCard(): Promise<{ ok: boolean; accounts?: PulledAccount[]; error?: string }> {
+export async function pullFromNextCard(): Promise<{
+  ok: boolean;
+  accounts?: PulledAccount[];
+  summaries?: ExtensionRewardsSummary[];
+  error?: string;
+}> {
   const auth = await getAuth();
   if (!auth) {
     return { ok: false, error: "Not signed in to NextCard" };
@@ -649,7 +695,13 @@ export async function pullFromNextCard(): Promise<{ ok: boolean; accounts?: Pull
     }
 
     const data = await response.json();
-    return { ok: true, accounts: data.accounts ?? [] };
+    return {
+      ok: true,
+      accounts: Array.isArray(data.accounts) ? data.accounts : [],
+      summaries: Array.isArray(data.summaries)
+        ? normalizeRewardsSummaries(data.summaries)
+        : undefined,
+    };
   } catch (err) {
     return { ok: false, error: err instanceof Error ? err.message : "Network error" };
   }

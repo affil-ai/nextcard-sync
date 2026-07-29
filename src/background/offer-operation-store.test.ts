@@ -120,6 +120,140 @@ describe("background offer operation store", () => {
     expect(snapshot.history.chase?.saveStatus).toBe("saved");
   });
 
+  it("keeps remaining cards actionable after a saved enrollment", async () => {
+    const store = createOfferOperationStore();
+    const started = await store.start("chase");
+    getTab.mockResolvedValue({ id: 42 });
+    await store.patch(started.state.runId, {
+      phase: "checking",
+      ownedTabId: 42,
+    });
+    await store.markReady(started.state.runId, [
+      {
+        key: "sapphire",
+        name: "Sapphire Reserve",
+        lastDigits: "6949",
+        availableCount: 104,
+        countStatus: "complete",
+      },
+      {
+        key: "freedom",
+        name: "Freedom",
+        lastDigits: "4055",
+        availableCount: 111,
+        countStatus: "complete",
+      },
+    ]);
+    await store.beginEnrollment(started.state.runId, ["sapphire"], 104);
+    await store.patchActiveRun("chase", started.state.runId, {
+      phase: "completed",
+      added: 104,
+      remaining: 0,
+      saveStatus: "saving",
+    });
+    await store.patch(started.state.runId, { saveStatus: "saved" });
+
+    const continued = await store.continueAfterSavedEnrollment(
+      started.state.runId,
+    );
+    expect(continued?.runId).not.toBe(started.state.runId);
+    expect(continued).toMatchObject({
+      phase: "ready_to_add",
+      ownedTabId: 42,
+      added: 104,
+      saveStatus: "saved",
+    });
+    expect(continued?.cards).toEqual([
+      expect.objectContaining({ key: "sapphire", availableCount: 0 }),
+      expect.objectContaining({ key: "freedom", availableCount: 111 }),
+    ]);
+    expect((await store.getSnapshot()).active?.runId).toBe(continued?.runId);
+  });
+
+  it("refreshes every Amex card instead of reusing shared-offer counts", async () => {
+    const store = createOfferOperationStore();
+    const started = await store.start("amex");
+    getTab.mockResolvedValue({ id: 84 });
+    await store.patch(started.state.runId, {
+      phase: "checking",
+      ownedTabId: 84,
+    });
+    await store.markReady(started.state.runId, [
+      {
+        key: "platinum",
+        name: "Platinum",
+        lastDigits: "1001",
+        availableCount: 100,
+        countStatus: "complete",
+        sharedOfferCount: 80,
+      },
+      {
+        key: "gold",
+        name: "Gold",
+        lastDigits: "1002",
+        availableCount: 95,
+        countStatus: "complete",
+        sharedOfferCount: 80,
+      },
+    ]);
+    await store.beginEnrollment(started.state.runId, ["platinum"], 100);
+    await store.patchActiveRun("amex", started.state.runId, {
+      phase: "completed",
+      added: 100,
+      remaining: 0,
+      saveStatus: "saving",
+    });
+    await store.patch(started.state.runId, { saveStatus: "saved" });
+
+    const continued = await store.continueAfterSavedEnrollment(
+      started.state.runId,
+    );
+    expect(continued?.phase).toBe("checking");
+    expect(continued?.cards).toEqual([
+      expect.objectContaining({
+        key: "platinum",
+        availableCount: null,
+        countStatus: "unknown",
+        sharedOfferCount: null,
+      }),
+      expect.objectContaining({
+        key: "gold",
+        availableCount: null,
+        countStatus: "unknown",
+        sharedOfferCount: null,
+      }),
+    ]);
+
+    await store.markReady(continued!.runId, [
+      {
+        key: "platinum",
+        name: "Platinum",
+        lastDigits: "1001",
+        availableCount: 0,
+        countStatus: "complete",
+        sharedOfferCount: 0,
+      },
+      {
+        key: "gold",
+        name: "Gold",
+        lastDigits: "1002",
+        availableCount: 12,
+        countStatus: "complete",
+        sharedOfferCount: 0,
+      },
+    ]);
+    const refreshed = (await store.getSnapshot()).active;
+    expect(refreshed).toMatchObject({
+      phase: "ready_to_add",
+      added: 100,
+      saveStatus: "saved",
+    });
+    expect(refreshed?.cards[1]).toMatchObject({
+      key: "gold",
+      availableCount: 12,
+    });
+  });
+
   it("repairs a persisted adding state whose work already reached its total", async () => {
     const store = createOfferOperationStore();
     const started = await store.start("chase");

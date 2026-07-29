@@ -1,10 +1,13 @@
 import { describe, expect, it } from "vitest";
 import {
   OFFER_RESULT_FRESHNESS_MS,
+  OFFER_SAVE_FAILURE_GRACE_MS,
   applyOfferOperationPatch,
   canTransitionOfferOperation,
   createOfferOperation,
   getOfferOperationStatusText,
+  getOfferSaveStatusText,
+  isOfferCompletionContinuing,
   isOfferResultFresh,
   normalizeOfferOperationSnapshot,
 } from "./offer-operation";
@@ -97,6 +100,61 @@ describe("offer operation state", () => {
       cancelled: true,
     };
     expect(getOfferOperationStatusText(state)).toBe("Stopped · 6 added, 12 not attempted");
+  });
+
+  it("does not flash a terminal save failure while recovery is still settling", () => {
+    const updatedAt = "2026-07-28T22:37:41.000Z";
+    const state = {
+      ...createOfferOperation("chase", "run-save", updatedAt),
+      phase: "completed" as const,
+      updatedAt,
+      saveStatus: "failed" as const,
+      saveError: "Couldn’t queue the nextcard save for retry.",
+    };
+    const updatedAtMs = new Date(updatedAt).getTime();
+    expect(getOfferSaveStatusText(state, updatedAtMs + 1_000)).toBe(
+      "finishing save to nextcard",
+    );
+    expect(
+      getOfferSaveStatusText(
+        state,
+        updatedAtMs + OFFER_SAVE_FAILURE_GRACE_MS,
+      ),
+    ).toBe("Couldn’t queue the nextcard save for retry.");
+  });
+
+  it("recognizes the automatic save-and-refresh handoff", () => {
+    const completed = {
+      ...createOfferOperation("chase", "run-continue"),
+      phase: "completed" as const,
+      cards: [{
+        key: "card-0",
+        name: "Sapphire",
+        lastDigits: "1234",
+        availableCount: 10,
+        countStatus: "complete" as const,
+      }],
+      selectedCardKeys: ["card-0"],
+      added: 1,
+    };
+
+    expect(isOfferCompletionContinuing({
+      ...completed,
+      saveStatus: "saving",
+    })).toBe(true);
+    expect(isOfferCompletionContinuing({
+      ...completed,
+      saveStatus: "saved",
+    })).toBe(true);
+    expect(isOfferCompletionContinuing({
+      ...completed,
+      saveStatus: "queued_for_retry",
+    })).toBe(false);
+    expect(isOfferCompletionContinuing({
+      ...completed,
+      selectedCardKeys: [],
+      saveStatus: "saved",
+    })).toBe(false);
   });
 
   it("normalizes corrupt persisted snapshots safely", () => {

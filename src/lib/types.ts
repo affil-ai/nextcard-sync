@@ -28,6 +28,8 @@ export interface RewardsProgramSyncSummary {
   id: string;
   slug: string;
   name: string;
+  loyaltyAccountId?: string | null;
+  dashboardPath?: string;
 }
 
 export interface PushToNextCardResult {
@@ -36,6 +38,21 @@ export interface PushToNextCardResult {
   isLimited?: boolean;
   syncedRewardsPrograms?: RewardsProgramSyncSummary[];
   skippedRewardsPrograms?: RewardsProgramSyncSummary[];
+}
+
+export interface ExtensionRewardsSummary {
+  provider: ProviderId;
+  loyaltyAccountId: string;
+  rewardsProgramId: string;
+  programSlug: string;
+  programName: string;
+  iconUrl: string | null;
+  pointsBalance: number | null;
+  statusLevel: string | null;
+  cardCount: number;
+  benefitCount: number;
+  lastSyncedAt: string;
+  dashboardPath: string;
 }
 
 export type LoginState = "logged_in" | "logged_out" | "mfa_challenge" | "unknown";

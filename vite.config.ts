@@ -47,6 +47,15 @@ export default defineConfig(({ mode }) => {
     build: {
       outDir: mode === "development" ? "dist-dev" : "dist",
       emptyOutDir: true,
+      rollupOptions: {
+        output: {
+          // Unpacked extensions keep the current manifest in memory until the user
+          // reloads them. Stable JS paths let already-registered content scripts
+          // survive a local rebuild instead of importing a deleted hashed chunk.
+          entryFileNames: "assets/[name].js",
+          chunkFileNames: "assets/[name].js",
+        },
+      },
     },
   };
 });
