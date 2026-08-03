@@ -76,6 +76,7 @@ export type OfferUrlCache = Record<string, CachedOffer[]>;
 
 export const OFFER_URL_CACHE_KEY = "offerUrlCache";
 export const DETECTED_OFFER_URL_CACHE_KEY = "detectedOfferUrlCache";
+export const OFFER_URL_CACHE_ETAG_KEY = "offerUrlCacheEtag";
 
 export interface DetectedOfferSyncPayload {
   issuer: string;
@@ -467,11 +468,21 @@ export async function pullOfferUrlCache(): Promise<void> {
     const auth = await getAuth();
     if (!auth) return;
 
+    const stored = await chrome.storage.local.get(OFFER_URL_CACHE_ETAG_KEY);
+    const cachedEtag = stored[OFFER_URL_CACHE_ETAG_KEY];
+    const headers: Record<string, string> = {
+      Authorization: `Bearer ${auth.token}`,
+    };
+    if (typeof cachedEtag === "string" && cachedEtag) {
+      headers["If-None-Match"] = cachedEtag;
+    }
+
     const response = await fetch(`${__CONVEX_SITE_URL__}/extension/offers-pull`, {
       method: "GET",
-      headers: { Authorization: `Bearer ${auth.token}` },
+      headers,
     });
 
+    if (response.status === 304) return;
     if (!response.ok) return;
 
     const data = await response.json();
@@ -516,10 +527,18 @@ export async function pullOfferUrlCache(): Promise<void> {
       }
     }
 
-    await chrome.storage.local.set({
+    const responseEtag = response.headers.get("ETag");
+    const cacheUpdate: Record<string, OfferUrlCache | string> = {
       [OFFER_URL_CACHE_KEY]: enrolledCache,
       [DETECTED_OFFER_URL_CACHE_KEY]: detectedCache,
-    });
+    };
+    if (responseEtag) {
+      cacheUpdate[OFFER_URL_CACHE_ETAG_KEY] = responseEtag;
+    }
+    await chrome.storage.local.set(cacheUpdate);
+    if (!responseEtag) {
+      await chrome.storage.local.remove(OFFER_URL_CACHE_ETAG_KEY);
+    }
   } catch (e) {
     console.error("[NextCard Offers] pullOfferUrlCache error:", e);
   }
