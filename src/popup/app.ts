@@ -189,6 +189,20 @@ const offerIssuerNames: Record<OfferIssuer, string> = {
   capitalone: "Capital One",
 };
 
+async function requestOfferOperationCancellation(runId: string): Promise<boolean> {
+  try {
+    const response: unknown = await chrome.runtime.sendMessage({
+      type: "CANCEL_OFFER_OPERATION",
+      runId,
+    });
+    return response !== null
+      && typeof response === "object"
+      && Reflect.get(response, "ok") === true;
+  } catch {
+    return false;
+  }
+}
+
 async function patchOfferOperation(
   issuer: OfferIssuer,
   patch: Record<string, unknown>,
@@ -1042,6 +1056,18 @@ function initAmexOffers() {
   }));
 
   stopBtn?.addEventListener("click", () => {
+    const runId = activeOfferRunIds.get("amex");
+    if (runId) {
+      if (progressDetail) progressDetail.textContent = "Stopping after the current offer...";
+      stopBtn.setAttribute("disabled", "true");
+      void requestOfferOperationCancellation(runId).then((ok) => {
+        if (!ok) {
+          if (progressDetail) progressDetail.textContent = "Could not stop this run. Try again.";
+          stopBtn.removeAttribute("disabled");
+        }
+      });
+      return;
+    }
     if (!amexTabId) return;
     chrome.tabs.sendMessage(amexTabId, { type: "AMEX_OFFERS_STOP" });
     if (progressDetail) progressDetail.textContent = "Stopping after the current offer...";
@@ -1349,6 +1375,19 @@ function initChaseOffers() {
   }));
 
   document.getElementById("chaseOffersStopBtn")?.addEventListener("click", () => {
+    const stopButton = document.getElementById("chaseOffersStopBtn");
+    const runId = activeOfferRunIds.get("chase");
+    if (runId) {
+      if (progressDetail) progressDetail.textContent = "Stopping after the current offer...";
+      stopButton?.setAttribute("disabled", "true");
+      void requestOfferOperationCancellation(runId).then((ok) => {
+        if (!ok) {
+          if (progressDetail) progressDetail.textContent = "Could not stop this run. Try again.";
+          stopButton?.removeAttribute("disabled");
+        }
+      });
+      return;
+    }
     if (!chaseTabId) return;
     chrome.tabs.sendMessage(chaseTabId, { type: "CHASE_OFFERS_STOP" });
     showState("Done");
@@ -1627,6 +1666,19 @@ function initCitiOffers() {
   }));
 
   document.getElementById("citiOffersStopBtn")?.addEventListener("click", () => {
+    const stopButton = document.getElementById("citiOffersStopBtn");
+    const runId = activeOfferRunIds.get("citi");
+    if (runId) {
+      if (progressDetail) progressDetail.textContent = "Stopping after the current offer...";
+      stopButton?.setAttribute("disabled", "true");
+      void requestOfferOperationCancellation(runId).then((ok) => {
+        if (!ok) {
+          if (progressDetail) progressDetail.textContent = "Could not stop this run. Try again.";
+          stopButton?.removeAttribute("disabled");
+        }
+      });
+      return;
+    }
     if (!citiTabId) return;
     chrome.tabs.sendMessage(citiTabId, { type: "CITI_OFFERS_STOP" });
     showState("Done");
@@ -1914,6 +1966,19 @@ function initCapitalOneOffers() {
   }));
 
   document.getElementById("capitaloneOffersStopBtn")?.addEventListener("click", () => {
+    const runId = activeOfferRunIds.get("capitalone");
+    if (runId) {
+      if (progressDetail) progressDetail.textContent = "Cancelling...";
+      void requestOfferOperationCancellation(runId).then((ok) => {
+        if (ok) {
+          showState("Done");
+          if (summaryEl) summaryEl.textContent = "Cancelled";
+        } else if (progressDetail) {
+          progressDetail.textContent = "Could not cancel this run. Try again.";
+        }
+      });
+      return;
+    }
     if (!capitalOneTabId) return;
     chrome.tabs.sendMessage(capitalOneTabId, { type: "CAPITALONE_OFFERS_STOP" });
     showState("Done");
@@ -2783,17 +2848,16 @@ function cancelActiveOfferOperation() {
     cancelButton.disabled = true;
     cancelButton.textContent = active.phase === "adding" ? "Stopping…" : "Cancelling…";
   }
-  void chrome.runtime.sendMessage({
-    type: "CANCEL_OFFER_OPERATION",
-    runId: active.runId,
-  }).then(() => {
+  void requestOfferOperationCancellation(active.runId).then((ok) => {
+    if (!ok) {
+      if (cancelButton) {
+        cancelButton.disabled = false;
+        cancelButton.textContent = active.phase === "adding" ? "Stop" : "Cancel";
+      }
+      return;
+    }
     activeOfferRunIds.delete(active.issuer);
     void refreshOfferOperationUi();
-  }).catch(() => {
-    if (cancelButton) {
-      cancelButton.disabled = false;
-      cancelButton.textContent = active.phase === "adding" ? "Stop" : "Cancel";
-    }
   });
 }
 

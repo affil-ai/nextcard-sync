@@ -78,6 +78,7 @@ export const OFFER_URL_CACHE_KEY = "offerUrlCache";
 export const DETECTED_OFFER_URL_CACHE_KEY = "detectedOfferUrlCache";
 
 export interface DetectedOfferSyncPayload {
+  runId?: string;
   issuer: string;
   issuerCardId: string;
   issuerCardName: string;
@@ -107,9 +108,20 @@ export interface DetectedOfferSyncPayload {
 const MAX_RETRIES = 2;
 const RETRY_DELAY_MS = 2000;
 const STORAGE_KEY = "pendingOfferSyncs";
+const DETECTED_STORAGE_KEY = "pendingDetectedOfferSyncs";
 // Detected-offer upserts can require a substantial read of the user's offer
 // history. Keep each request well below Convex's per-function read limit.
 const DETECTED_OFFER_SYNC_CHUNK_SIZE = 50;
+let detectedOfferSyncQueue: Promise<void> = Promise.resolve();
+
+function enqueueDetectedOfferTask<T>(task: () => Promise<T>): Promise<T> {
+  const queued = detectedOfferSyncQueue.then(task, task);
+  detectedOfferSyncQueue = queued.then(
+    () => undefined,
+    () => undefined,
+  );
+  return queued;
+}
 
 function delay(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
@@ -247,6 +259,32 @@ async function persistForRetry(payload: OfferSyncPayload): Promise<boolean> {
     return true;
   } catch (e) {
     console.error("[NextCard Offers Sync] Failed to persist for retry:", e);
+    return false;
+  }
+}
+
+async function persistDetectedForRetry(payload: DetectedOfferSyncPayload): Promise<boolean> {
+  try {
+    const stored = await chrome.storage.local.get(DETECTED_STORAGE_KEY);
+    const pending: DetectedOfferSyncPayload[] = stored[DETECTED_STORAGE_KEY] ?? [];
+    const payloadKey = [
+      payload.runId ?? "",
+      payload.issuer,
+      payload.issuerCardId,
+      payload.snapshot?.capturedAt ?? "",
+    ].join(":");
+    const deduplicated = pending.filter((entry) => [
+      entry.runId ?? "",
+      entry.issuer,
+      entry.issuerCardId,
+      entry.snapshot?.capturedAt ?? "",
+    ].join(":") !== payloadKey);
+    await chrome.storage.local.set({
+      [DETECTED_STORAGE_KEY]: [...deduplicated, payload],
+    });
+    return true;
+  } catch (error) {
+    console.error("[NextCard Detected Offers] Failed to persist for retry:", error);
     return false;
   }
 }
@@ -390,16 +428,16 @@ export async function retryPendingOfferSyncs(): Promise<{
   }
 }
 
-export async function syncDetectedOffersToNextCard(
+async function postDetectedOfferSync(
   payload: DetectedOfferSyncPayload,
-): Promise<"saved" | "failed"> {
+): Promise<{ ok: boolean; error: string | null }> {
   const auth = await getAuth();
-  if (!auth) return "failed";
+  if (!auth) return { ok: false, error: "Not signed in to NextCard" };
 
   try {
     let latestOfferMap: OfferUrlCache | undefined;
     const issuerCardKey = await getIssuerCardKey(payload.issuer, payload.issuerCardId);
-    if (!issuerCardKey) return "failed";
+    if (!issuerCardKey) return { ok: false, error: "Missing issuer card identity" };
     const chunkOffsets = payload.offers.length === 0 ? [0] : Array.from(
       { length: Math.ceil(payload.offers.length / DETECTED_OFFER_SYNC_CHUNK_SIZE) },
       (_, index) => index * DETECTED_OFFER_SYNC_CHUNK_SIZE,
@@ -430,13 +468,14 @@ export async function syncDetectedOffersToNextCard(
 
       if (!response.ok) {
         const result = await response.json().catch(() => ({}));
+        const error = (result as Record<string, string>).error ?? `HTTP ${response.status}`;
         console.warn("[NextCard Detected Offers] chunk sync failed:", {
           status: response.status,
-          error: (result as Record<string, string>).error,
+          error,
           offset,
           count: offers.length,
         });
-        return "failed";
+        return { ok: false, error };
       }
 
       const body = await response.json().catch(() => ({}));
@@ -454,11 +493,76 @@ export async function syncDetectedOffersToNextCard(
     if (latestOfferMap) {
       await saveOfferMaps(latestOfferMap);
     }
-    return "saved";
-  } catch (e) {
-    console.warn("[NextCard Detected Offers] sync error:", e);
-    return "failed";
+    return { ok: true, error: null };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Unexpected nextcard sync error";
+    console.warn("[NextCard Detected Offers] sync error:", error);
+    return { ok: false, error: message };
   }
+}
+
+async function runDetectedOfferSync(
+  payload: DetectedOfferSyncPayload,
+): Promise<OfferSyncStatus> {
+  for (let attempt = 0; attempt <= MAX_RETRIES; attempt += 1) {
+    const result = await postDetectedOfferSync(payload);
+    if (result.ok) return "saved";
+
+    const isAuthFailure = result.error?.includes("token")
+      || result.error?.includes("401")
+      || result.error === "Not signed in to NextCard";
+    if (isAuthFailure) break;
+    if (attempt < MAX_RETRIES) await delay(RETRY_DELAY_MS);
+  }
+
+  return await persistDetectedForRetry(payload) ? "queued_for_retry" : "failed";
+}
+
+/**
+ * Serialize detected-offer saves so multi-card Amex runs cannot contend with
+ * each other, then durably queue any payload that still fails after retries.
+ */
+export function syncDetectedOffersToNextCard(
+  payload: DetectedOfferSyncPayload,
+): Promise<OfferSyncStatus> {
+  return enqueueDetectedOfferTask(() => runDetectedOfferSync(payload));
+}
+
+async function runPendingDetectedOfferSyncs(): Promise<{
+  savedRunIds: string[];
+  remainingRunIds: string[];
+}> {
+  const savedRunIds: string[] = [];
+  try {
+    const stored = await chrome.storage.local.get(DETECTED_STORAGE_KEY);
+    const pending: DetectedOfferSyncPayload[] = stored[DETECTED_STORAGE_KEY] ?? [];
+    const remaining: DetectedOfferSyncPayload[] = [];
+
+    for (const payload of pending) {
+      const result = await postDetectedOfferSync(payload);
+      if (result.ok) {
+        if (payload.runId) savedRunIds.push(payload.runId);
+      } else {
+        remaining.push(payload);
+      }
+    }
+
+    await chrome.storage.local.set({ [DETECTED_STORAGE_KEY]: remaining });
+    return {
+      savedRunIds,
+      remainingRunIds: remaining.flatMap((payload) => payload.runId ? [payload.runId] : []),
+    };
+  } catch (error) {
+    console.error("[NextCard Detected Offers] retryPendingDetectedOfferSyncs error:", error);
+    return { savedRunIds, remainingRunIds: [] };
+  }
+}
+
+export function retryPendingDetectedOfferSyncs(): Promise<{
+  savedRunIds: string[];
+  remainingRunIds: string[];
+}> {
+  return enqueueDetectedOfferTask(runPendingDetectedOfferSyncs);
 }
 
 /** Pull offers from backend and rebuild both URL caches. Call on startup/re-auth. */

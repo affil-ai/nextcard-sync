@@ -1,8 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { getAuth } from "./auth";
 import {
+  retryPendingDetectedOfferSyncs,
   retryPendingOfferSyncs,
+  syncDetectedOffersToNextCard,
   syncOffersToNextCard,
+  type DetectedOfferSyncPayload,
   type OfferSyncPayload,
 } from "./sync-offers-to-nextcard";
 
@@ -31,6 +34,31 @@ const payload: OfferSyncPayload = {
     merchantLogoUrl: null,
     redemptionChannel: "online",
     enrolledAt: "2026-07-28T12:00:00.000Z",
+  }],
+};
+
+const detectedPayload: DetectedOfferSyncPayload = {
+  runId: "detected-run-123",
+  issuer: "amex",
+  issuerCardId: "card-123",
+  issuerCardName: "Amex Gold",
+  issuerCardLastDigits: "1234",
+  offers: [{
+    issuerOfferId: "detected-offer-1",
+    merchantName: "Constant Contact",
+    offerValue: "$30 back",
+    category: null,
+    expirationDate: null,
+    rewardType: "flat_cash",
+    rewardAmount: 30,
+    rewardCurrency: "cash",
+    maxReward: 30,
+    minSpend: null,
+    merchantUrl: "https://constantcontact.com",
+    merchantLogoUrl: null,
+    redemptionChannel: "online",
+    status: "detected",
+    detectedAt: "2026-08-11T16:00:00.000Z",
   }],
 };
 
@@ -135,5 +163,67 @@ describe("retryPendingOfferSyncs", () => {
       remainingRunIds: [],
     });
     expect(storageSet).toHaveBeenCalledWith({ pendingOfferSyncs: [] });
+  });
+});
+
+describe("syncDetectedOffersToNextCard", () => {
+  it("serializes multi-card detected-offer saves", async () => {
+    let resolveFirst: ((value: { ok: boolean; json: () => Promise<object> }) => void) | undefined;
+    const firstResponse = new Promise<{ ok: boolean; json: () => Promise<object> }>((resolve) => {
+      resolveFirst = resolve;
+    });
+    const fetchMock = vi.fn()
+      .mockImplementationOnce(() => firstResponse)
+      .mockResolvedValueOnce({ ok: true, json: async () => ({}) });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const first = syncDetectedOffersToNextCard(detectedPayload);
+    const second = syncDetectedOffersToNextCard({
+      ...detectedPayload,
+      runId: "detected-run-456",
+      issuerCardId: "card-456",
+    });
+
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    resolveFirst?.({ ok: true, json: async () => ({}) });
+
+    await expect(Promise.all([first, second])).resolves.toEqual(["saved", "saved"]);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("queues an authentication failure for a durable detected-offer retry", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => ({
+      ok: false,
+      status: 401,
+      json: async () => ({ error: "Invalid or revoked token" }),
+    })));
+    storageGet.mockResolvedValue({ pendingDetectedOfferSyncs: [] });
+    storageSet.mockResolvedValue(undefined);
+
+    await expect(syncDetectedOffersToNextCard(detectedPayload)).resolves.toBe("queued_for_retry");
+    expect(storageSet).toHaveBeenCalledWith({
+      pendingDetectedOfferSyncs: [detectedPayload],
+    });
+  });
+});
+
+describe("retryPendingDetectedOfferSyncs", () => {
+  it("replays detected payloads and returns saved run ids", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => ({
+      ok: true,
+      json: async () => ({}),
+    })));
+    storageGet.mockImplementation(async (key: string) => (
+      key === "pendingDetectedOfferSyncs"
+        ? { pendingDetectedOfferSyncs: [detectedPayload] }
+        : {}
+    ));
+    storageSet.mockResolvedValue(undefined);
+
+    await expect(retryPendingDetectedOfferSyncs()).resolves.toEqual({
+      savedRunIds: ["detected-run-123"],
+      remainingRunIds: [],
+    });
+    expect(storageSet).toHaveBeenCalledWith({ pendingDetectedOfferSyncs: [] });
   });
 });
