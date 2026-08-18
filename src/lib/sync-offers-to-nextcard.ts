@@ -381,7 +381,7 @@ export async function syncOffersToNextCard(payload: OfferSyncPayload): Promise<O
 }
 
 /** Retry any pending syncs stored from previous failures. Call on startup. */
-export async function retryPendingOfferSyncs(): Promise<{
+async function retryPendingEnrolledOfferSyncs(): Promise<{
   savedRunIds: string[];
   remainingRunIds: string[];
 }> {
@@ -563,6 +563,26 @@ export function retryPendingDetectedOfferSyncs(): Promise<{
   remainingRunIds: string[];
 }> {
   return enqueueDetectedOfferTask(runPendingDetectedOfferSyncs);
+}
+
+export async function retryPendingOfferSyncs(): Promise<{
+  savedRunIds: string[];
+  remainingRunIds: string[];
+}> {
+  const [enrolledResult, detectedResult] = await Promise.all([
+    retryPendingEnrolledOfferSyncs(),
+    retryPendingDetectedOfferSyncs(),
+  ]);
+  return {
+    savedRunIds: Array.from(new Set([
+      ...enrolledResult.savedRunIds,
+      ...detectedResult.savedRunIds,
+    ])),
+    remainingRunIds: Array.from(new Set([
+      ...enrolledResult.remainingRunIds,
+      ...detectedResult.remainingRunIds,
+    ])),
+  };
 }
 
 /** Pull offers from backend and rebuild both URL caches. Call on startup/re-auth. */

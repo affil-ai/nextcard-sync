@@ -16,7 +16,7 @@ import {
   validateProviderData,
 } from "../lib/sync-to-nextcard";
 import { REWARDS_SUMMARIES_STORAGE_KEY } from "../lib/rewards-summary";
-import { syncOffersToNextCard, syncDetectedOffersToNextCard, retryPendingDetectedOfferSyncs, retryPendingOfferSyncs, pullOfferUrlCache } from "../lib/sync-offers-to-nextcard";
+import { syncOffersToNextCard, syncDetectedOffersToNextCard, retryPendingOfferSyncs, pullOfferUrlCache } from "../lib/sync-offers-to-nextcard";
 import type { OfferSyncPayload, DetectedOfferSyncPayload } from "../lib/sync-offers-to-nextcard";
 import { retryPendingOfferActivationCompletions } from "../lib/offer-activation-usage";
 import { providerRegistry } from "../providers/provider-registry";
@@ -648,15 +648,8 @@ chrome.alarms.onAlarm.addListener((alarm) => {
 });
 
 async function retryQueuedOfferSyncs() {
-  const [enrolledResult, detectedResult] = await Promise.all([
-    retryPendingOfferSyncs(),
-    retryPendingDetectedOfferSyncs(),
-  ]);
-  const savedRunIds = new Set([
-    ...enrolledResult.savedRunIds,
-    ...detectedResult.savedRunIds,
-  ]);
-  await Promise.all(Array.from(savedRunIds).map(async (runId) => {
+  const result = await retryPendingOfferSyncs();
+  await Promise.all(result.savedRunIds.map(async (runId) => {
     await offerOperations.patch(runId, {
       saveStatus: "saved",
       saveError: null,
