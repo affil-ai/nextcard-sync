@@ -24,6 +24,11 @@ let pollInterval: ReturnType<typeof setInterval> | null = null;
 let currentStatus: OverlayStatus | null = null;
 let knownProvider: string | null = null;
 let lastProgressMessage: string | null = null;
+let isMinimized = false;
+
+function isLoginStatus(status: OverlayStatus): boolean {
+  return status === "waiting_for_login" || status === "mfa_challenge";
+}
 
 function getStatusConfig(status: OverlayStatus) {
   switch (status) {
@@ -116,11 +121,76 @@ const OVERLAY_STYLES = /* css */ `
 
   :host(.nc-login) {
     align-items: flex-end;
-    padding: 0 16px 24px;
+    justify-content: flex-end;
+    box-sizing: border-box;
+    padding: 16px;
   }
 
   :host(.nc-login) .nc-backdrop {
     display: none;
+  }
+
+  :host(.nc-login) .nc-banner {
+    box-sizing: border-box;
+    gap: 12px;
+    width: min(360px, calc(100vw - 32px));
+    padding: 14px 16px;
+    border-radius: 14px;
+  }
+
+  :host(.nc-login) .nc-logo {
+    width: 36px;
+    height: 36px;
+  }
+
+  :host(.nc-login) .nc-body {
+    gap: 7px;
+    padding-right: 64px;
+  }
+
+  :host(.nc-login) .nc-heading {
+    font-size: 15px;
+    line-height: 1.3;
+  }
+
+  :host(.nc-login) .nc-minimize-button {
+    display: block;
+  }
+
+  :host(.nc-login.nc-minimized) .nc-banner {
+    width: auto;
+    max-width: calc(100vw - 32px);
+    align-items: center;
+    gap: 10px;
+    padding: 10px 12px;
+  }
+
+  :host(.nc-login.nc-minimized) .nc-logo,
+  :host(.nc-login.nc-minimized) .nc-body {
+    display: none;
+  }
+
+  :host(.nc-login.nc-minimized) .nc-compact-status {
+    display: flex;
+  }
+
+  :host(.nc-login.nc-minimized) .nc-minimize-button {
+    position: static;
+  }
+
+  @media (max-width: 480px) {
+    :host(.nc-login) {
+      padding: 8px;
+    }
+
+    :host(.nc-login) .nc-banner {
+      width: calc(100vw - 16px);
+    }
+
+    :host(.nc-login.nc-minimized) .nc-banner {
+      width: auto;
+      max-width: calc(100vw - 16px);
+    }
   }
 
   @keyframes nc-backdrop-in {
@@ -349,6 +419,41 @@ const OVERLAY_STYLES = /* css */ `
     flex-shrink: 0;
     color: #f6b156;
   }
+
+  .nc-minimize-button {
+    display: none;
+    position: absolute;
+    top: 10px;
+    right: 12px;
+    appearance: none;
+    border: 0;
+    background: transparent;
+    color: #725f54;
+    padding: 4px;
+    font: 700 11px/1.2 "Nunito", -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", system-ui, sans-serif;
+    cursor: pointer;
+  }
+
+  .nc-minimize-button:hover {
+    color: #342019;
+  }
+
+  .nc-minimize-button:focus-visible {
+    outline: 2px solid #f6b156;
+    outline-offset: 2px;
+    border-radius: 4px;
+  }
+
+  .nc-compact-status {
+    display: none;
+    align-items: center;
+    gap: 8px;
+    color: #342019;
+    font-size: 12px;
+    font-weight: 800;
+    line-height: 1.2;
+    white-space: nowrap;
+  }
 `;
 
 const SHIELD_SVG = `<svg viewBox="0 0 12 12" fill="none" xmlns="http://www.w3.org/2000/svg">
@@ -383,12 +488,22 @@ function buildBanner(status: OverlayStatus): string {
   }
 
   const logoHtml = `<img class="nc-logo" src="${ICON_URL}" alt="nextcard" />`;
+  const loginControlsHtml = isLoginStatus(status)
+    ? `
+      <div class="nc-compact-status">
+        <span class="nc-dot ${cfg.dotClass}"></span>
+        <span>${status === "mfa_challenge" ? "Security check waiting" : "Sign-in sync waiting"}</span>
+      </div>
+      <button class="nc-minimize-button" type="button" aria-expanded="true">Minimize</button>
+    `
+    : "";
 
   return `
     <link href="https://fonts.googleapis.com/css2?family=Nunito:wght@400;600;700;800&display=swap" rel="stylesheet"/>
     <style>${OVERLAY_STYLES}</style>
     <div class="nc-backdrop"></div>
     <div class="nc-banner">
+      ${loginControlsHtml}
       ${logoHtml}
       <div class="nc-body">
         <div class="nc-heading">
@@ -401,6 +516,44 @@ function buildBanner(status: OverlayStatus): string {
       </div>
     </div>
   `;
+}
+
+function updateMinimizedState(minimized: boolean): void {
+  if (!hostEl || !shadowRoot || !currentStatus || !isLoginStatus(currentStatus)) return;
+
+  isMinimized = minimized;
+  hostEl.classList.toggle("nc-minimized", minimized);
+  const button = shadowRoot.querySelector(".nc-minimize-button");
+  if (button instanceof HTMLButtonElement) {
+    button.textContent = minimized ? "Show" : "Minimize";
+    button.setAttribute("aria-expanded", minimized ? "false" : "true");
+    button.setAttribute("aria-label", minimized ? "Show nextcard sync status" : "Minimize nextcard sync status");
+  }
+}
+
+function wireOverlayControls(): void {
+  if (!shadowRoot) return;
+  const button = shadowRoot.querySelector(".nc-minimize-button");
+  if (!(button instanceof HTMLButtonElement)) return;
+  button.addEventListener("click", () => updateMinimizedState(!isMinimized));
+  updateMinimizedState(isMinimized);
+}
+
+function renderBanner(status: OverlayStatus): void {
+  if (!shadowRoot) return;
+  shadowRoot.innerHTML = buildBanner(status);
+  wireOverlayControls();
+}
+
+function updateHostClasses(status: OverlayStatus): void {
+  if (!hostEl) return;
+  if (isLoginStatus(status)) {
+    hostEl.classList.add("nc-login");
+    hostEl.classList.toggle("nc-minimized", isMinimized);
+  } else {
+    hostEl.classList.remove("nc-login", "nc-minimized");
+    isMinimized = false;
+  }
 }
 
 /**
@@ -458,10 +611,10 @@ export function showOverlay(status: OverlayStatus, provider?: string): void {
 
   hostEl = document.createElement("div");
   hostEl.id = HOST_ID;
-  if (status === "waiting_for_login" || status === "mfa_challenge") hostEl.classList.add("nc-login");
+  updateHostClasses(status);
   shadowRoot = hostEl.attachShadow({ mode: "closed" });
-  shadowRoot.innerHTML = buildBanner(status);
   currentStatus = status;
+  renderBanner(status);
   injectWhenReady(hostEl);
 
   startPollIfNeeded();
@@ -488,28 +641,20 @@ export function updateOverlay(status: OverlayStatus, provider?: string): void {
     banner.style.transition = "opacity 0.25s ease";
     banner.style.opacity = "0";
     setTimeout(() => {
-      if (status === "waiting_for_login" || status === "mfa_challenge") {
-        hostEl!.classList.add("nc-login");
-      } else {
-        hostEl!.classList.remove("nc-login");
-      }
-      shadowRoot!.innerHTML = buildBanner(status);
+      updateHostClasses(status);
       currentStatus = status;
-      const newBanner = shadowRoot!.querySelector(".nc-banner") as HTMLElement | null;
-      if (newBanner) {
+      renderBanner(status);
+      const newBanner = shadowRoot?.querySelector(".nc-banner");
+      if (newBanner instanceof HTMLElement) {
         newBanner.style.opacity = "0";
         newBanner.style.transition = "opacity 0.3s ease";
         requestAnimationFrame(() => { newBanner.style.opacity = "1"; });
       }
     }, 250);
   } else {
-    if (status === "waiting_for_login" || status === "mfa_challenge") {
-      hostEl.classList.add("nc-login");
-    } else {
-      hostEl.classList.remove("nc-login");
-    }
-    shadowRoot.innerHTML = buildBanner(status);
+    updateHostClasses(status);
     currentStatus = status;
+    renderBanner(status);
   }
 
   startPollIfNeeded();
@@ -563,6 +708,7 @@ export function hideOverlay(finalStatus: "done" | "error" | "cancelled" = "done"
         currentStatus = null;
         knownProvider = null;
         lastProgressMessage = null;
+        isMinimized = false;
       }, 350);
     }
   }, finalStatus === "done" ? 1500 : 800);
