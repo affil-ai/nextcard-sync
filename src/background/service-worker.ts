@@ -16,7 +16,7 @@ import {
   validateProviderData,
 } from "../lib/sync-to-nextcard";
 import { REWARDS_SUMMARIES_STORAGE_KEY } from "../lib/rewards-summary";
-import { syncOffersToNextCard, syncDetectedOffersToNextCard, retryPendingOfferSyncs, pullOfferUrlCache } from "../lib/sync-offers-to-nextcard";
+import { ENRICHED_OFFER_CACHE_REFRESH_ALARMS, syncOffersToNextCard, syncDetectedOffersToNextCard, retryPendingOfferSyncs, pullOfferUrlCache } from "../lib/sync-offers-to-nextcard";
 import type { OfferSyncPayload, DetectedOfferSyncPayload } from "../lib/sync-offers-to-nextcard";
 import { retryPendingOfferActivationCompletions } from "../lib/offer-activation-usage";
 import { providerRegistry } from "../providers/provider-registry";
@@ -641,6 +641,12 @@ chrome.alarms.create("retryPendingOfferSyncs", {
 });
 chrome.alarms.onAlarm.addListener((alarm) => {
   if (alarm.name === "pullOfferUrlCache") void pullOfferUrlCache();
+  if (
+    alarm.name === ENRICHED_OFFER_CACHE_REFRESH_ALARMS.soon ||
+    alarm.name === ENRICHED_OFFER_CACHE_REFRESH_ALARMS.followUp
+  ) {
+    void pullOfferUrlCache();
+  }
   if (alarm.name === "retryPendingOfferSyncs") void retryQueuedOfferSyncs();
   if (alarm.name === "retryOfferActivationCompletions") {
     void retryPendingOfferActivationCompletions();

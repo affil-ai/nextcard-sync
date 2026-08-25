@@ -141,6 +141,39 @@ export function normalizeHostname(urlOrHostname: string): string | null {
   }
 }
 
+export const ENRICHED_OFFER_CACHE_REFRESH_ALARMS: Readonly<{
+  soon: string;
+  followUp: string;
+}> = {
+  soon: "refreshEnrichedOfferUrlCacheSoon",
+  followUp: "refreshEnrichedOfferUrlCacheFollowUp",
+};
+
+function scheduleEnrichedOfferCacheRefreshes(): void {
+  void Promise.all([
+    chrome.alarms.create(ENRICHED_OFFER_CACHE_REFRESH_ALARMS.soon, {
+      delayInMinutes: 1,
+    }),
+    chrome.alarms.create(ENRICHED_OFFER_CACHE_REFRESH_ALARMS.followUp, {
+      delayInMinutes: 5,
+    }),
+  ]).catch((error) => {
+    console.warn(
+      "[NextCard Offers] Failed to schedule enriched offer cache refresh:",
+      error,
+    );
+  });
+}
+
+function isEnrichmentPendingResponse(body: unknown): boolean {
+  return (
+    typeof body === "object" &&
+    body !== null &&
+    "enrichmentPending" in body &&
+    body.enrichmentPending === true
+  );
+}
+
 function splitOfferMapByStatus(offerMap: OfferUrlCache): { enrolled: OfferUrlCache; detected: OfferUrlCache } {
   const enrolled: OfferUrlCache = {};
   const detected: OfferUrlCache = {};
@@ -243,6 +276,9 @@ async function postOfferSync(
   }
 
   const body = await response.json().catch(() => ({}));
+  if (isEnrichmentPendingResponse(body)) {
+    scheduleEnrichedOfferCacheRefreshes();
+  }
   const debug = (body as Record<string, unknown>).debug;
   if (debug) {
     console.info("[NextCard Offers Sync] summary:", debug);
@@ -479,6 +515,9 @@ async function postDetectedOfferSync(
       }
 
       const body = await response.json().catch(() => ({}));
+      if (isEnrichmentPendingResponse(body)) {
+        scheduleEnrichedOfferCacheRefreshes();
+      }
       const debug = (body as Record<string, unknown>).debug;
       if (debug) {
         console.info("[NextCard Detected Offers] chunk summary:", {

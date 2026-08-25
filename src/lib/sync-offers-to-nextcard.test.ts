@@ -64,10 +64,13 @@ const detectedPayload: DetectedOfferSyncPayload = {
 
 const storageGet = vi.fn();
 const storageSet = vi.fn();
+const alarmsCreate = vi.fn();
 
 beforeEach(() => {
   storageGet.mockReset();
   storageSet.mockReset();
+  alarmsCreate.mockReset();
+  alarmsCreate.mockResolvedValue(undefined);
   vi.mocked(getAuth).mockReset();
   vi.mocked(getAuth).mockResolvedValue({
     token: "token",
@@ -81,6 +84,9 @@ beforeEach(() => {
         get: storageGet,
         set: storageSet,
       },
+    },
+    alarms: {
+      create: alarmsCreate,
     },
   });
 });
@@ -111,6 +117,31 @@ describe("syncOffersToNextCard", () => {
       error: null,
     });
     expect(fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("schedules bounded cache refreshes when domain enrichment is pending", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => ({
+      ok: true,
+      json: async () => ({ enrichmentPending: true }),
+    })));
+    storageGet.mockResolvedValue({});
+    storageSet.mockResolvedValue(undefined);
+
+    await expect(syncOffersToNextCard(payload)).resolves.toEqual({
+      status: "saved",
+      error: null,
+    });
+    expect(alarmsCreate).toHaveBeenCalledTimes(2);
+    expect(alarmsCreate).toHaveBeenNthCalledWith(
+      1,
+      "refreshEnrichedOfferUrlCacheSoon",
+      { delayInMinutes: 1 },
+    );
+    expect(alarmsCreate).toHaveBeenNthCalledWith(
+      2,
+      "refreshEnrichedOfferUrlCacheFollowUp",
+      { delayInMinutes: 5 },
+    );
   });
 
   it("queues an authentication failure with its run id for retry", async () => {
@@ -204,6 +235,18 @@ describe("syncDetectedOffersToNextCard", () => {
     expect(storageSet).toHaveBeenCalledWith({
       pendingDetectedOfferSyncs: [detectedPayload],
     });
+  });
+
+  it("refreshes the cache after asynchronous detected-offer enrichment", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => ({
+      ok: true,
+      json: async () => ({ enrichmentPending: true }),
+    })));
+
+    await expect(syncDetectedOffersToNextCard(detectedPayload)).resolves.toBe(
+      "saved",
+    );
+    expect(alarmsCreate).toHaveBeenCalledTimes(2);
   });
 });
 
