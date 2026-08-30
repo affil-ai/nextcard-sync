@@ -305,6 +305,11 @@ export async function pollPopupSnapshot() {
 
 const syncStartRequestsInFlight = new Set<ProviderId>();
 
+export interface ProviderSyncCompletion {
+  status: SyncStatus;
+  succeeded: boolean;
+}
+
 export function startProviderSync(providerId: ProviderId) {
   if (syncStartRequestsInFlight.has(providerId)) {
     return Promise.resolve(true);
@@ -343,4 +348,35 @@ export function startProviderSync(providerId: ProviderId) {
       },
     );
   });
+}
+
+export async function waitForProviderSyncCompletion(
+  providerId: ProviderId,
+): Promise<ProviderSyncCompletion> {
+  while (true) {
+    const response: unknown = await chrome.runtime.sendMessage({
+      type: "GET_STATUS",
+      provider: providerId,
+    });
+    const state = isRecord(response) ? response : {};
+    const status = isSyncStatus(state.status) ? state.status : "error";
+    const active =
+      status === "detecting_login"
+      || status === "waiting_for_login"
+      || status === "extracting";
+
+    if (!active) {
+      return {
+        status,
+        succeeded:
+          status === "done"
+          && state.pendingBackendPush !== true
+          && state.backendSyncStatus !== "partial"
+          && state.backendSyncStatus !== "blocked"
+          && state.backendSyncStatus !== "failed",
+      };
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, 300));
+  }
 }

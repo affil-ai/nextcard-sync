@@ -14,7 +14,11 @@ import {
   providerRegistry,
 } from "../../providers/provider-registry";
 import { escapeHtml, formatRelativeTime } from "../renderers/shared";
-import { hasConnectedRewards } from "./home-state";
+import {
+  getConnectedTravelProviderIds,
+  hasConnectedRewards,
+  type RewardsSyncAllState,
+} from "./home-state";
 
 export function buildHomeSnapshot(
   allStates: Record<ProviderId, ProviderSyncState>,
@@ -22,6 +26,7 @@ export function buildHomeSnapshot(
   firstSyncCompleted: boolean,
   extensionProfile: ExtensionProfile | null,
   previewRewardsGuide = false,
+  syncAllState?: RewardsSyncAllState,
 ) {
   return orderedProviderIds
     .map((providerId) => {
@@ -36,7 +41,8 @@ export function buildHomeSnapshot(
     })
     .join("|")
     + `|summaries:${JSON.stringify(rewardsSummaries)}`
-    + `|tour:${firstSyncCompleted}|preview:${previewRewardsGuide}|plan:${extensionProfile?.accountLevel ?? "unknown"}|locked:${extensionProfile?.lockedProviders.join(",") ?? ""}`;
+    + `|tour:${firstSyncCompleted}|preview:${previewRewardsGuide}|plan:${extensionProfile?.accountLevel ?? "unknown"}|locked:${extensionProfile?.lockedProviders.join(",") ?? ""}`
+    + `|syncAll:${syncAllState?.status ?? "idle"}:${syncAllState?.currentProviderId ?? ""}:${syncAllState?.processedCount ?? 0}:${syncAllState?.failedCount ?? 0}`;
 }
 
 export function createHomeRenderer(options: {
@@ -46,11 +52,13 @@ export function createHomeRenderer(options: {
   getRewardsGuidePreview?: () => boolean;
   getExtensionProfile: () => ExtensionProfile | null;
   getRewardsSummaries: () => ExtensionRewardsSummary[];
+  getSyncAllState: () => RewardsSyncAllState;
   markFirstSyncCompleted: () => void;
   onProviderSelected: (providerId: ProviderId) => void;
   onLockedProviderSelected: (providerId: ProviderId) => void;
   onSummarySelected: (summary: ExtensionRewardsSummary) => void;
   onSummarySyncRequested: (providerId: ProviderId) => void;
+  onSyncAllRequested: (providerIds: ProviderId[]) => void;
 }) {
   let lastHomeSnapshot = "";
 
@@ -59,6 +67,7 @@ export function createHomeRenderer(options: {
     const previewRewardsGuide = options.getRewardsGuidePreview?.() ?? false;
     const extensionProfile = options.getExtensionProfile();
     const rewardsSummaries = options.getRewardsSummaries();
+    const syncAllState = options.getSyncAllState();
     const connectedRewards = hasConnectedRewards(
       allStates,
       rewardsSummaries,
@@ -71,6 +80,7 @@ export function createHomeRenderer(options: {
       firstSyncCompleted,
       extensionProfile,
       previewRewardsGuide,
+      syncAllState,
     );
     if (snapshot === lastHomeSnapshot) return;
     lastHomeSnapshot = snapshot;
@@ -81,10 +91,64 @@ export function createHomeRenderer(options: {
       rewardsSummaries.map((summary) => summary.provider),
     );
     if (rewardsSummaries.length > 0) {
+      const travelProviderIds = getConnectedTravelProviderIds(
+        rewardsSummaries,
+        extensionProfile?.lockedProviders ?? [],
+      );
+      const travelSyncInProgress = travelProviderIds.some((providerId) => {
+        const status = allStates[providerId]?.status;
+        return (
+          status === "extracting"
+          || status === "detecting_login"
+          || status === "waiting_for_login"
+        );
+      });
+      const heading = document.createElement("div");
+      heading.className = "rewards-summary-heading tour-target";
       const groupLabel = document.createElement("div");
-      groupLabel.className = "home-section-label rewards-summary-heading tour-target";
+      groupLabel.className = "home-section-label";
       groupLabel.textContent = "Your rewards";
-      options.providerList.appendChild(groupLabel);
+      heading.appendChild(groupLabel);
+
+      if (travelProviderIds.length > 1) {
+        const syncAllButton = document.createElement("button");
+        syncAllButton.className = "rewards-sync-all-btn";
+        syncAllButton.type = "button";
+        syncAllButton.setAttribute(
+          "aria-label",
+          `Sync all ${travelProviderIds.length} connected airline and hotel programs`,
+        );
+        syncAllButton.disabled =
+          syncAllState.status === "running" || travelSyncInProgress;
+        syncAllButton.textContent = syncAllState.status === "running"
+          ? `Syncing ${syncAllState.processedCount + 1} of ${syncAllState.providerIds.length}…`
+          : travelSyncInProgress
+            ? "Sync in progress"
+          : "Sync travel";
+        syncAllButton.addEventListener("click", () =>
+          options.onSyncAllRequested(travelProviderIds)
+        );
+        heading.appendChild(syncAllButton);
+      }
+      options.providerList.appendChild(heading);
+
+      if (syncAllState.status !== "idle") {
+        const progress = document.createElement("div");
+        progress.className = syncAllState.failedCount > 0
+          ? "rewards-sync-all-status has-error"
+          : "rewards-sync-all-status";
+        progress.setAttribute("role", "status");
+        progress.setAttribute("aria-live", "polite");
+        if (syncAllState.status === "running" && syncAllState.currentProviderId) {
+          progress.textContent = `Syncing ${syncAllState.processedCount + 1} of ${syncAllState.providerIds.length}: ${providerRegistry[syncAllState.currentProviderId].name}.`;
+        } else {
+          const succeededCount = syncAllState.processedCount - syncAllState.failedCount;
+          progress.textContent = syncAllState.failedCount === 0
+            ? `All ${succeededCount} travel programs are up to date.`
+            : `Synced ${succeededCount} of ${syncAllState.processedCount} travel programs. ${syncAllState.failedCount} ${syncAllState.failedCount === 1 ? "needs" : "need"} attention.`;
+        }
+        options.providerList.appendChild(progress);
+      }
 
       for (const summary of rewardsSummaries) {
         const state = allStates[summary.provider];
@@ -95,6 +159,7 @@ export function createHomeRenderer(options: {
           state?.status === "extracting"
           || state?.status === "detecting_login"
           || state?.status === "waiting_for_login";
+        const isSyncAllRunning = syncAllState.status === "running";
         const hasError =
           state?.pendingBackendPush
           || state?.status === "error"
@@ -127,7 +192,7 @@ export function createHomeRenderer(options: {
           </div>
           <div class="rewards-summary-actions">
             <button class="rewards-summary-primary" type="button">View details <span aria-hidden="true">→</span></button>
-            <button class="rewards-summary-secondary" type="button"${isSyncing ? " disabled" : ""}>${isSyncing ? "Syncing…" : hasError ? "Try again" : "Sync again"}</button>
+            <button class="rewards-summary-secondary" type="button"${isSyncing || isSyncAllRunning ? " disabled" : ""}>${isSyncing ? "Syncing…" : hasError ? "Try again" : "Sync again"}</button>
           </div>
         `;
 
