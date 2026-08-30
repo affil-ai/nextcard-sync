@@ -262,29 +262,37 @@ function sendProgress(data: Record<string, unknown>) {
 }
 
 async function runEnrollment(
-  cardId: string,
+  selectedCardIds: string[],
   allCardIds: string[],
+  cards: ChaseCard[],
   maxOffers: number | null,
 ) {
   cancelled = false;
 
   sendProgress({ status: "fetching" });
-  const observedOffers = await listOffers(allCardIds, cardId);
-  const availableOffers = observedOffers.filter(isChaseActivatableOffer);
-  const offers =
-    maxOffers == null
+  let offersRemaining = maxOffers;
+  const offersByCard: Array<{ card: ChaseCard; offers: ChaseOffer[] }> = [];
+  for (const cardId of selectedCardIds) {
+    const card = cards.find((candidate) => candidate.id === cardId);
+    if (!card || offersRemaining === 0) continue;
+    const observedOffers = await listOffers(allCardIds, cardId);
+    const availableOffers = observedOffers.filter(isChaseActivatableOffer);
+    const offers = offersRemaining == null
       ? availableOffers
-      : availableOffers.slice(0, Math.max(0, maxOffers));
+      : availableOffers.slice(0, offersRemaining);
+    offersByCard.push({ card, offers });
+    if (offersRemaining != null) offersRemaining -= offers.length;
+  }
+  const total = offersByCard.reduce((sum, entry) => sum + entry.offers.length, 0);
 
-  if (offers.length === 0) {
+  if (total === 0) {
     chrome.runtime.sendMessage({
       type: "CHASE_OFFERS_COMPLETE",
       runId: activeOfferRunId,
       added: 0,
       failed: 0,
-      cardId,
-      cardName: selectedCardName,
-      cardLastDigits: selectedCardLastDigits,
+      total: 0,
+      enrolledByCard: [],
     }).catch(() => {});
     return;
   }
@@ -301,20 +309,25 @@ async function runEnrollment(
 
   let added = 0;
   let failed = 0;
-  const enrolledOffers: ChaseOffer[] = [];
-  for (const offer of offers) {
-    if (cancelled) break;
-    try {
-      if (await enrollOffer(offer, epi)) {
-        added++;
-        enrolledOffers.push(offer);
-      } else {
+  const enrolledByCard: Array<{ card: ChaseCard; offers: ChaseOffer[] }> = [];
+  for (const entry of offersByCard) {
+    const enrolledOffers: ChaseOffer[] = [];
+    for (const offer of entry.offers) {
+      if (cancelled) break;
+      try {
+        if (await enrollOffer(offer, epi)) {
+          added++;
+          enrolledOffers.push(offer);
+        } else {
+          failed++;
+        }
+      } catch {
         failed++;
       }
-    } catch {
-      failed++;
+      sendProgress({ added, failed, total });
     }
-    sendProgress({ added, failed, total: offers.length });
+    enrolledByCard.push({ card: entry.card, offers: enrolledOffers });
+    if (cancelled) break;
   }
 
   chrome.runtime.sendMessage({
@@ -322,33 +335,32 @@ async function runEnrollment(
     runId: activeOfferRunId,
     added,
     failed,
-    total: offers.length,
+    total,
     cancelled,
-    cardId,
-    cardName: selectedCardName,
-    cardLastDigits: selectedCardLastDigits,
-    enrolledOffers: enrolledOffers.map((o) => ({
-      issuerOfferId: o.offerId,
-      merchantName: o.name,
-      offerValue: o.offerHeaderText,
-      category: o.category,
-      expirationDate: o.offerEndTimestamp,
-      rewardType: o.offerRewardTypeCode === "PERCENTAGE" ? "percentage" : o.offerRewardTypeCode === "FLAT_AMOUNT" ? "flat_cash" : null,
-      rewardAmount: o.offerAmount,
-      rewardCurrency: "cash",
-      maxReward: o.maximumRewardAmount === 0 ? null : o.maximumRewardAmount,
-      minSpend: o.minimumSpendAmount === 0 ? null : o.minimumSpendAmount,
-      merchantUrl: o.merchantUrl,
-      merchantLogoUrl: o.merchantLogoUrl,
-      redemptionChannel: o.redemptionChannel,
+    enrolledByCard: enrolledByCard.map(({ card, offers }) => ({
+      cardId: card.id,
+      cardName: card.name,
+      cardLastDigits: card.lastDigits,
+      enrolledOffers: offers.map((offer) => ({
+        issuerOfferId: offer.offerId,
+        merchantName: offer.name,
+        offerValue: offer.offerHeaderText,
+        category: offer.category,
+        expirationDate: offer.offerEndTimestamp,
+        rewardType: offer.offerRewardTypeCode === "PERCENTAGE" ? "percentage" : offer.offerRewardTypeCode === "FLAT_AMOUNT" ? "flat_cash" : null,
+        rewardAmount: offer.offerAmount,
+        rewardCurrency: "cash",
+        maxReward: offer.maximumRewardAmount === 0 ? null : offer.maximumRewardAmount,
+        minSpend: offer.minimumSpendAmount === 0 ? null : offer.minimumSpendAmount,
+        merchantUrl: offer.merchantUrl,
+        merchantLogoUrl: offer.merchantLogoUrl,
+        redemptionChannel: offer.redemptionChannel,
+      })),
     })),
   }).catch(() => {});
 }
 
 // ── Message listener ───────────────────────────────────────
-
-let selectedCardName = "";
-let selectedCardLastDigits: string | null = null;
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (message.type === "CHASE_OFFERS_DISCOVER") {
@@ -412,11 +424,29 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 
   if (message.type === "CHASE_OFFERS_RUN") {
     activeOfferRunId = typeof message.runId === "string" ? message.runId : null;
-    selectedCardName = (message.cardName as string) ?? "";
-    selectedCardLastDigits = (message.cardLastDigits as string) ?? null;
+    const cards = Array.isArray(message.cards)
+      ? message.cards.filter((card: unknown): card is ChaseCard => (
+          card !== null
+          && typeof card === "object"
+          && typeof (card as ChaseCard).id === "string"
+          && typeof (card as ChaseCard).name === "string"
+        ))
+      : [];
+    const selectedCardIds = Array.isArray(message.selectedCardKeys)
+      ? message.selectedCardKeys.filter((cardId: unknown): cardId is string => (
+          typeof cardId === "string"
+        ))
+      : [message.cardId].filter((cardId): cardId is string => typeof cardId === "string");
     runEnrollment(
-      message.cardId,
+      selectedCardIds,
       message.allCardIds ?? [message.cardId],
+      cards.length > 0
+        ? cards
+        : [{
+            id: message.cardId,
+            name: (message.cardName as string) ?? "Chase card",
+            lastDigits: (message.cardLastDigits as string) ?? null,
+          }],
       typeof message.maxOffers === "number"
         ? Math.max(0, Math.floor(message.maxOffers))
         : null,

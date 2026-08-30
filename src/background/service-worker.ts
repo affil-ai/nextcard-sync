@@ -654,7 +654,7 @@ async function retryQueuedOfferSyncs() {
       saveStatus: "saved",
       saveError: null,
     });
-    await offerOperations.continueAfterSavedEnrollment(runId);
+    await offerOperations.continueAfterEnrollmentCompletion(runId);
     void offerCoordinator.resume();
   }));
 }

@@ -54,13 +54,22 @@ async function readyChase() {
     phase: "checking",
     ownedTabId: 42,
   });
-  await store.markReady(started.state.runId, [{
-    key: "card-id-1",
-    name: "Sapphire",
-    lastDigits: "1234",
-    availableCount: 18,
-    countStatus: "complete",
-  }]);
+  await store.markReady(started.state.runId, [
+    {
+      key: "card-id-1",
+      name: "Sapphire",
+      lastDigits: "1234",
+      availableCount: 18,
+      countStatus: "complete",
+    },
+    {
+      key: "card-id-2",
+      name: "Freedom",
+      lastDigits: "5678",
+      availableCount: 12,
+      countStatus: "complete",
+    },
+  ]);
   return { store, runId: started.state.runId };
 }
 
@@ -124,6 +133,32 @@ describe("offer operation coordinator", () => {
     const result = await coordinator.startEnrollment(runId, ["card-id-1"], 18);
     expect(result.ok).toBe(false);
     expect(sendMessage).not.toHaveBeenCalled();
+  });
+
+  it("passes every selected Chase card to a bulk enrollment", async () => {
+    const { store, runId } = await readyChase();
+    const coordinator = createOfferOperationCoordinator(store);
+
+    const result = await coordinator.startEnrollment(
+      runId,
+      ["card-id-1", "card-id-2"],
+      30,
+    );
+
+    expect(result.ok).toBe(true);
+    expect(sendMessage).toHaveBeenCalledWith(
+      42,
+      expect.objectContaining({
+        type: "CHASE_OFFERS_RUN",
+        selectedCardKeys: ["card-id-1", "card-id-2"],
+        expectedTotal: 30,
+      }),
+      expect.any(Function),
+    );
+    expect((await store.getSnapshot()).active?.selectedCardKeys).toEqual([
+      "card-id-1",
+      "card-id-2",
+    ]);
   });
 
   it("requires a fresh Amex preflight before multi-card enrollment", async () => {
