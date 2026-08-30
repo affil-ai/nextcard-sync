@@ -124,7 +124,7 @@ export function createHomeRenderer(options: {
           ? `Syncing ${syncAllState.processedCount + 1} of ${syncAllState.providerIds.length}…`
           : travelSyncInProgress
             ? "Sync in progress"
-          : "Sync travel";
+            : "Sync travel";
         syncAllButton.addEventListener("click", () =>
           options.onSyncAllRequested(travelProviderIds)
         );
