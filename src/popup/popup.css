@@ -189,6 +189,60 @@
 
       .rewards-summary-heading {
         margin-top: 16px;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+      }
+
+      .rewards-summary-heading .home-section-label {
+        margin-bottom: 0;
+      }
+
+      .rewards-sync-all-btn {
+        min-height: 33px;
+        padding: 0 11px;
+        border: 1px solid #e7ddd5;
+        border-radius: 10px;
+        background: #fff;
+        color: #5a4a3e;
+        font: 800 11px/1 "Nunito", sans-serif;
+        cursor: pointer;
+        white-space: nowrap;
+      }
+
+      .rewards-sync-all-btn:hover,
+      .rewards-sync-all-btn:focus-visible {
+        border-color: #f6b156;
+        background: #fffaf5;
+        outline: none;
+      }
+
+      .rewards-sync-all-btn:focus-visible {
+        outline: 3px solid rgba(246, 177, 86, 0.24);
+        outline-offset: 1px;
+      }
+
+      .rewards-sync-all-btn:disabled {
+        cursor: wait;
+        opacity: 0.65;
+      }
+
+      .rewards-sync-all-status {
+        padding: 9px 11px;
+        border: 1px solid rgba(246, 177, 86, 0.35);
+        border-radius: 10px;
+        background: #fff8ef;
+        color: #5a4a3e;
+        font-size: 12px;
+        font-weight: 700;
+        line-height: 1.4;
+      }
+
+      .rewards-sync-all-status.has-error {
+        border-color: rgba(183, 95, 48, 0.3);
+        background: #fff5f0;
+        color: #80401f;
       }
 
       .rewards-summary-card {

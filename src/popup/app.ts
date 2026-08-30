@@ -29,6 +29,7 @@ import {
   startProviderSync,
   subscribeToOnboardingFlags,
   subscribeToRewardsSummaries,
+  waitForProviderSyncCompletion,
 } from "./state";
 import {
   createConsentController,
@@ -36,6 +37,10 @@ import {
   getOnboardingCompletionAction,
 } from "./onboarding";
 import { createHomeRenderer } from "./home/render-home";
+import {
+  syncRewardsProvidersSequentially,
+  type RewardsSyncAllState,
+} from "./home/home-state";
 import {
   getOffersSetupCompletedStorageKey,
   getOffersSetupState,
@@ -2270,6 +2275,13 @@ let tourSyncBaselineLastSyncedAt: string | null = null;
 let tourSyncObservedInProgress = false;
 let latestProviderStates: ProviderStateMap | null = null;
 let latestRewardsSummaries: ExtensionRewardsSummary[] = [];
+let rewardsSyncAllState: RewardsSyncAllState = {
+  status: "idle",
+  providerIds: [],
+  currentProviderId: null,
+  processedCount: 0,
+  failedCount: 0,
+};
 let extensionProfile: ExtensionProfile | null = null;
 let offersSetupCompleted = false;
 let offersSetupCompletedStorageKey: string | null = null;
@@ -3351,6 +3363,72 @@ function handleProviderSelected(providerId: ProviderId) {
   void requestSync(providerId);
 }
 
+function renderRewardsSyncAllState() {
+  if (latestProviderStates) {
+    renderHome(latestProviderStates);
+  }
+}
+
+function resetRewardsSyncAllState() {
+  rewardsSyncAllState = {
+    status: "idle",
+    providerIds: [],
+    currentProviderId: null,
+    processedCount: 0,
+    failedCount: 0,
+  };
+  renderRewardsSyncAllState();
+}
+
+async function runRewardsSyncAll(providerIds: ProviderId[]) {
+  if (rewardsSyncAllState.status === "running") return;
+
+  const lockedProviders = new Set(extensionProfile?.lockedProviders ?? []);
+  const eligibleProviderIds = providerIds.filter(
+    (providerId) => !lockedProviders.has(providerId),
+  );
+  if (eligibleProviderIds.length === 0) return;
+
+  rewardsSyncAllState = {
+    status: "running",
+    providerIds: eligibleProviderIds,
+    currentProviderId: eligibleProviderIds[0] ?? null,
+    processedCount: 0,
+    failedCount: 0,
+  };
+  renderRewardsSyncAllState();
+
+  const failedCount = await syncRewardsProvidersSequentially({
+    providerIds: eligibleProviderIds,
+    startProvider: startSyncFlow,
+    waitForCompletion: waitForProviderSyncCompletion,
+    onProgress: (providerId, processedCount, currentFailedCount) => {
+      rewardsSyncAllState = {
+        ...rewardsSyncAllState,
+        currentProviderId: providerId,
+        processedCount,
+        failedCount: currentFailedCount,
+      };
+      renderRewardsSyncAllState();
+    },
+  });
+
+  rewardsSyncAllState = {
+    status: "complete",
+    providerIds: eligibleProviderIds,
+    currentProviderId: null,
+    processedCount: eligibleProviderIds.length,
+    failedCount,
+  };
+  renderRewardsSyncAllState();
+}
+
+function requestRewardsSyncAll(providerIds: ProviderId[]) {
+  requestToolConsent(() => {
+    void runRewardsSyncAll(providerIds);
+  });
+}
+
 let upgradeRequestInFlight = false;
 let lastUpgradeRequestAt = 0;
 
@@ -3377,6 +3455,7 @@ const renderHome = createHomeRenderer({
   getRewardsGuidePreview: () => rewardsGuideQaPreviewActive,
   getExtensionProfile: () => extensionProfile,
   getRewardsSummaries: () => latestRewardsSummaries,
+  getSyncAllState: () => rewardsSyncAllState,
   markFirstSyncCompleted: () => {
     firstSyncCompleted = true;
     chrome.storage.local.set({ firstSyncCompleted: true });
@@ -3386,8 +3465,10 @@ const renderHome = createHomeRenderer({
   onLockedProviderSelected: handleLockedProviderSelected,
   onSummarySelected: (summary) => openRewards(summary.dashboardPath),
   onSummarySyncRequested: (providerId) => {
+    resetRewardsSyncAllState();
     void requestSync(providerId);
   },
+  onSyncAllRequested: requestRewardsSyncAll,
 });
 
 function getInitials(name: string | null) {
