@@ -270,7 +270,10 @@
             <div class="offer-recent-result" id="chaseOffersRecentResult" hidden></div>
             <div id="chaseOffersCardSelectWrap" style="display:none;"><select id="chaseOffersCardSelect" class="tool-select"></select></div>
             <div style="display:flex;justify-content:space-between;align-items:center;"><div class="tool-status" style="font-weight:600;color:#342019;" id="chaseOffersOfferCount"></div><button class="tool-link-btn" id="chaseOffersRefreshBtn">Refresh</button></div>
-            <button class="sync-btn" id="chaseOffersRunBtn" style="margin:0;">Add offers</button>
+            <div class="offer-enrollment-actions">
+              <button class="sync-btn" id="chaseOffersRunAllBtn" type="button" hidden>Add all offers</button>
+              <button class="sync-btn sync-btn--secondary" id="chaseOffersRunBtn" type="button">Add offers to this card</button>
+            </div>
           </div>
           <div id="chaseOffersRunning" class="tool-expand" style="display:none;">
             <div class="tool-status" style="font-weight:600;color:#342019;">Adding offers...</div>
@@ -347,7 +350,10 @@
             <div class="offer-recent-result" id="citiOffersRecentResult" hidden></div>
             <div id="citiOffersCardSelectWrap" style="display:none;"><select id="citiOffersCardSelect" class="tool-select"></select></div>
             <div style="display:flex;justify-content:space-between;align-items:center;"><div class="tool-status" style="font-weight:600;color:#342019;" id="citiOffersOfferCount"></div><button class="tool-link-btn" id="citiOffersRefreshBtn">Refresh</button></div>
-            <button class="sync-btn" id="citiOffersRunBtn" style="margin:0;">Add offers</button>
+            <div class="offer-enrollment-actions">
+              <button class="sync-btn" id="citiOffersRunAllBtn" type="button" hidden>Add all offers</button>
+              <button class="sync-btn sync-btn--secondary" id="citiOffersRunBtn" type="button">Add offers to this card</button>
+            </div>
           </div>
           <div id="citiOffersRunning" class="tool-expand" style="display:none;">
             <div class="tool-status" style="font-weight:600;color:#342019;">Adding offers...</div>

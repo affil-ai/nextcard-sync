@@ -279,6 +279,13 @@ export function createOfferOperationCoordinator(store: OfferOperationStore) {
     const selectedKey = selectedCardKeys[0];
     const selectedCard = active.cards.find((card) => card.key === selectedKey);
     if (!selectedCard) return { ok: false as const, error: "invalid_card_selection" };
+    if (
+      active.issuer === "amex"
+      && selectedCardKeys.length > 1
+      && options.addMatchingOffersAcrossCards !== true
+    ) {
+      return { ok: false as const, error: "multi_card_enrollment_not_supported" };
+    }
     let sharedPreflightId: string | null = null;
     const addMatchingOffersAcrossCards =
       active.issuer === "amex" && options.addMatchingOffersAcrossCards === true;
@@ -313,7 +320,9 @@ export function createOfferOperationCoordinator(store: OfferOperationStore) {
       runId,
       cardId: selectedKey,
       accountId: selectedKey,
+      selectedCardKeys,
       allCardIds: active.cards.map((card) => card.key),
+      expectedTotal: total,
       locale: "en-US",
       cardName: selectedCard.name,
       cardLastDigits: selectedCard.lastDigits,

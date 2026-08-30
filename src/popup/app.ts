@@ -149,7 +149,9 @@ function renderOfferCardChoices(options: {
     const count = options.counts[cardId];
     if (options.runButton) {
       options.runButton.textContent =
-        typeof count === "number" && count > 0 ? `Add ${count} offers` : "Add offers";
+        typeof count === "number" && count > 0
+          ? `Add ${count} to this card`
+          : "Add offers to this card";
       options.runButton.disabled = count === 0;
     }
   };
@@ -492,16 +494,31 @@ function confirmOfferEnrollment(button: HTMLButtonElement) {
       issuer: "Chase",
       selectId: "chaseOffersCardSelect",
       countId: "chaseOffersOfferCount",
+      bulk: false,
+    },
+    chaseOffersRunAllBtn: {
+      issuer: "Chase",
+      selectId: "chaseOffersCardSelect",
+      countId: "chaseOffersOfferCount",
+      bulk: true,
     },
     amexOffersRunBtn: {
       issuer: "Amex",
       selectId: "amexOffersCardSelect",
       countId: "amexOffersOfferCount",
+      bulk: false,
     },
     citiOffersRunBtn: {
       issuer: "Citi",
       selectId: "citiOffersCardSelect",
       countId: "citiOffersOfferCount",
+      bulk: false,
+    },
+    citiOffersRunAllBtn: {
+      issuer: "Citi",
+      selectId: "citiOffersCardSelect",
+      countId: "citiOffersOfferCount",
+      bulk: true,
     },
   }[button.id];
   if (!config) return;
@@ -511,6 +528,8 @@ function confirmOfferEnrollment(button: HTMLButtonElement) {
     ?.replace(/\s*\(\d+ available to activate\)\s*$/, "")
     .trim();
   const count = button.dataset.enrollmentCount ?? null;
+  const cardCount = button.dataset.cardCount ?? null;
+  const limitCapped = button.dataset.limitCapped === "true";
   const amexShared =
     button.id === "amexOffersRunBtn"
     && (document.getElementById("amexOffersSharedCheckbox") as HTMLInputElement | null)?.checked;
@@ -520,13 +539,25 @@ function confirmOfferEnrollment(button: HTMLButtonElement) {
   }
 
   title.textContent =
-    count && selectedLabel && !amexShared
+    config.bulk && limitCapped && count
+      ? `Add up to ${count} offers?`
+      : config.bulk && count && cardCount
+      ? `Add ${count} offers across ${cardCount} cards?`
+      : count && selectedLabel && !amexShared
       ? `Add ${count} offers to ${selectedLabel}?`
       : `Add available ${config.issuer} offers?`;
-  body.textContent = amexShared
-    ? "Amex will add offers to the selected card and try verified matches on other eligible cards. You’ll see the final result when it finishes."
-    : `This will add the available offers shown for ${selectedLabel ?? `this ${config.issuer} card`}. Already-submitted issuer actions cannot be undone.`;
-  continueButton.textContent = count && !amexShared ? `Add ${count} offers` : "Add offers";
+  body.textContent = config.bulk
+    ? limitCapped
+      ? `This will add available ${config.issuer} offers across the cards shown here until your monthly limit is reached. Already-submitted issuer actions cannot be undone.`
+      : `This will add available offers across every eligible ${config.issuer} card shown here. Already-submitted issuer actions cannot be undone.`
+    : amexShared
+      ? "Amex will add offers to the selected card and try verified matches on other eligible cards. You’ll see the final result when it finishes."
+      : `This will add the available offers shown for ${selectedLabel ?? `this ${config.issuer} card`}. Already-submitted issuer actions cannot be undone.`;
+  continueButton.textContent = count && !amexShared
+    ? config.bulk
+      ? limitCapped ? `Add up to ${count} offers` : `Add all ${count} offers`
+      : `Add ${count} offers`
+    : "Add offers";
   offerConfirmationTrigger = button;
   modal.classList.add("visible");
   continueButton.focus();
@@ -541,7 +572,7 @@ function confirmOfferEnrollment(button: HTMLButtonElement) {
 
 document.addEventListener("click", (event) => {
   const button = (event.target as HTMLElement).closest(
-    "#chaseOffersRunBtn, #amexOffersRunBtn, #citiOffersRunBtn",
+    "#chaseOffersRunBtn, #chaseOffersRunAllBtn, #amexOffersRunBtn, #citiOffersRunBtn, #citiOffersRunAllBtn",
   ) as HTMLButtonElement | null;
   if (!button) return;
   if (button.dataset.confirmed === "true") {
@@ -559,10 +590,19 @@ document.addEventListener("click", (event) => {
         : latestOfferSnapshot.history[issuer];
       const selectedKey = select?.value ?? "";
       const selected = state?.cards.find((card) => card.key === selectedKey);
+      const bulk = button.id.endsWith("RunAllBtn");
+      const selectedCardKeys = bulk
+        ? state?.cards
+            .filter((card) => (card.availableCount ?? 0) > 0)
+            .map((card) => card.key) ?? []
+        : selectedKey ? [selectedKey] : [];
+      const enrollmentCount = Number(button.dataset.enrollmentCount);
       void startTrackedEnrollment(
         issuer,
-        selectedKey ? [selectedKey] : [],
-        selected?.availableCount ?? null,
+        selectedCardKeys,
+        Number.isFinite(enrollmentCount)
+          ? enrollmentCount
+          : selected?.availableCount ?? null,
         {
           addMatchingOffersAcrossCards:
             issuer === "amex"
@@ -2440,6 +2480,9 @@ function renderBackgroundOwnedIssuerState(snapshot: OfferOperationSnapshot) {
       const selected = state.cards.find((card) => card.key === select?.value) ?? state.cards[0];
       const countElement = document.getElementById(`${issuer}OffersOfferCount`);
       const runButton = document.getElementById(`${issuer}OffersRunBtn`) as HTMLButtonElement | null;
+      const runAllButton = document.getElementById(
+        `${issuer}OffersRunAllBtn`,
+      ) as HTMLButtonElement | null;
       const readyPanel = document.getElementById(`${issuer}OffersReady`);
       const refreshButton = document.getElementById(
         `${issuer}OffersRefreshBtn`,
@@ -2454,6 +2497,20 @@ function renderBackgroundOwnedIssuerState(snapshot: OfferOperationSnapshot) {
           : remaining == null
             ? availableCount
             : Math.min(availableCount, remaining);
+      const bulkCards = state.cards.filter((card) => (card.availableCount ?? 0) > 0);
+      const bulkCountsComplete = state.cards.every(
+        (card) => card.availableCount != null,
+      );
+      const bulkAvailableCount = bulkCountsComplete
+        ? bulkCards.reduce((sum, card) => sum + (card.availableCount ?? 0), 0)
+        : null;
+      const bulkEnrollmentCount =
+        bulkAvailableCount == null
+          ? null
+          : remaining == null
+            ? bulkAvailableCount
+            : Math.min(bulkAvailableCount, remaining);
+      const showBulkAction = runAllButton !== null && bulkCards.length > 1;
       if (refreshButton) {
         refreshButton.textContent = refreshingAfterCompletion
           ? "Refreshing…"
@@ -2492,9 +2549,12 @@ function renderBackgroundOwnedIssuerState(snapshot: OfferOperationSnapshot) {
       let quotaNotice = document.getElementById(`${issuer}OffersQuotaNotice`);
       const shouldShowQuota =
         isFree
-        && availableCount != null
         && remaining != null
-        && availableCount > remaining;
+        && (
+          showBulkAction
+            ? bulkAvailableCount != null && bulkAvailableCount > remaining
+            : availableCount != null && availableCount > remaining
+        );
       if (shouldShowQuota && readyPanel) {
         if (!quotaNotice) {
           quotaNotice = document.createElement("div");
@@ -2504,7 +2564,9 @@ function renderBackgroundOwnedIssuerState(snapshot: OfferOperationSnapshot) {
         }
         const quotaMessage = remaining === 0
           ? "You’ve used all 100 Free activations for this month."
-          : `Your Free plan has ${remaining} activation${remaining === 1 ? "" : "s"} left this month. This run will add up to ${remaining}.`;
+          : showBulkAction
+            ? `Your Free plan has ${remaining} activation${remaining === 1 ? "" : "s"} left this month. Add all will stop at ${remaining}.`
+            : `Your Free plan has ${remaining} activation${remaining === 1 ? "" : "s"} left this month.`;
         quotaNotice.innerHTML = `
           <span>${quotaMessage}</span>
           <button type="button">Upgrade to Pro for unlimited activations</button>
@@ -2519,10 +2581,10 @@ function renderBackgroundOwnedIssuerState(snapshot: OfferOperationSnapshot) {
       if (runButton) {
         runButton.textContent =
           enrollmentCount != null && enrollmentCount > 0
-            ? `Add ${enrollmentCount} offers`
+            ? `Add ${enrollmentCount} to this card`
             : availableCount != null && availableCount > 0 && remaining === 0
               ? "Monthly limit reached"
-            : "Add offers";
+            : "Add offers to this card";
         if (enrollmentCount != null) {
           runButton.dataset.enrollmentCount = String(enrollmentCount);
         } else {
@@ -2533,6 +2595,33 @@ function renderBackgroundOwnedIssuerState(snapshot: OfferOperationSnapshot) {
           || availableCount == null
           || availableCount === 0
           || enrollmentCount === 0;
+      }
+      if (runAllButton) {
+        runAllButton.hidden = !showBulkAction;
+        runAllButton.textContent =
+          bulkEnrollmentCount != null && bulkEnrollmentCount > 0
+            ? bulkAvailableCount != null && bulkEnrollmentCount < bulkAvailableCount
+              ? `Add up to ${bulkEnrollmentCount} offers`
+              : `Add all ${bulkEnrollmentCount} offers`
+            : bulkAvailableCount != null && bulkAvailableCount > 0 && remaining === 0
+              ? "Monthly limit reached"
+              : "Add all offers";
+        if (bulkEnrollmentCount != null) {
+          runAllButton.dataset.enrollmentCount = String(bulkEnrollmentCount);
+        } else {
+          delete runAllButton.dataset.enrollmentCount;
+        }
+        runAllButton.dataset.cardCount = String(bulkCards.length);
+        runAllButton.dataset.limitCapped = String(
+          bulkAvailableCount != null
+          && bulkEnrollmentCount != null
+          && bulkEnrollmentCount < bulkAvailableCount,
+        );
+        runAllButton.disabled =
+          !fresh
+          || bulkAvailableCount == null
+          || bulkAvailableCount === 0
+          || bulkEnrollmentCount === 0;
       }
     };
     if (select) select.onchange = updateSelection;
@@ -2554,7 +2643,13 @@ function renderBackgroundOwnedIssuerState(snapshot: OfferOperationSnapshot) {
       );
       if (!recentResult.hidden) {
         const saveOutcome = getOfferSaveStatusText(state);
-        recentResult.textContent = `${state.added} ${state.added === 1 ? "offer" : "offers"} added${saveOutcome ? ` · ${saveOutcome}` : ""}. Choose another card to keep going.`;
+        const hasRemainingOffers = state.cards.some(
+          (card) => (card.availableCount ?? 0) > 0,
+        );
+        const nextStep = hasRemainingOffers
+          ? "Choose another card to keep going."
+          : "All currently available offers have been added.";
+        recentResult.textContent = `${state.added} ${state.added === 1 ? "offer" : "offers"} added${saveOutcome ? ` · ${saveOutcome}` : ""}. ${nextStep}`;
       }
     }
     const summary = document.getElementById(`${issuer}OffersSummary`);

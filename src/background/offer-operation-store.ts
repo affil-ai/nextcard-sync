@@ -142,7 +142,7 @@ export function createOfferOperationStore() {
     const preserveRecentCompletion =
       current?.phase === "checking"
       && current.added > 0
-      && current.saveStatus === "saved";
+      && current.saveStatus !== "not_started";
     return patch(runId, {
       phase: "ready_to_add",
       cards,
@@ -215,7 +215,7 @@ export function createOfferOperationStore() {
       : { ok: false as const, error: "invalid_transition" };
   }
 
-  async function continueAfterSavedEnrollment(runId: string) {
+  async function continueAfterEnrollmentCompletion(runId: string) {
     await hydrate();
     const completed = Object.values(snapshot.history).find(
       (state) => state?.runId === runId,
@@ -223,7 +223,8 @@ export function createOfferOperationStore() {
     if (
       !completed
       || completed.phase !== "completed"
-      || completed.saveStatus !== "saved"
+      || completed.saveStatus === "not_started"
+      || completed.saveStatus === "saving"
       || completed.cards.length === 0
       || completed.selectedCardKeys.length === 0
     ) {
@@ -231,7 +232,8 @@ export function createOfferOperationStore() {
     }
 
     const selectedKeys = new Set(completed.selectedCardKeys);
-    const refreshAllCounts = completed.issuer === "amex";
+    const refreshAllCounts =
+      completed.issuer === "amex" || completed.selectedCardKeys.length > 1;
     const cards = completed.cards.map((card) => {
       if (refreshAllCounts) {
         return {
@@ -257,8 +259,8 @@ export function createOfferOperationStore() {
       selectedCardKeys: completed.selectedCardKeys,
       added: completed.added,
       failed: completed.failed,
-      saveStatus: "saved",
-      saveError: null,
+      saveStatus: completed.saveStatus,
+      saveError: completed.saveError,
     };
     snapshot = {
       active: next,
@@ -305,7 +307,7 @@ export function createOfferOperationStore() {
     patchActiveIssuer,
     patchActiveRun,
     beginEnrollment,
-    continueAfterSavedEnrollment,
+    continueAfterEnrollmentCompletion,
     markReady,
     cancel,
     clearAccountState,

@@ -153,7 +153,7 @@ describe("background offer operation store", () => {
     });
     await store.patch(started.state.runId, { saveStatus: "saved" });
 
-    const continued = await store.continueAfterSavedEnrollment(
+    const continued = await store.continueAfterEnrollmentCompletion(
       started.state.runId,
     );
     expect(continued?.runId).not.toBe(started.state.runId);
@@ -168,6 +168,100 @@ describe("background offer operation store", () => {
       expect.objectContaining({ key: "freedom", availableCount: 111 }),
     ]);
     expect((await store.getSnapshot()).active?.runId).toBe(continued?.runId);
+  });
+
+  it("keeps remaining cards actionable when the save is queued for retry", async () => {
+    const store = createOfferOperationStore();
+    const started = await store.start("chase");
+    getTab.mockResolvedValue({ id: 42 });
+    await store.patch(started.state.runId, {
+      phase: "checking",
+      ownedTabId: 42,
+    });
+    await store.markReady(started.state.runId, [
+      {
+        key: "sapphire",
+        name: "Sapphire Reserve",
+        lastDigits: "6949",
+        availableCount: 81,
+        countStatus: "complete",
+      },
+      {
+        key: "freedom",
+        name: "Freedom",
+        lastDigits: "4055",
+        availableCount: 92,
+        countStatus: "complete",
+      },
+    ]);
+    await store.beginEnrollment(started.state.runId, ["sapphire"], 81);
+    await store.patchActiveRun("chase", started.state.runId, {
+      phase: "completed",
+      added: 81,
+      remaining: 0,
+      saveStatus: "queued_for_retry",
+    });
+
+    const continued = await store.continueAfterEnrollmentCompletion(
+      started.state.runId,
+    );
+
+    expect(continued).toMatchObject({
+      phase: "ready_to_add",
+      saveStatus: "queued_for_retry",
+      added: 81,
+    });
+    expect(continued?.cards).toEqual([
+      expect.objectContaining({ key: "sapphire", availableCount: 0 }),
+      expect.objectContaining({ key: "freedom", availableCount: 92 }),
+    ]);
+  });
+
+  it("refreshes card counts after a multi-card enrollment", async () => {
+    const store = createOfferOperationStore();
+    const started = await store.start("chase");
+    getTab.mockResolvedValue({ id: 42 });
+    await store.patch(started.state.runId, {
+      phase: "checking",
+      ownedTabId: 42,
+    });
+    await store.markReady(started.state.runId, [
+      {
+        key: "sapphire",
+        name: "Sapphire Reserve",
+        lastDigits: "6949",
+        availableCount: 81,
+        countStatus: "complete",
+      },
+      {
+        key: "freedom",
+        name: "Freedom",
+        lastDigits: "4055",
+        availableCount: 92,
+        countStatus: "complete",
+      },
+    ]);
+    await store.beginEnrollment(
+      started.state.runId,
+      ["sapphire", "freedom"],
+      173,
+    );
+    await store.patchActiveRun("chase", started.state.runId, {
+      phase: "completed",
+      added: 173,
+      remaining: 0,
+      saveStatus: "saved",
+    });
+
+    const continued = await store.continueAfterEnrollmentCompletion(
+      started.state.runId,
+    );
+
+    expect(continued?.phase).toBe("checking");
+    expect(continued?.cards).toEqual([
+      expect.objectContaining({ key: "sapphire", availableCount: null }),
+      expect.objectContaining({ key: "freedom", availableCount: null }),
+    ]);
   });
 
   it("refreshes every Amex card instead of reusing shared-offer counts", async () => {
@@ -205,7 +299,7 @@ describe("background offer operation store", () => {
     });
     await store.patch(started.state.runId, { saveStatus: "saved" });
 
-    const continued = await store.continueAfterSavedEnrollment(
+    const continued = await store.continueAfterEnrollmentCompletion(
       started.state.runId,
     );
     expect(continued?.phase).toBe("checking");

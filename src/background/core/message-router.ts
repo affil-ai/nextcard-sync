@@ -48,6 +48,17 @@ function withTimeout<T>(operation: Promise<T>, timeoutMs: number, message: strin
   });
 }
 
+function mergeOfferSaveStatus(
+  current: OfferSaveStatus,
+  next: OfferSaveStatus,
+): OfferSaveStatus {
+  if (current === "failed" || next === "failed") return "failed";
+  if (current === "queued_for_retry" || next === "queued_for_retry") {
+    return "queued_for_retry";
+  }
+  return next;
+}
+
 async function executeAmexEnrollmentRequest(
   tabId: number,
   endpoint: AmexEnrollmentEndpoint,
@@ -1178,7 +1189,10 @@ export function createMessageRouter(options: {
               const record = cardResult as Record<string, unknown>;
               if (!Array.isArray(record.enrolledOffers) || record.enrolledOffers.length === 0) continue;
               try {
-                const result = await options.syncEnrolledOffers?.("amex", record);
+                const result = await options.syncEnrolledOffers?.("amex", {
+                  ...record,
+                  runId,
+                });
                 if (result === "queued_for_retry") completionSaveStatus = result;
                 if (result === "failed") completionSaveStatus = result;
               } catch (error) {
@@ -1213,10 +1227,8 @@ export function createMessageRouter(options: {
             saveStatus: syncError ? "failed" : completionSaveStatus,
             saveError: syncError,
           });
-          if (!syncError && completionSaveStatus === "saved") {
-            await options.offerOperations.continueAfterSavedEnrollment(runId);
-            void options.offerCoordinator.resume();
-          }
+          await options.offerOperations.continueAfterEnrollmentCompletion(runId);
+          void options.offerCoordinator.resume();
           sendResponse({ ok: true });
         })();
         return true;
@@ -1251,8 +1263,17 @@ export function createMessageRouter(options: {
               typeof message.added === "number" ? message.added : 0,
             ).catch(() => {});
           }
-          const hasOffersToSave =
-            Array.isArray(message.enrolledOffers) && message.enrolledOffers.length > 0;
+          const enrolledByCard = Array.isArray(message.enrolledByCard)
+            ? message.enrolledByCard
+            : null;
+          const hasOffersToSave = enrolledByCard
+            ? enrolledByCard.some((cardResult) => (
+                cardResult
+                && typeof cardResult === "object"
+                && Array.isArray((cardResult as Record<string, unknown>).enrolledOffers)
+                && ((cardResult as Record<string, unknown>).enrolledOffers as unknown[]).length > 0
+              ))
+            : Array.isArray(message.enrolledOffers) && message.enrolledOffers.length > 0;
           if (runId) {
             await options.offerOperations.patchActiveRun("chase", runId, {
               phase: message.cancelled === true ? "cancelled" : "completed",
@@ -1274,7 +1295,29 @@ export function createMessageRouter(options: {
 
           let saveStatus: OfferSaveStatus = "saved";
           let saveError: string | null = null;
-          if (hasOffersToSave) {
+          if (enrolledByCard) {
+            for (const cardResult of enrolledByCard) {
+              if (!cardResult || typeof cardResult !== "object") continue;
+              const record = cardResult as Record<string, unknown>;
+              if (!Array.isArray(record.enrolledOffers) || record.enrolledOffers.length === 0) {
+                continue;
+              }
+              try {
+                const result = await options.syncEnrolledOffers?.("chase", {
+                  ...record,
+                  runId,
+                });
+                if (result === "queued_for_retry" || result === "failed") {
+                  saveStatus = mergeOfferSaveStatus(saveStatus, result);
+                }
+              } catch (error) {
+                saveStatus = "failed";
+                saveError = error instanceof Error
+                  ? error.message
+                  : "Couldn’t save one or more Chase cards to nextcard.";
+              }
+            }
+          } else if (hasOffersToSave) {
             try {
               const result = await options.syncEnrolledOffers?.("chase", message);
               if (result === "queued_for_retry" || result === "failed") saveStatus = result;
@@ -1288,10 +1331,8 @@ export function createMessageRouter(options: {
           }
           if (runId) {
             await options.offerOperations.patch(runId, { saveStatus, saveError });
-            if (saveStatus === "saved") {
-              await options.offerOperations.continueAfterSavedEnrollment(runId);
-              void options.offerCoordinator.resume();
-            }
+            await options.offerOperations.continueAfterEnrollmentCompletion(runId);
+            void options.offerCoordinator.resume();
           }
           sendResponse({ ok: true, saveStatus });
         })();
@@ -1381,8 +1422,17 @@ export function createMessageRouter(options: {
               typeof message.added === "number" ? message.added : 0,
             ).catch(() => {});
           }
-          const hasOffersToSave =
-            Array.isArray(message.enrolledOffers) && message.enrolledOffers.length > 0;
+          const enrolledByCard = Array.isArray(message.enrolledByCard)
+            ? message.enrolledByCard
+            : null;
+          const hasOffersToSave = enrolledByCard
+            ? enrolledByCard.some((cardResult) => (
+                cardResult
+                && typeof cardResult === "object"
+                && Array.isArray((cardResult as Record<string, unknown>).enrolledOffers)
+                && ((cardResult as Record<string, unknown>).enrolledOffers as unknown[]).length > 0
+              ))
+            : Array.isArray(message.enrolledOffers) && message.enrolledOffers.length > 0;
           if (runId) {
             await options.offerOperations.patchActiveRun("citi", runId, {
               phase: message.cancelled === true ? "cancelled" : "completed",
@@ -1404,7 +1454,29 @@ export function createMessageRouter(options: {
 
           let saveStatus: OfferSaveStatus = "saved";
           let saveError: string | null = null;
-          if (hasOffersToSave) {
+          if (enrolledByCard) {
+            for (const cardResult of enrolledByCard) {
+              if (!cardResult || typeof cardResult !== "object") continue;
+              const record = cardResult as Record<string, unknown>;
+              if (!Array.isArray(record.enrolledOffers) || record.enrolledOffers.length === 0) {
+                continue;
+              }
+              try {
+                const result = await options.syncEnrolledOffers?.("citi", {
+                  ...record,
+                  runId,
+                });
+                if (result === "queued_for_retry" || result === "failed") {
+                  saveStatus = mergeOfferSaveStatus(saveStatus, result);
+                }
+              } catch (error) {
+                saveStatus = "failed";
+                saveError = error instanceof Error
+                  ? error.message
+                  : "Couldn’t save one or more Citi cards to nextcard.";
+              }
+            }
+          } else if (hasOffersToSave) {
             try {
               const result = await options.syncEnrolledOffers?.("citi", message);
               if (result === "queued_for_retry" || result === "failed") saveStatus = result;
@@ -1418,10 +1490,8 @@ export function createMessageRouter(options: {
           }
           if (runId) {
             await options.offerOperations.patch(runId, { saveStatus, saveError });
-            if (saveStatus === "saved") {
-              await options.offerOperations.continueAfterSavedEnrollment(runId);
-              void options.offerCoordinator.resume();
-            }
+            await options.offerOperations.continueAfterEnrollmentCompletion(runId);
+            void options.offerCoordinator.resume();
           }
           sendResponse({ ok: true, saveStatus });
         })();
