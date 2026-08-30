@@ -56,11 +56,11 @@ describe("hasConnectedRewards", () => {
 
 describe("getConnectedTravelProviderIds", () => {
   it("returns connected airline and hotel programs in display order", () => {
-    const summaries = [
-      { ...summary, provider: "hilton" as const, programName: "Hilton Honors" },
-      { ...summary, provider: "chase" as const },
-      { ...summary, provider: "aa" as const, programName: "American Airlines AAdvantage" },
-      { ...summary, provider: "aa" as const, loyaltyAccountId: "account-2" },
+    const summaries: ExtensionRewardsSummary[] = [
+      { ...summary, provider: "hilton", programName: "Hilton Honors" },
+      { ...summary, provider: "chase" },
+      { ...summary, provider: "aa", programName: "American Airlines AAdvantage" },
+      { ...summary, provider: "aa", loyaltyAccountId: "account-2" },
     ];
 
     expect(getConnectedTravelProviderIds(summaries, [])).toEqual([
@@ -70,9 +70,9 @@ describe("getConnectedTravelProviderIds", () => {
   });
 
   it("excludes travel programs locked by the current plan", () => {
-    const summaries = [
-      { ...summary, provider: "aa" as const },
-      { ...summary, provider: "hilton" as const },
+    const summaries: ExtensionRewardsSummary[] = [
+      { ...summary, provider: "aa" },
+      { ...summary, provider: "hilton" },
     ];
 
     expect(getConnectedTravelProviderIds(summaries, ["hilton"])).toEqual([
