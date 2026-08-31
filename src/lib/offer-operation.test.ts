@@ -2,12 +2,14 @@ import { describe, expect, it } from "vitest";
 import {
   OFFER_RESULT_FRESHNESS_MS,
   OFFER_SAVE_FAILURE_GRACE_MS,
+  OFFER_TERMINAL_HISTORY_FRESHNESS_MS,
   applyOfferOperationPatch,
   canTransitionOfferOperation,
   createOfferOperation,
   getOfferOperationStatusText,
   getOfferSaveStatusText,
   isOfferCompletionContinuing,
+  isOfferOperationHistoryFresh,
   isOfferResultFresh,
   normalizeOfferOperationSnapshot,
 } from "./offer-operation";
@@ -88,6 +90,30 @@ describe("offer operation state", () => {
     const checkedAtMs = new Date(checkedAt).getTime();
     expect(isOfferResultFresh(state, checkedAtMs + OFFER_RESULT_FRESHNESS_MS)).toBe(true);
     expect(isOfferResultFresh(state, checkedAtMs + OFFER_RESULT_FRESHNESS_MS + 1)).toBe(false);
+  });
+
+  it("keeps terminal issuer results for one hour", () => {
+    const updatedAt = "2026-07-27T12:00:00.000Z";
+    const state = {
+      ...createOfferOperation("chase", "run-terminal", updatedAt),
+      phase: "interrupted" as const,
+      updatedAt,
+    };
+    const updatedAtMs = new Date(updatedAt).getTime();
+
+    expect(OFFER_TERMINAL_HISTORY_FRESHNESS_MS).toBe(60 * 60 * 1000);
+    expect(
+      isOfferOperationHistoryFresh(
+        state,
+        updatedAtMs + OFFER_TERMINAL_HISTORY_FRESHNESS_MS,
+      ),
+    ).toBe(true);
+    expect(
+      isOfferOperationHistoryFresh(
+        state,
+        updatedAtMs + OFFER_TERMINAL_HISTORY_FRESHNESS_MS + 1,
+      ),
+    ).toBe(false);
   });
 
   it("reports partial cancellation instead of a generic cancelled label", () => {
