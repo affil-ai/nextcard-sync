@@ -9,6 +9,23 @@
  */
 
 import { getAuth } from "./auth";
+import {
+  CARD_LINKED_OFFERS_STORAGE_KEY,
+  buildOfferUrlCaches,
+  normalizeHostname,
+  parseCardLinkedOffers,
+  type CachedOffer,
+  type MerchantOfferSyncStatus,
+  type OfferUrlCache,
+} from "./card-linked-offers";
+
+export {
+  CARD_LINKED_OFFERS_STORAGE_KEY,
+  normalizeHostname,
+  type CachedOffer,
+  type MerchantOfferSyncStatus,
+  type OfferUrlCache,
+} from "./card-linked-offers";
 
 async function getIssuerCardKey(issuer: string, issuerCardId: string): Promise<string> {
   if (!issuerCardId) return "";
@@ -52,27 +69,11 @@ export interface OfferSyncPayload {
   }>;
 }
 
-export type MerchantOfferSyncStatus = "enrolled" | "detected";
-
 export interface CompleteOfferSnapshot {
   complete: true;
   capturedAt: string;
   observedIssuerOfferIds: string[];
 }
-
-export interface CachedOffer {
-  merchantName: string;
-  offerValue: string | null;
-  cardName: string;
-  cardLastDigits: string | null;
-  expirationDate: string | null;
-  issuer: string;
-  rewardType: "percentage" | "flat_cash" | "points" | null;
-  rewardAmount: number | null;
-  status?: MerchantOfferSyncStatus;
-}
-
-export type OfferUrlCache = Record<string, CachedOffer[]>;
 
 export const OFFER_URL_CACHE_KEY = "offerUrlCache";
 export const DETECTED_OFFER_URL_CACHE_KEY = "detectedOfferUrlCache";
@@ -125,20 +126,6 @@ function enqueueDetectedOfferTask<T>(task: () => Promise<T>): Promise<T> {
 
 function delay(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
-}
-
-export function normalizeHostname(urlOrHostname: string): string | null {
-  try {
-    let hostname: string;
-    if (urlOrHostname.includes("://")) {
-      hostname = new URL(urlOrHostname).hostname;
-    } else {
-      hostname = urlOrHostname;
-    }
-    return hostname.replace(/^www\./, "").toLowerCase();
-  } catch {
-    return null;
-  }
 }
 
 function splitOfferMapByStatus(offerMap: OfferUrlCache): { enrolled: OfferUrlCache; detected: OfferUrlCache } {
@@ -585,7 +572,7 @@ export async function retryPendingOfferSyncs(): Promise<{
   };
 }
 
-/** Pull offers from backend and rebuild both URL caches. Call on startup/re-auth. */
+/** Pull offers from backend and rebuild the shared offer list and both reminder caches. */
 export async function pullOfferUrlCache(): Promise<void> {
   try {
     const auth = await getAuth();
@@ -598,51 +585,13 @@ export async function pullOfferUrlCache(): Promise<void> {
 
     if (!response.ok) return;
 
-    const data = await response.json();
-    const offers: Array<{
-      merchantName: string;
-      merchantUrl: string | null;
-      offerValue: string | null;
-      issuer: string;
-      cardName: string;
-      cardLastDigits: string | null;
-      expirationDate: string | null;
-      rewardType: "percentage" | "flat_cash" | "points" | null;
-      rewardAmount: number | null;
-      status?: MerchantOfferSyncStatus;
-    }> = data.offers ?? [];
-
-    const enrolledCache: OfferUrlCache = {};
-    const detectedCache: OfferUrlCache = {};
-
-    for (const offer of offers) {
-      if (!offer.merchantUrl) continue;
-      const host = normalizeHostname(offer.merchantUrl);
-      if (!host) continue;
-
-      const entry: CachedOffer = {
-        merchantName: offer.merchantName,
-        offerValue: offer.offerValue,
-        cardName: offer.cardName,
-        cardLastDigits: offer.cardLastDigits,
-        expirationDate: offer.expirationDate,
-        issuer: offer.issuer,
-        rewardType: offer.rewardType,
-        rewardAmount: offer.rewardAmount,
-        status: offer.status,
-      };
-
-      const target = offer.status === "detected" ? detectedCache : enrolledCache;
-      if (!target[host]) {
-        target[host] = [entry];
-      } else {
-        target[host].push(entry);
-      }
-    }
+    const offers = parseCardLinkedOffers(await response.json());
+    const { enrolled, detected } = buildOfferUrlCaches(offers);
 
     await chrome.storage.local.set({
-      [OFFER_URL_CACHE_KEY]: enrolledCache,
-      [DETECTED_OFFER_URL_CACHE_KEY]: detectedCache,
+      [CARD_LINKED_OFFERS_STORAGE_KEY]: offers,
+      [OFFER_URL_CACHE_KEY]: enrolled,
+      [DETECTED_OFFER_URL_CACHE_KEY]: detected,
     });
   } catch (e) {
     console.error("[NextCard Offers] pullOfferUrlCache error:", e);

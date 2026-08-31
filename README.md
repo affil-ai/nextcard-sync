@@ -7,7 +7,7 @@ nextcard sync helps you find and add eligible card offers, get reminders while y
 
 ## Card offers
 
-Check supported Chase, American Express, and Citi cards for eligible offers, review the card-specific results, and explicitly choose which offers to add. Capital One shopping offers can be found and saved for tracking. The extension never stores issuer passwords or verification codes.
+Check supported Chase, American Express, and Citi cards for eligible offers, review the card-specific results, and explicitly choose which offers to add. Capital One shopping offers can be found and saved for tracking. Your current card-linked offers appear in the extension with their eligible card. When you visit a matching merchant site, the extension shows a reminder for active offers. The extension never stores issuer passwords or verification codes.
 
 ## Supported providers
 
@@ -46,13 +46,30 @@ The extension also includes offer enrollment and offer discovery tools for suppo
 
 Download the latest `.zip` from [Releases](https://github.com/affil-ai/nextcard-sync/releases), unzip it, then load it in Chrome via `chrome://extensions` → enable "Developer mode" → "Load unpacked" → select the unzipped folder.
 
+Safari requires a containing app. The same Safari build is packaged into macOS and iOS app targets. Users enable the extension in Safari after installing the containing app.
+
 ## Development
 
 ```
 pnpm install
 pnpm dev        # watch mode (builds to dist-dev/)
 pnpm build      # production build (builds to dist/)
+pnpm build:safari    # Safari web extension resources (builds to dist-safari/)
+pnpm package:safari  # macOS + iOS Xcode project (builds to .safari-build/)
 ```
+
+`pnpm package:safari` requires macOS and Xcode. It creates these schemes:
+
+- `nextcard (macOS)` contains the extension for Mac Safari.
+- `nextcard (iOS)` contains the extension for iPhone and iPad Safari.
+
+Open `.safari-build/nextcard/nextcard.xcodeproj` to run either scheme. The generated project is disposable. Change the shared web extension in `src/`, then regenerate it. Do not edit generated files in `.safari-build/`.
+
+For a release, set the Affil Apple Developer team and final App Store bundle identifiers in Xcode. The generated iOS extension target can also be embedded in the main nextcard iOS app instead of using the generated iOS containing app.
+
+### Safari compatibility
+
+Chrome and Safari use the same popup HTML, CSS, TypeScript, backend API, offer storage, issuer content scripts, and merchant reminder. Chrome opens the UI in its side panel. Safari opens that same UI from its toolbar button because Safari does not implement Chrome's side panel API. The Safari build also creates a classic, self-contained background worker and removes manifest keys that Safari does not support.
 
 ## Development details
 

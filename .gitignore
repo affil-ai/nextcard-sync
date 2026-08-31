@@ -1,6 +1,8 @@
 node_modules
 dist
 dist-dev
+dist-safari
+.safari-build
 *.zip
 .DS_Store
 .playwright-mcp

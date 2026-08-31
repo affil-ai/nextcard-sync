@@ -39,6 +39,7 @@ export async function clearAuth(): Promise<void> {
     || key === "nextcard_offer_operation_snapshot_v1"
     || key === "offerUrlCache"
     || key === "detectedOfferUrlCache"
+    || key === "cardLinkedOffers"
     || key === "pendingOfferSyncs"
     || key === "disclosureAccepted"
     || key === "consentGiven"

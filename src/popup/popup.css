@@ -2824,6 +2824,195 @@
   background: linear-gradient(90deg, #f6b156, #f9cf93);
 }
 
+.card-linked-offers-card {
+  display: grid;
+  gap: 10px;
+  padding: 14px;
+  border: 1px solid #eadfd6;
+  border-radius: 16px;
+  background: #fff;
+}
+
+.card-linked-offers-heading,
+.card-linked-offer-header,
+.card-linked-offers-actions {
+  display: flex;
+  align-items: center;
+}
+
+.card-linked-offers-heading {
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.card-linked-offers-heading > div:first-child {
+  display: grid;
+  gap: 2px;
+}
+
+.card-linked-offers-heading .offers-eyebrow {
+  font-size: 9.5px;
+}
+
+.card-linked-offers-heading strong {
+  color: #342019;
+  font-size: 13.5px;
+}
+
+.card-linked-offers-actions {
+  gap: 6px;
+}
+
+.card-linked-offers-count {
+  min-width: 25px;
+  padding: 3px 7px;
+  border-radius: 999px;
+  background: #fff4e6;
+  color: #8f4e1c;
+  font-size: 11px;
+  font-weight: 800;
+  text-align: center;
+}
+
+.card-linked-offers-refresh {
+  display: grid;
+  width: 32px;
+  height: 32px;
+  place-items: center;
+  padding: 0;
+  border: 1px solid #eadfd6;
+  border-radius: 10px;
+  background: #fff;
+  color: #7c6b60;
+  cursor: pointer;
+}
+
+.card-linked-offers-refresh svg {
+  width: 17px;
+  height: 17px;
+}
+
+.card-linked-offers-refresh:hover,
+.card-linked-offers-refresh:focus-visible {
+  border-color: #d4943a;
+  color: #8f4e1c;
+  outline: none;
+}
+
+.card-linked-offers-refresh:disabled {
+  cursor: wait;
+  opacity: 0.6;
+}
+
+.card-linked-offers-refresh.refreshing svg {
+  animation: card-linked-offers-spin 800ms linear infinite;
+}
+
+@keyframes card-linked-offers-spin {
+  to { transform: rotate(360deg); }
+}
+
+.card-linked-offers-state {
+  padding: 8px 2px;
+  color: #6f5b50;
+  font-size: 11.5px;
+  line-height: 1.45;
+}
+
+.card-linked-offers-list {
+  display: grid;
+  gap: 7px;
+}
+
+.card-linked-offer-row {
+  display: grid;
+  width: 100%;
+  gap: 3px;
+  padding: 10px 11px;
+  border: 1px solid #f0e7df;
+  border-radius: 12px;
+  background: #fffaf5;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+}
+
+button.card-linked-offer-row {
+  cursor: pointer;
+}
+
+button.card-linked-offer-row:hover,
+button.card-linked-offer-row:focus-visible {
+  border-color: #d9ae7d;
+  outline: none;
+  box-shadow: 0 0 0 2px rgba(212, 148, 58, 0.1);
+}
+
+.card-linked-offer-header {
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.card-linked-offer-header strong {
+  min-width: 0;
+  overflow: hidden;
+  color: #493127;
+  font-size: 12.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.card-linked-offer-status {
+  flex: none;
+  padding: 2px 6px;
+  border-radius: 999px;
+  background: #e9f5e8;
+  color: #336832;
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: 0.3px;
+  text-transform: uppercase;
+}
+
+.card-linked-offer-status.detected {
+  background: #fff0d9;
+  color: #88501c;
+}
+
+.card-linked-offer-value {
+  color: #8f4e1c;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.card-linked-offer-metadata {
+  overflow: hidden;
+  color: #7c6b60;
+  font-size: 10.5px;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.card-linked-offers-dashboard {
+  justify-self: start;
+  min-height: 32px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: #8f4e1c;
+  font: 800 11.5px/1 "Nunito", sans-serif;
+  cursor: pointer;
+}
+
+.card-linked-offers-dashboard:hover,
+.card-linked-offers-dashboard:focus-visible {
+  color: #713a13;
+  outline: none;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
 .offer-quota-notice {
   display: grid;
   gap: 8px;

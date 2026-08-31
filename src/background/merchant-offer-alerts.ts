@@ -1,10 +1,13 @@
 import {
   DETECTED_OFFER_URL_CACHE_KEY,
   OFFER_URL_CACHE_KEY,
+} from "../lib/sync-offers-to-nextcard";
+import {
+  getOfferHostnameCandidates,
   normalizeHostname,
   type CachedOffer,
   type OfferUrlCache,
-} from "../lib/sync-offers-to-nextcard";
+} from "../lib/card-linked-offers";
 
 interface OfferGroup {
   merchantName: string;
@@ -37,10 +40,11 @@ function isActiveOffer(offer: CachedOffer, now = Date.now()) {
 
 function getMatchingOffers(hostname: string, enrolledCache?: OfferUrlCache, detectedCache?: OfferUrlCache) {
   const now = Date.now();
-  const enrolledOffers = (enrolledCache?.[hostname] ?? [])
+  const hostnameCandidates = getOfferHostnameCandidates(hostname);
+  const enrolledOffers = hostnameCandidates.flatMap((candidate) => enrolledCache?.[candidate] ?? [])
     .filter((offer) => isActiveOffer(offer, now))
     .map((offer) => ({ ...offer, status: "enrolled" as const }));
-  const detectedOffers = (detectedCache?.[hostname] ?? [])
+  const detectedOffers = hostnameCandidates.flatMap((candidate) => detectedCache?.[candidate] ?? [])
     .filter((offer) => isActiveOffer(offer, now))
     .map((offer) => ({ ...offer, status: "detected" as const }));
 
@@ -206,8 +210,8 @@ function injectOfferToast(
       :host {
         all: initial;
         position: fixed;
-        top: 20px;
-        right: 20px;
+        top: max(12px, env(safe-area-inset-top));
+        right: max(12px, env(safe-area-inset-right));
         z-index: 2147483647;
         font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", system-ui, sans-serif;
         pointer-events: auto;
@@ -279,6 +283,21 @@ function injectOfferToast(
         font-size: 11px; line-height: 1; padding: 6px 8px; border-radius: 6px;
       }
       .nc-ignore:hover { color: rgba(255,255,255,0.92); background: rgba(255,255,255,0.14); }
+      @media (max-width: 520px) {
+        :host {
+          right: max(10px, env(safe-area-inset-right));
+          left: max(10px, env(safe-area-inset-left));
+        }
+        .nc-toast {
+          width: auto;
+          max-width: none;
+          min-width: 0;
+          padding: 13px 14px;
+        }
+        .nc-list { max-height: min(300px, calc(100vh - 100px)); }
+        .nc-ignore { min-height: 36px; }
+        .nc-x { min-width: 36px; min-height: 36px; }
+      }
     </style>
     <div class="nc-toast">
       <img class="nc-icon" src="${iconUrl}" alt="nextcard" />

@@ -31,11 +31,23 @@ jobs:
       - name: Typecheck
         run: pnpm typecheck
 
+      - name: Test
+        run: pnpm test
+
       - name: Build extension
         run: pnpm build
+
+      - name: Build Safari extension
+        run: pnpm build:safari
 
       - name: Upload built extension artifact
         uses: actions/upload-artifact@v4
         with:
           name: nextcard-ext-dist
           path: dist
+
+      - name: Upload Safari extension artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: nextcard-safari-ext-dist
+          path: dist-safari

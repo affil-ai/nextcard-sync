@@ -7,6 +7,8 @@
   "scripts": {
     "dev": "vite build --watch --mode development",
     "build": "vite build",
+    "build:safari": "vite build --mode safari && vite build --config scripts/vite.safari-worker.config.ts && node scripts/finalize-safari-build.mjs",
+    "package:safari": "vite build --mode safari && vite build --config scripts/vite.safari-worker.config.ts && node scripts/finalize-safari-build.mjs && node scripts/package-safari.mjs",
     "clean": "rm -rf dist dist-dev extension.zip",
     "test": "vitest run",
     "typecheck": "tsc --noEmit"

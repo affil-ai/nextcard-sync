@@ -433,7 +433,7 @@ async function openUpgradeTab() {
     );
 
     if (existingTab?.id != null) {
-      if (existingTab.windowId != null) {
+      if (!__SAFARI__ && existingTab.windowId != null) {
         await chrome.windows.update(existingTab.windowId, { focused: true });
       }
       await chrome.tabs.update(existingTab.id, { active: true, url: upgradeUrl });
@@ -502,11 +502,13 @@ const syncHandlers = {
   }),
 };
 
-chrome.action.onClicked.addListener((tab) => {
-  if (tab.windowId) {
-    chrome.sidePanel.open({ windowId: tab.windowId });
-  }
-});
+if (!__SAFARI__) {
+  chrome.action.onClicked.addListener((tab) => {
+    if (tab.windowId) {
+      chrome.sidePanel.open({ windowId: tab.windowId });
+    }
+  });
+}
 
 registerNavigationGuard({
   extensionNavigatingTabs,
@@ -577,9 +579,12 @@ chrome.runtime.onMessage.addListener(
           syncResult.error ?? "Couldn’t save the verified offers to nextcard.",
         );
       }
+      if (syncResult.status === "saved") {
+        await pullOfferUrlCache();
+      }
       return syncResult.status;
     },
-    syncDetectedOffers: (issuer, message) => {
+    syncDetectedOffers: async (issuer, message) => {
       type DetectedOfferMsg = Omit<DetectedOfferSyncPayload["offers"][number], "detectedAt">;
       const detectedOffers = message.detectedOffers as DetectedOfferMsg[];
       const observedIssuerOfferIds = Array.isArray(message.observedIssuerOfferIds)
@@ -610,7 +615,11 @@ chrome.runtime.onMessage.addListener(
         })),
       };
 
-      return syncDetectedOffersToNextCard(payload);
+      const syncStatus = await syncDetectedOffersToNextCard(payload);
+      if (syncStatus === "saved") {
+        await pullOfferUrlCache();
+      }
+      return syncStatus;
     },
   }),
 );

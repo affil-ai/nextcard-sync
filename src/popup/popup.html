@@ -241,6 +241,28 @@
           </div>
         </section>
 
+        <section class="card-linked-offers-card" aria-labelledby="cardLinkedOffersTitle">
+          <div class="card-linked-offers-heading">
+            <div>
+              <span class="offers-eyebrow">Saved to nextcard</span>
+              <strong id="cardLinkedOffersTitle">Your card-linked offers</strong>
+            </div>
+            <div class="card-linked-offers-actions">
+              <span class="card-linked-offers-count" id="cardLinkedOffersCount" aria-label="Offer count">0</span>
+              <button class="card-linked-offers-refresh" id="cardLinkedOffersRefresh" type="button" aria-label="Refresh offers">
+                <svg viewBox="0 0 20 20" fill="none" aria-hidden="true">
+                  <path d="M16.2 8A6.5 6.5 0 1 0 16 12.7M16.2 8V3.7M16.2 8h-4.3" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>
+                </svg>
+              </button>
+            </div>
+          </div>
+          <p class="card-linked-offers-state" id="cardLinkedOffersState">Loading your offers…</p>
+          <div class="card-linked-offers-list" id="cardLinkedOffersList"></div>
+          <button class="card-linked-offers-dashboard" id="cardLinkedOffersDashboard" type="button">
+            View all offers on nextcard <span aria-hidden="true">→</span>
+          </button>
+        </section>
+
         <div class="offer-activity" id="offerActivity" aria-live="polite" hidden>
           <div class="offer-activity-copy">
             <strong id="offerActivityTitle"></strong>
