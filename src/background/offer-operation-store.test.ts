@@ -1,4 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  OFFER_OPERATION_STORAGE_KEY,
+  OFFER_TERMINAL_HISTORY_FRESHNESS_MS,
+  createOfferOperation,
+} from "../lib/offer-operation";
 import { createOfferOperationStore } from "./offer-operation-store";
 
 const storage = new Map<string, unknown>();
@@ -65,6 +70,30 @@ describe("background offer operation store", () => {
     const snapshot = await store.getSnapshot();
     expect(snapshot.active).toBeNull();
     expect(snapshot.history.citi?.phase).toBe("interrupted");
+  });
+
+  it("returns stale terminal results to the standard issuer state", async () => {
+    const updatedAt = new Date(
+      Date.now() - OFFER_TERMINAL_HISTORY_FRESHNESS_MS - 1,
+    ).toISOString();
+    storage.set(OFFER_OPERATION_STORAGE_KEY, {
+      active: null,
+      history: {
+        chase: {
+          ...createOfferOperation("chase", "stale-run", updatedAt),
+          phase: "interrupted",
+          error: "The issuer tab was closed.",
+        },
+      },
+    });
+
+    const snapshot = await createOfferOperationStore().getSnapshot();
+
+    expect(snapshot.history.chase).toBeUndefined();
+    expect(storage.get(OFFER_OPERATION_STORAGE_KEY)).toEqual({
+      active: null,
+      history: {},
+    });
   });
 
   it("records remaining work when cancellation happens mid-enrollment", async () => {
