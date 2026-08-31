@@ -56,6 +56,7 @@ export interface OfferOperationSnapshot {
 
 export const OFFER_OPERATION_STORAGE_KEY = "nextcard_offer_operation_snapshot_v1";
 export const OFFER_RESULT_FRESHNESS_MS = 15 * 60 * 1000;
+export const OFFER_TERMINAL_HISTORY_FRESHNESS_MS = OFFER_RESULT_FRESHNESS_MS;
 export const OFFER_SAVE_FAILURE_GRACE_MS = 5_000;
 
 const ALLOWED_PHASE_TRANSITIONS: Record<OfferOperationPhase, OfferOperationPhase[]> = {
@@ -81,6 +82,25 @@ export function isOfferOperationActive(phase: OfferOperationPhase) {
     || phase === "checking"
     || phase === "ready_to_add"
     || phase === "adding"
+  );
+}
+
+export function isOfferOperationHistoryFresh(
+  state: OfferOperationState,
+  now = Date.now(),
+) {
+  if (
+    state.phase !== "completed"
+    && state.phase !== "cancelled"
+    && state.phase !== "interrupted"
+    && state.phase !== "failed"
+  ) {
+    return true;
+  }
+  const updatedAt = new Date(state.updatedAt).getTime();
+  return (
+    Number.isFinite(updatedAt)
+    && now - updatedAt <= OFFER_TERMINAL_HISTORY_FRESHNESS_MS
   );
 }
 

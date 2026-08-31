@@ -3,6 +3,7 @@ import {
   applyOfferOperationPatch,
   createOfferOperation,
   isOfferOperationActive,
+  isOfferOperationHistoryFresh,
   isOfferResultFresh,
   normalizeOfferOperationSnapshot,
   type OfferIssuer,
@@ -36,6 +37,22 @@ export function createOfferOperationStore() {
 
   async function reconcile() {
     await hydrate();
+    const retainedHistory: OfferOperationSnapshot["history"] = {};
+    let historyChanged = false;
+    for (const issuer of ["chase", "amex", "citi", "capitalone"] as const) {
+      const state = snapshot.history[issuer];
+      if (!state) continue;
+      if (!isOfferOperationHistoryFresh(state)) {
+        historyChanged = true;
+        continue;
+      }
+      retainedHistory[issuer] = state;
+    }
+    if (historyChanged) {
+      snapshot = { ...snapshot, history: retainedHistory };
+      await persist();
+    }
+
     const active = snapshot.active;
     if (!active || !isOfferOperationActive(active.phase)) return snapshot;
     if (active.phase === "ready_to_add" && !isOfferResultFresh(active)) {
