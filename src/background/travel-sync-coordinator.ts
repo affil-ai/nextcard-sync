@@ -12,6 +12,7 @@ interface TravelSyncStorage {
 interface TravelSyncCoordinatorOptions {
   storage: TravelSyncStorage;
   isProviderId: (value: unknown) => value is ProviderId;
+  prepareProvider?: (providerId: ProviderId) => Promise<void>;
   startProvider: (providerId: ProviderId) => Promise<boolean>;
   waitForCompletion: (providerId: ProviderId) => Promise<{ succeeded: boolean }>;
   cancelProvider: (providerId: ProviderId) => Promise<void>;
@@ -159,6 +160,7 @@ export function createTravelSyncCoordinator(
 
       let succeeded = false;
       try {
+        await options.prepareProvider?.(providerId);
         const started = await options.startProvider(providerId);
         if (state.cancelRequested) {
           if (started) await options.cancelProvider(providerId);

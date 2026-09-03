@@ -2,6 +2,7 @@ import type {
   ChaseBenefit,
   ChaseURData,
   ProviderId,
+  PushToNextCardResult,
 } from "../../lib/types";
 import type { ProviderDefinition } from "../../providers/provider-registry";
 import type { createRuntimeStateStore } from "../core/runtime-state";
@@ -44,7 +45,7 @@ interface ChaseSyncDeps {
   pushToNextCard: (
     providerId: "chase",
     data: unknown,
-  ) => Promise<{ ok: boolean; error?: string }>;
+  ) => Promise<PushToNextCardResult>;
   refreshOfferUrlCache: () => Promise<void>;
 }
 
@@ -878,7 +879,7 @@ export function createChaseSync(options: ChaseSyncDeps) {
         } catch (error) {
           console.warn("[NextCard SW] Chase offer cache refresh failed:", error);
         }
-      } else {
+      } else if (!pushResult.awaitingConfirmation) {
         console.warn("[NextCard SW] Chase push failed:", pushResult.error);
       }
     } catch (error) {

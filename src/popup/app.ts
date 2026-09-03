@@ -46,6 +46,11 @@ import {
   getOffersSetupState,
   isOffersSetupComplete,
 } from "./offers-setup";
+import type {
+  HouseholdExtensionContext,
+  HouseholdExtensionMember,
+} from "../lib/household-context";
+import { providerRegistry } from "../providers/provider-registry";
 
 type ViewName = keyof typeof views;
 
@@ -75,6 +80,305 @@ let offerActivationUsageFetchedAt = 0;
 let offerActivationUsageRequest: Promise<void> | null = null;
 const usageRefreshedOfferRunIds = new Set<string>();
 let offerLimitDialogTrigger: HTMLElement | null = null;
+let householdSyncWritesEnabled = true;
+let householdIssuerSyncEnabled = true;
+const householdSyncTarget = document.getElementById("householdSyncTarget");
+const householdMemberSelectElement = document.getElementById("householdMemberSelect");
+const householdMemberSelect = householdMemberSelectElement instanceof HTMLSelectElement
+  ? householdMemberSelectElement
+  : null;
+const householdSelectedMemberLabel = document.getElementById(
+  "householdSelectedMemberLabel",
+);
+const manageHouseholdBtn = document.getElementById("manageHouseholdBtn");
+const householdSyncConfirmation = document.getElementById(
+  "householdSyncConfirmation",
+);
+const householdSyncConfirmationTitle = document.getElementById(
+  "householdSyncConfirmationTitle",
+);
+const householdSyncConfirmationText = document.getElementById(
+  "householdSyncConfirmationText",
+);
+const householdSyncConfirmationCancelElement = document.getElementById(
+  "householdSyncConfirmationCancel",
+);
+const householdSyncConfirmationCancel = householdSyncConfirmationCancelElement
+  instanceof HTMLButtonElement
+  ? householdSyncConfirmationCancelElement
+  : null;
+const householdSyncConfirmationConfirmElement = document.getElementById(
+  "householdSyncConfirmationConfirm",
+);
+const householdSyncConfirmationConfirm = householdSyncConfirmationConfirmElement
+  instanceof HTMLButtonElement
+  ? householdSyncConfirmationConfirmElement
+  : null;
+let householdConfirmationWasVisible = false;
+
+type HouseholdPopupState = {
+  context: HouseholdExtensionContext;
+  selectedMemberId: string | null;
+  pendingConfirmation: {
+    memberDisplayName: string;
+    provider: string;
+    manualConversionRequired: boolean;
+    collisionMemberDisplayName: string | null;
+  } | null;
+};
+
+function isHouseholdPopupState(value: unknown): value is HouseholdPopupState {
+  if (
+    !value
+    || typeof value !== "object"
+    || !("context" in value)
+    || !("selectedMemberId" in value)
+  ) return false;
+  const { context, selectedMemberId } = value;
+  return Boolean(
+    context
+    && typeof context === "object"
+    && "members" in context
+    && Array.isArray(context.members)
+    && (selectedMemberId === null || typeof selectedMemberId === "string"),
+  );
+}
+
+function getHouseholdMemberLabel(
+  member: HouseholdExtensionMember,
+  members: HouseholdExtensionMember[],
+) {
+  if (member.isPrimary) return `${member.displayName} · You`;
+  const sameNameMembers = members
+    .filter(
+      (candidate) => candidate.displayName.trim().toLocaleLowerCase()
+        === member.displayName.trim().toLocaleLowerCase(),
+    )
+    .sort((left, right) => left.id.localeCompare(right.id));
+  if (sameNameMembers.length < 2) return member.displayName;
+  return `${member.displayName} · Household member ${
+    sameNameMembers.findIndex((candidate) => candidate.id === member.id) + 1
+  }`;
+}
+
+function getProviderDisplayName(provider: string) {
+  return Object.values(providerRegistry).find(
+    (definition) => definition.id === provider,
+  )?.name ?? provider;
+}
+
+const HOUSEHOLD_ISSUER_PROVIDERS = new Set([
+  "chase",
+  "amex",
+  "capitalone",
+  "bilt",
+  "discover",
+  "citi",
+]);
+
+function setHouseholdSyncButtonsEnabled(
+  enabled: boolean,
+  issuerSyncEnabled = true,
+) {
+  for (const provider of Object.values(providerRegistry)) {
+    const button = document.getElementById(`${provider.id}SyncBtn`);
+    if (button instanceof HTMLButtonElement) {
+      const providerEnabled = enabled
+        && (issuerSyncEnabled || !HOUSEHOLD_ISSUER_PROVIDERS.has(provider.id));
+      const awaitingConfirmation =
+        latestProviderStates?.[provider.id]?.status === "awaiting_confirmation";
+      button.disabled = !providerEnabled || awaitingConfirmation;
+      button.setAttribute(
+        "aria-disabled",
+        String(!providerEnabled || awaitingConfirmation),
+      );
+    }
+  }
+}
+
+async function refreshHouseholdUi() {
+  let response: unknown;
+  try {
+    response = await chrome.runtime.sendMessage({
+      type: "GET_HOUSEHOLD_STATE",
+    });
+  } catch {
+    return;
+  }
+  if (
+    !isHouseholdPopupState(response)
+    || !response.context.capabilities.householdReads
+    || response.context.members.length < 2
+  ) {
+    if (householdSyncTarget) householdSyncTarget.hidden = true;
+    if (householdSyncConfirmation) householdSyncConfirmation.hidden = true;
+    householdSyncWritesEnabled = true;
+    householdIssuerSyncEnabled = true;
+    setHouseholdSyncButtonsEnabled(true);
+    return;
+  }
+
+  if (householdSyncTarget) householdSyncTarget.hidden = false;
+  if (householdMemberSelect) {
+    householdMemberSelect.replaceChildren();
+    for (const member of response.context.members) {
+      const option = document.createElement("option");
+      option.value = member.id;
+      option.textContent = getHouseholdMemberLabel(member, response.context.members);
+      option.selected = member.id === response.selectedMemberId;
+      householdMemberSelect.appendChild(option);
+    }
+    householdMemberSelect.disabled = false;
+  }
+  const help = document.getElementById("householdSyncTargetHelp");
+  const selected = response.context.members.find(
+    (member) => member.id === response.selectedMemberId,
+  );
+  householdSyncWritesEnabled = response.context.capabilities.householdWrites
+    || selected?.isPrimary === true;
+  if (householdSelectedMemberLabel) {
+    householdSelectedMemberLabel.textContent = selected
+      ? getHouseholdMemberLabel(selected, response.context.members)
+      : "Choose a profile";
+  }
+  householdIssuerSyncEnabled = !selected || selected.isPrimary;
+  setHouseholdSyncButtonsEnabled(
+    householdSyncWritesEnabled,
+    householdIssuerSyncEnabled,
+  );
+  if (help) {
+    help.textContent = selected && !selected.isPrimary
+      && !response.context.capabilities.householdWrites
+      ? "Household rewards sync is temporarily unavailable. Switch to Primary to keep syncing."
+      : selected && !selected.isPrimary
+        ? "Airlines and hotels only; banks and offers stay in Primary."
+        : "Choose where synced rewards are saved.";
+  }
+  const offersTabButtonElement = document.getElementById("offersTab");
+  const offersTabButton = offersTabButtonElement instanceof HTMLButtonElement
+    ? offersTabButtonElement
+    : null;
+  if (offersTabButton) {
+    offersTabButton.disabled = Boolean(selected && !selected.isPrimary);
+    offersTabButton.title = selected && !selected.isPrimary
+      ? "Card offers remain in the Primary wallet for now."
+      : "";
+  }
+  if (selected && !selected.isPrimary && activeDestination === "offers") {
+    setDestination("rewards");
+  }
+
+  const confirmation = response.pendingConfirmation;
+  if (householdSyncConfirmation) {
+    householdSyncConfirmation.hidden = !confirmation;
+  }
+  if (confirmation) {
+    const providerName = getProviderDisplayName(confirmation.provider);
+    if (householdSyncConfirmationTitle) {
+      householdSyncConfirmationTitle.textContent = confirmation.collisionMemberDisplayName
+        ? "Possible profile mismatch"
+        : confirmation.manualConversionRequired
+          ? "Review saved balance"
+          : "Ready to confirm";
+    }
+    if (householdSyncConfirmationText) {
+      householdSyncConfirmationText.textContent = confirmation.collisionMemberDisplayName
+        ? `This ${providerName} account looks like ${confirmation.collisionMemberDisplayName}'s account, not ${confirmation.memberDisplayName}. Nothing was saved.`
+        : confirmation.manualConversionRequired
+          ? `Convert the manual balance and sync ${providerName} for ${confirmation.memberDisplayName}?`
+          : `Does this ${providerName} account belong to ${confirmation.memberDisplayName}? Nothing is saved until you confirm.`;
+    }
+    if (householdSyncConfirmationConfirm) {
+      householdSyncConfirmationConfirm.textContent = confirmation.collisionMemberDisplayName
+        ? `Sync to ${confirmation.collisionMemberDisplayName}`
+        : "Confirm and save";
+    }
+    if (!householdConfirmationWasVisible && householdSyncConfirmation) {
+      householdSyncConfirmation.focus({ preventScroll: false });
+    }
+  }
+  householdConfirmationWasVisible = Boolean(confirmation);
+}
+
+householdMemberSelect?.addEventListener("change", async () => {
+  householdMemberSelect.disabled = true;
+  try {
+    const result = await chrome.runtime.sendMessage({
+      type: "SWITCH_HOUSEHOLD_MEMBER",
+      memberId: householdMemberSelect.value,
+    });
+    if (!result?.ok) throw new Error(result?.error ?? "Could not switch wallets.");
+    await refreshHouseholdUi();
+    await refreshPopupState();
+  } catch (error) {
+    console.error("[NextCard Popup] Household wallet switch failed:", error);
+    await refreshHouseholdUi();
+  } finally {
+    householdMemberSelect.disabled = false;
+  }
+});
+
+manageHouseholdBtn?.addEventListener("click", () => {
+  void chrome.tabs.create({
+    url: `${__NEXTCARD_URL__}/dashboard/settings?tab=account`,
+  });
+});
+
+householdSyncConfirmationCancel?.addEventListener("click", async () => {
+  householdSyncConfirmationCancel.disabled = true;
+  try {
+    await chrome.runtime.sendMessage({
+      type: "CANCEL_HOUSEHOLD_SYNC_CONFIRMATION",
+    });
+    await refreshHouseholdUi();
+    await refreshPopupState();
+  } finally {
+    householdSyncConfirmationCancel.disabled = false;
+  }
+});
+
+householdSyncConfirmationConfirm?.addEventListener("click", async () => {
+  let keepConfirmDisabled = false;
+  householdSyncConfirmationConfirm.disabled = true;
+  if (householdSyncConfirmationCancel) {
+    householdSyncConfirmationCancel.disabled = true;
+  }
+  try {
+    const result = await chrome.runtime.sendMessage({
+      type: "CONFIRM_HOUSEHOLD_SYNC",
+    });
+    if (result?.manualConversionRequired) {
+      await refreshHouseholdUi();
+      await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+      const conversionPromptVisible =
+        householdSyncConfirmation?.hidden === false
+        && householdSyncConfirmationTitle?.textContent
+          === "Review saved balance";
+      if (!conversionPromptVisible) {
+        keepConfirmDisabled = true;
+        if (householdSyncConfirmationText) {
+          householdSyncConfirmationText.textContent =
+            "Reload the extension to review and confirm the saved balance conversion.";
+        }
+      }
+      return;
+    }
+    if (!result?.ok) throw new Error(result?.error ?? "Could not save this sync.");
+    await refreshHouseholdUi();
+    await refreshPopupState();
+  } catch (error) {
+    if (householdSyncConfirmationText) {
+      householdSyncConfirmationText.textContent = error instanceof Error
+        ? error.message
+        : "Could not save this sync. Please try again.";
+    }
+  } finally {
+    householdSyncConfirmationConfirm.disabled = keepConfirmDisabled;
+    if (householdSyncConfirmationCancel) {
+      householdSyncConfirmationCancel.disabled = false;
+    }
+  }
+});
 
 function setDestination(destination: "offers" | "rewards", options: { persist?: boolean } = {}) {
   activeDestination = destination;
@@ -3677,6 +3981,10 @@ async function refreshPopupState() {
     rewardsSyncAllState = snapshot.travelSyncState;
     renderHome(snapshot.allStates);
     renderAllProviders(snapshot.allStates);
+    setHouseholdSyncButtonsEnabled(
+      householdSyncWritesEnabled,
+      householdIssuerSyncEnabled,
+    );
     updateActiveWalletButton(snapshot.allStates);
     maybeShowCongratsBanner(snapshot.allStates);
   } catch {
@@ -3785,7 +4093,20 @@ async function initializePopup() {
     renderHome(initialSnapshot.allStates);
     renderAllProviders(initialSnapshot.allStates);
     updateActiveWalletButton(initialSnapshot.allStates);
+    await refreshHouseholdUi();
   }
+
+  chrome.storage.onChanged.addListener((changes, areaName) => {
+    if (
+      areaName === "local"
+      && (
+        "pending_household_sync_confirmation_v2" in changes
+        || "nextcard_household_context_v2" in changes
+      )
+    ) {
+      void refreshHouseholdUi();
+    }
+  });
 
   setInterval(() => {
     void refreshPopupState();

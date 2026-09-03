@@ -11,10 +11,21 @@ import {
 } from "../lib/extension-profile";
 import {
   deleteFromNextCard,
+  deleteHouseholdProviderFromNextCard,
   pullFromNextCard,
+  pullHouseholdMemberFromNextCard,
   pushToNextCard,
   validateProviderData,
 } from "../lib/sync-to-nextcard";
+import {
+  createHouseholdSyncTarget,
+  getSelectedHouseholdMember,
+  getHouseholdRewardsSummariesStorageKey,
+  getStoredHouseholdContext,
+  refreshHouseholdContext,
+  setSelectedHouseholdMember,
+  type HouseholdSyncTarget,
+} from "../lib/household-context";
 import { REWARDS_SUMMARIES_STORAGE_KEY } from "../lib/rewards-summary";
 import { syncOffersToNextCard, syncDetectedOffersToNextCard, retryPendingOfferSyncs, pullOfferUrlCache } from "../lib/sync-offers-to-nextcard";
 import type { OfferSyncPayload, DetectedOfferSyncPayload } from "../lib/sync-offers-to-nextcard";
@@ -50,13 +61,44 @@ let lastVerifyAt = 0;
 let lastVerifyResult: NextCardAuth | null = null;
 let pendingProviderRetryPromise: Promise<void> | null = null;
 const providersRetriedThisSession = new Set<ProviderId>();
+const activeHouseholdTargets = new Map<ProviderId, HouseholdSyncTarget>();
+const PENDING_HOUSEHOLD_CONFIRMATION_KEY =
+  "pending_household_sync_confirmation_v2";
 
 const stateStore = createRuntimeStateStore();
 const offerOperations = createOfferOperationStore();
 const offerCoordinator = createOfferOperationCoordinator(offerOperations);
 const extensionNavigatingTabs = createExtensionNavigationState();
 
-const persistedStateHydrated = stateStore.hydratePersistedState();
+const persistedStateHydrated = (async () => {
+  const context = await getStoredHouseholdContext();
+  const selectedMember = context
+    ? await getSelectedHouseholdMember(context)
+    : null;
+  if (
+    context?.capabilities.householdReads
+    && context.members.length > 1
+    && selectedMember
+  ) {
+    await stateStore.setHouseholdScope({
+      accountScopeId: context.accountScopeId,
+      memberId: selectedMember.id,
+      isPrimary: selectedMember.isPrimary,
+    });
+    const scopedSummaryKey = getHouseholdRewardsSummariesStorageKey(
+      context.accountScopeId,
+      selectedMember.id,
+    );
+    const stored = await chrome.storage.local.get(scopedSummaryKey);
+    await chrome.storage.local.set({
+      [REWARDS_SUMMARIES_STORAGE_KEY]: Array.isArray(stored[scopedSummaryKey])
+        ? stored[scopedSummaryKey]
+        : [],
+    });
+    return;
+  }
+  await stateStore.hydratePersistedState();
+})();
 void offerCoordinator.resume();
 
 async function getCachedAuth() {
@@ -131,15 +173,43 @@ async function cancelRun(providerId: ProviderId, error: string | null = null) {
 }
 
 async function hydrateFromNextCard() {
-  const result = await pullFromNextCard();
+  const context = await refreshHouseholdContext()
+    ?? await getStoredHouseholdContext();
+  const selectedMember = context
+    ? await getSelectedHouseholdMember(context)
+    : null;
+  const useHousehold = Boolean(
+    context?.capabilities.householdReads
+    && context.members.length > 1
+    && selectedMember,
+  );
+  if (context && selectedMember && useHousehold) {
+    await stateStore.setHouseholdScope({
+      accountScopeId: context.accountScopeId,
+      memberId: selectedMember.id,
+      isPrimary: selectedMember.isPrimary,
+    });
+  } else {
+    await stateStore.setHouseholdScope(null);
+  }
+  const result = useHousehold && selectedMember
+    ? await pullHouseholdMemberFromNextCard(selectedMember.id)
+    : await pullFromNextCard();
   if (!result.ok) {
     return;
   }
 
   if (result.summaries) {
-    await chrome.storage.local.set({
+    const updates: Record<string, unknown> = {
       [REWARDS_SUMMARIES_STORAGE_KEY]: result.summaries,
-    });
+    };
+    if (context && selectedMember && useHousehold) {
+      updates[getHouseholdRewardsSummariesStorageKey(
+        context.accountScopeId,
+        selectedMember.id,
+      )] = result.summaries;
+    }
+    await chrome.storage.local.set(updates);
   }
 
   if (!Array.isArray(result.accounts) || result.accounts.length === 0) {
@@ -155,14 +225,12 @@ async function hydrateFromNextCard() {
 
   let hydratedCount = 0;
   for (const account of result.accounts) {
-    if (
-      typeof account.provider !== "string"
-      || !stateStore.isProviderId(account.provider)
-    ) {
+    const providerValue: unknown = account.provider;
+    if (!stateStore.isProviderId(providerValue)) {
       continue;
     }
 
-    const providerId = account.provider;
+    const providerId = providerValue;
     const currentState = stateStore.states[providerId];
     if (currentState.pendingBackendPush && currentState.data) {
       continue;
@@ -186,6 +254,238 @@ async function hydrateFromNextCard() {
 
   if (hydratedCount > 0) {
   }
+}
+
+async function prepareHouseholdSyncTarget(providerId: ProviderId) {
+  const target = await createHouseholdSyncTarget(providerId);
+  if (!target) {
+    activeHouseholdTargets.delete(providerId);
+    return null;
+  }
+  const context = await getStoredHouseholdContext();
+  const member = context?.members.find((candidate) => candidate.id === target.memberId);
+  if (context && member) {
+    await stateStore.setHouseholdScope({
+      accountScopeId: context.accountScopeId,
+      memberId: member.id,
+      isPrimary: member.isPrimary,
+    });
+  }
+  activeHouseholdTargets.set(providerId, target);
+  await stateStore.updateProvider(providerId, { syncTarget: target });
+  return target;
+}
+
+async function getHouseholdPopupState() {
+  const context = await refreshHouseholdContext()
+    ?? await getStoredHouseholdContext();
+  if (!context) return null;
+  const selectedMember = await getSelectedHouseholdMember(context);
+  const pending = await chrome.storage.local.get(
+    PENDING_HOUSEHOLD_CONFIRMATION_KEY,
+  );
+  const pendingValue = pending[PENDING_HOUSEHOLD_CONFIRMATION_KEY];
+  const pendingTarget =
+    typeof pendingValue === "object"
+    && pendingValue !== null
+    && "target" in pendingValue
+    && typeof pendingValue.target === "object"
+    && pendingValue.target !== null
+      ? pendingValue.target
+      : null;
+  return {
+    context,
+    selectedMemberId: selectedMember?.id ?? null,
+    pendingConfirmation: pendingTarget
+      && "memberDisplayName" in pendingTarget
+      && typeof pendingTarget.memberDisplayName === "string"
+      && "provider" in pendingTarget
+      && typeof pendingTarget.provider === "string"
+      ? {
+          memberDisplayName: pendingTarget.memberDisplayName,
+          provider: pendingTarget.provider,
+          manualConversionRequired:
+            "manualConversionRequired" in pendingValue
+            && pendingValue.manualConversionRequired === true,
+          collisionMemberDisplayName:
+            "collisionMemberDisplayName" in pendingValue
+            && typeof pendingValue.collisionMemberDisplayName === "string"
+              ? pendingValue.collisionMemberDisplayName
+              : null,
+        }
+      : null,
+  };
+}
+
+async function switchHouseholdMember(memberId: string) {
+  const context = await refreshHouseholdContext()
+    ?? await getStoredHouseholdContext();
+  const member = context?.members.find((candidate) => candidate.id === memberId);
+  if (!context || !member) return { ok: false, error: "member_unavailable" };
+  await travelSyncCoordinator.cancel();
+  for (const providerKey of Object.keys(stateStore.states)) {
+    if (!stateStore.isProviderId(providerKey)) continue;
+    const providerId = providerKey;
+    if (stateStore.getRun(providerId)) {
+      await cancelRun(providerId, "Household wallet changed.");
+    }
+  }
+  await offerCoordinator.clearAccountState();
+  activeHouseholdTargets.clear();
+  await chrome.storage.local.remove(PENDING_HOUSEHOLD_CONFIRMATION_KEY);
+  await chrome.storage.local.remove([
+    "offerUrlCache",
+    "detectedOfferUrlCache",
+  ]);
+  await chrome.storage.local.set({ [REWARDS_SUMMARIES_STORAGE_KEY]: [] });
+  await setSelectedHouseholdMember(member.id);
+  await stateStore.setHouseholdScope({
+    accountScopeId: context.accountScopeId,
+    memberId: member.id,
+    isPrimary: member.isPrimary,
+  });
+  const scopedSummaryKey = getHouseholdRewardsSummariesStorageKey(
+    context.accountScopeId,
+    member.id,
+  );
+  const scopedSummaries = await chrome.storage.local.get(scopedSummaryKey);
+  await chrome.storage.local.set({
+    [REWARDS_SUMMARIES_STORAGE_KEY]: Array.isArray(
+      scopedSummaries[scopedSummaryKey],
+    )
+      ? scopedSummaries[scopedSummaryKey]
+      : [],
+  });
+  await hydrateFromNextCard();
+  return { ok: true };
+}
+
+async function cancelPendingHouseholdSync() {
+  const stored = await chrome.storage.local.get(
+    PENDING_HOUSEHOLD_CONFIRMATION_KEY,
+  );
+  const pending = stored[PENDING_HOUSEHOLD_CONFIRMATION_KEY];
+  if (
+    typeof pending === "object"
+    && pending !== null
+    && "target" in pending
+    && typeof pending.target === "object"
+    && pending.target !== null
+    && "provider" in pending.target
+    && stateStore.isProviderId(pending.target.provider)
+  ) {
+    stateStore.updateProvider(pending.target.provider, {
+      status: "idle",
+      error: null,
+      backendSyncStatus: null,
+      backendSyncError: null,
+      pendingBackendPush: false,
+      syncTarget: null,
+    });
+    activeHouseholdTargets.delete(pending.target.provider);
+  }
+  await chrome.storage.local.remove(PENDING_HOUSEHOLD_CONFIRMATION_KEY);
+  return { ok: true };
+}
+
+async function confirmPendingHouseholdSync() {
+  const stored = await chrome.storage.local.get(
+    PENDING_HOUSEHOLD_CONFIRMATION_KEY,
+  );
+  const pending = stored[PENDING_HOUSEHOLD_CONFIRMATION_KEY];
+  if (
+    typeof pending !== "object"
+    || pending === null
+    || !("target" in pending)
+    || typeof pending.target !== "object"
+    || pending.target === null
+    || !("provider" in pending.target)
+    || !stateStore.isProviderId(pending.target.provider)
+    || !("memberId" in pending.target)
+    || typeof pending.target.memberId !== "string"
+    || !("memberDisplayName" in pending.target)
+    || typeof pending.target.memberDisplayName !== "string"
+    || !("accountScopeId" in pending.target)
+    || typeof pending.target.accountScopeId !== "string"
+    || !("contextRevision" in pending.target)
+    || typeof pending.target.contextRevision !== "string"
+    || !("operationId" in pending.target)
+    || typeof pending.target.operationId !== "string"
+    || !("data" in pending)
+  ) {
+    return { ok: false, error: "confirmation_not_found" };
+  }
+  const target: HouseholdSyncTarget = {
+    provider: pending.target.provider,
+    memberId: pending.target.memberId,
+    memberDisplayName: pending.target.memberDisplayName,
+    accountScopeId: pending.target.accountScopeId,
+    contextRevision: pending.target.contextRevision,
+    operationId: pending.target.operationId,
+  };
+  const validated = validateProviderData(target.provider, pending.data);
+  if (!validated.ok) return { ok: false, error: validated.error };
+  if (
+    "collisionMemberId" in pending
+    && typeof pending.collisionMemberId === "string"
+  ) {
+    const switched = await switchHouseholdMember(pending.collisionMemberId);
+    if (!switched.ok) return switched;
+    const collisionTarget = await prepareHouseholdSyncTarget(target.provider);
+    if (!collisionTarget) {
+      return { ok: false, error: "member_unavailable" };
+    }
+    const collisionResult = await pushToNextCard(
+      target.provider,
+      validated.data,
+      { target: collisionTarget },
+    );
+    updateProviderFromBackendPush(target.provider, collisionResult);
+    if (!collisionResult.ok) return collisionResult;
+    await hydrateFromNextCard();
+    return { ok: true };
+  }
+  activeHouseholdTargets.set(target.provider, target);
+  const result = await pushToNextCard(target.provider, validated.data, {
+    target,
+    identityConfirmed: true,
+    manualConversionConfirmed:
+      "manualConversionRequired" in pending &&
+      pending.manualConversionRequired === true,
+  });
+  if (result.manualConversionRequired) {
+    await chrome.storage.local.set({
+      [PENDING_HOUSEHOLD_CONFIRMATION_KEY]: {
+        ...pending,
+        manualConversionRequired: true,
+      },
+    });
+    stateStore.updateProvider(target.provider, {
+      status: "awaiting_confirmation",
+      error: null,
+      progressMessage:
+        `Review the saved balance conversion for ${target.memberDisplayName}.`,
+      backendSyncStatus: null,
+      backendSyncError: null,
+      pendingBackendPush: false,
+    });
+    return {
+      ok: false,
+      error: result.error,
+      manualConversionRequired: true,
+    };
+  }
+  updateProviderFromBackendPush(target.provider, result);
+  if (!result.ok) {
+    return {
+      ok: false,
+      error: result.error,
+      manualConversionRequired: false,
+    };
+  }
+  await chrome.storage.local.remove(PENDING_HOUSEHOLD_CONFIRMATION_KEY);
+  await hydrateFromNextCard();
+  return { ok: true };
 }
 
 async function refreshExtensionProfile() {
@@ -217,6 +517,37 @@ function getBackendSyncError(result: PushToNextCardResult) {
   const skippedNames = formatProgramNames(result.skippedRewardsPrograms);
   if (!result.ok && result.error === "selection_locked") {
     return `${skippedNames} were captured but not saved to nextcard because your current plan limits synced rewards programs. Upgrade to Pro or retry after upgrading.`;
+  }
+  const messages: Record<string, string> = {
+    identity_conflict:
+      "This provider account is already assigned to another Household profile. Switch profiles or manage the assignment on nextcard.",
+    assignment_conflict:
+      "This provider account is already assigned to another Household profile. Switch profiles or manage the assignment on nextcard.",
+    context_stale:
+      "Your Household profiles changed during this sync. Start the sync again with the intended profile.",
+    member_unavailable:
+      "This Household profile is no longer available for syncing. Choose another profile.",
+    member_gone:
+      "This Household profile was permanently removed. Choose another profile.",
+    extension_writes_disabled:
+      "Household rewards sync is temporarily unavailable. Your existing data was not changed.",
+    extension_reads_disabled:
+      "Household rewards sync is temporarily unavailable. Your existing data was not changed.",
+    household_capability_disabled:
+      "Household rewards sync is temporarily unavailable. Your existing data was not changed.",
+    issuer_member_sync_unsupported:
+      "Bank logins can contain cards for multiple people. For now, sync bank rewards to the Primary profile only.",
+    extension_upgrade_required:
+      "Update the nextcard extension before syncing another Household profile.",
+    operation_expired:
+      "This sync confirmation expired. Start the sync again.",
+    preflight_expired:
+      "This sync confirmation expired. Start the sync again.",
+    operation_mismatch:
+      "The saved sync no longer matches this request. Start the sync again.",
+  };
+  if (!result.ok && result.error && messages[result.error]) {
+    return messages[result.error];
   }
   if (!result.ok) {
     return result.error ?? "Could not save this sync to nextcard.";
@@ -272,15 +603,33 @@ function updateProviderFromBackendPush(
     return;
   }
 
-  const backendSyncStatus =
-    result.error === "selection_locked" || skippedCount > 0 ? "blocked" : "failed";
+  const nonRetryableErrors = new Set([
+    "assignment_conflict",
+    "identity_conflict",
+    "context_stale",
+    "member_unavailable",
+    "member_gone",
+    "extension_writes_disabled",
+    "extension_reads_disabled",
+    "household_capability_disabled",
+    "issuer_member_sync_unsupported",
+    "extension_upgrade_required",
+    "operation_expired",
+    "preflight_expired",
+    "operation_mismatch",
+    "manual_conversion_required",
+  ]);
+  const blocked = result.error === "selection_locked"
+    || skippedCount > 0
+    || (result.error ? nonRetryableErrors.has(result.error) : false);
+  const backendSyncStatus = blocked ? "blocked" : "failed";
   stateStore.updateProvider(providerId, {
     status: "error",
     error: backendSyncError,
     lastSyncedAt: null,
     backendSyncStatus,
     backendSyncError,
-    pendingBackendPush: true,
+    pendingBackendPush: !blocked,
     lastBackendPushAttemptAt: attemptedAt,
   });
 }
@@ -317,6 +666,7 @@ async function recordConsent(message: Record<string, unknown>) {
 async function onSignOut() {
   resetAuthCache();
   stateStore.resetAllStates();
+  activeHouseholdTargets.clear();
   await Promise.all([
     setStoredExtensionProfile(null),
     offerCoordinator.clearAccountState(),
@@ -339,7 +689,67 @@ async function pushScrapedData(providerId: ProviderId, data: unknown) {
     return { ok: false, error: validated.error };
   }
 
-  const result = await pushToNextCard(providerId, validated.data);
+  const target = activeHouseholdTargets.get(providerId)
+    ?? stateStore.states[providerId].syncTarget
+    ?? null;
+  const result = await pushToNextCard(providerId, validated.data, { target });
+  if (
+    target
+    && (result.error === "identity_conflict"
+      || result.error === "assignment_conflict")
+    && result.existingMemberId
+  ) {
+    const context = await getStoredHouseholdContext();
+    const collisionMember = context?.members.find(
+      (member) => member.id === result.existingMemberId,
+    );
+    if (collisionMember) {
+      await chrome.storage.local.set({
+        [PENDING_HOUSEHOLD_CONFIRMATION_KEY]: {
+          target,
+          data: validated.data,
+          collisionMemberId: collisionMember.id,
+          collisionMemberDisplayName: collisionMember.displayName,
+        },
+      });
+      stateStore.updateProvider(providerId, {
+        status: "awaiting_confirmation",
+        error: null,
+        progressMessage:
+          `This account appears to belong to ${collisionMember.displayName}.`,
+        backendSyncStatus: null,
+        backendSyncError: null,
+        pendingBackendPush: false,
+        lastBackendPushAttemptAt: new Date().toISOString(),
+      });
+      return { ...result, awaitingConfirmation: true };
+    }
+  }
+  if (
+    target
+    && (result.confirmationRequired || result.manualConversionRequired)
+  ) {
+    await chrome.storage.local.set({
+      [PENDING_HOUSEHOLD_CONFIRMATION_KEY]: {
+        target,
+        data: validated.data,
+        manualConversionRequired: result.manualConversionRequired === true,
+      },
+    });
+    const confirmationMessage = result.manualConversionRequired
+      ? `Confirm converting the saved balance and syncing ${providerId} for ${target.memberDisplayName}.`
+      : `Confirm this ${providerId} account belongs to ${target.memberDisplayName}.`;
+    stateStore.updateProvider(providerId, {
+      status: "awaiting_confirmation",
+      error: null,
+      progressMessage: confirmationMessage,
+      backendSyncStatus: null,
+      backendSyncError: null,
+      pendingBackendPush: false,
+      lastBackendPushAttemptAt: new Date().toISOString(),
+    });
+    return { ...result, awaitingConfirmation: true };
+  }
   updateProviderFromBackendPush(providerId, result);
   if (result.ok) {
     try {
@@ -358,8 +768,23 @@ async function pushScrapedData(providerId: ProviderId, data: unknown) {
 }
 
 async function deleteProviderFromNextCard(providerId: ProviderId) {
-  const result = await deleteFromNextCard(providerId);
+  const target = activeHouseholdTargets.get(providerId)
+    ?? await createHouseholdSyncTarget(providerId);
+  const result = target
+    ? await deleteHouseholdProviderFromNextCard(target)
+    : await deleteFromNextCard(providerId);
   if (result.ok) {
+    stateStore.updateProvider(providerId, {
+      status: "idle",
+      data: null,
+      error: null,
+      lastSyncedAt: null,
+      progressMessage: null,
+      backendSyncStatus: null,
+      backendSyncError: null,
+      pendingBackendPush: false,
+      lastBackendPushAttemptAt: null,
+    });
     try {
       await hydrateFromNextCard();
     } catch (error) {
@@ -381,12 +806,18 @@ async function retryPendingProviderPushes(
 
   pendingProviderRetryPromise = (async () => {
     const now = Date.now();
+    const householdContext = await getStoredHouseholdContext();
+    const householdRetryRequiresTarget = Boolean(
+      householdContext?.capabilities.householdReads
+      && householdContext.members.length > 1,
+    );
     for (const providerId of Object.keys(stateStore.states) as ProviderId[]) {
       const state = stateStore.states[providerId];
       if (!state.pendingBackendPush || !state.data) continue;
       if (stateStore.getRun(providerId)) continue;
       if (providersRetriedThisSession.has(providerId)) continue;
       if (state.backendSyncStatus === "blocked" && !options.includeBlocked) continue;
+      if (householdRetryRequiresTarget && !state.syncTarget) continue;
 
       const lastAttemptMs = state.lastBackendPushAttemptAt
         ? Date.parse(state.lastBackendPushAttemptAt)
@@ -475,7 +906,7 @@ const syncHandlers = {
     extensionNavigatingTabs,
     isProviderAttemptMessage,
     pushToNextCard: pushScrapedData,
-    refreshOfferUrlCache: pullOfferUrlCache,
+    refreshOfferUrlCache: pullPrimaryOfferUrlCache,
   }),
   amex: createAmexSync({
     providerRegistry,
@@ -559,7 +990,8 @@ async function waitForTravelProviderCompletion(providerId: ProviderId) {
     const state = stateStore.states[providerId];
     const active = state.status === "detecting_login"
       || state.status === "waiting_for_login"
-      || state.status === "extracting";
+      || state.status === "extracting"
+      || state.status === "awaiting_confirmation";
     if (!active) {
       return {
         succeeded:
@@ -577,12 +1009,27 @@ async function waitForTravelProviderCompletion(providerId: ProviderId) {
 const travelSyncCoordinator = createTravelSyncCoordinator({
   storage: chrome.storage.local,
   isProviderId: stateStore.isProviderId,
+  prepareProvider: async (providerId) => {
+    await prepareHouseholdSyncTarget(providerId);
+  },
   startProvider: startProviderForTravelSync,
   waitForCompletion: waitForTravelProviderCompletion,
   cancelProvider: (providerId) => cancelRun(providerId),
 });
 
 void persistedStateHydrated.then(() => travelSyncCoordinator.resume());
+
+async function pullPrimaryOfferUrlCache() {
+  const context = await getStoredHouseholdContext();
+  const selectedMember = context
+    ? await getSelectedHouseholdMember(context)
+    : null;
+  if (context && selectedMember && !selectedMember.isPrimary) {
+    await chrome.storage.local.remove(["offerUrlCache", "detectedOfferUrlCache"]);
+    return;
+  }
+  return pullOfferUrlCache();
+}
 
 chrome.action.onClicked.addListener((tab) => {
   if (tab.windowId) {
@@ -612,6 +1059,12 @@ chrome.runtime.onMessage.addListener(
     pushToNextCard: pushScrapedData,
     deleteFromNextCard: deleteProviderFromNextCard,
     isProviderLocked: providerIsLocked,
+    prepareSyncTarget: async (providerId) =>
+      Boolean(await prepareHouseholdSyncTarget(providerId)),
+    confirmHouseholdSync: confirmPendingHouseholdSync,
+    cancelHouseholdSyncConfirmation: cancelPendingHouseholdSync,
+    switchHouseholdMember,
+    getHouseholdState: getHouseholdPopupState,
     getExtensionProfile: getStoredExtensionProfile,
     refreshExtensionProfile,
     openUpgrade: openUpgradeTab,
@@ -619,6 +1072,15 @@ chrome.runtime.onMessage.addListener(
     offerCoordinator,
     travelSyncCoordinator,
     syncEnrolledOffers: async (issuer, message) => {
+      const context = await getStoredHouseholdContext();
+      const selectedMember = context
+        ? await getSelectedHouseholdMember(context)
+        : null;
+      if (context && selectedMember && !selectedMember.isPrimary) {
+        throw new Error(
+          "Card offers are still synced to the Primary wallet. Switch to your Primary profile to continue.",
+        );
+      }
       // Reuse the sync payload shape so message handlers stay aligned with backend expectations.
       const enrolledOffers = message.enrolledOffers as EnrolledOfferSyncMessage[];
 
@@ -645,7 +1107,16 @@ chrome.runtime.onMessage.addListener(
       }
       return syncResult.status;
     },
-    syncDetectedOffers: (issuer, message) => {
+    syncDetectedOffers: async (issuer, message) => {
+      const context = await getStoredHouseholdContext();
+      const selectedMember = context
+        ? await getSelectedHouseholdMember(context)
+        : null;
+      if (context && selectedMember && !selectedMember.isPrimary) {
+        throw new Error(
+          "Detected offers cannot be saved to an additional wallet yet.",
+        );
+      }
       type DetectedOfferMsg = Omit<DetectedOfferSyncPayload["offers"][number], "detectedAt">;
       const detectedOffers = message.detectedOffers as DetectedOfferMsg[];
       const observedIssuerOfferIds = Array.isArray(message.observedIssuerOfferIds)
@@ -686,6 +1157,22 @@ chrome.runtime.onMessageExternal.addListener(
     nextCardOrigin: new URL(__NEXTCARD_URL__).origin,
     setAuth: async (auth) => {
       await offerCoordinator.clearAccountState();
+      for (const providerKey of Object.keys(stateStore.states)) {
+        if (!stateStore.isProviderId(providerKey)) continue;
+        if (stateStore.getRun(providerKey)) {
+          await cancelRun(providerKey, "nextcard account changed.");
+        }
+      }
+      activeHouseholdTargets.clear();
+      stateStore.resetAllStates();
+      await chrome.storage.local.remove([
+        "nextcard_household_context_v2",
+        "nextcard_household_selected_member_v2",
+        PENDING_HOUSEHOLD_CONFIRMATION_KEY,
+        REWARDS_SUMMARIES_STORAGE_KEY,
+        "pendingOfferSyncs",
+        "pendingOfferActivationCompletions",
+      ]);
       await setAuth(auth);
       await retryPendingOfferActivationCompletions();
     },
@@ -694,7 +1181,7 @@ chrome.runtime.onMessageExternal.addListener(
       await persistedStateHydrated;
       await Promise.all([hydrateFromNextCard(), refreshExtensionProfile()]);
     },
-    pullOfferUrlCache,
+    pullOfferUrlCache: pullPrimaryOfferUrlCache,
   }),
 );
 
@@ -706,7 +1193,7 @@ chrome.alarms.create("retryPendingOfferSyncs", {
   periodInMinutes: 5,
 });
 chrome.alarms.onAlarm.addListener((alarm) => {
-  if (alarm.name === "pullOfferUrlCache") void pullOfferUrlCache();
+  if (alarm.name === "pullOfferUrlCache") void pullPrimaryOfferUrlCache();
   if (alarm.name === "retryPendingOfferSyncs") void retryQueuedOfferSyncs();
   if (alarm.name === "retryOfferActivationCompletions") {
     void retryPendingOfferActivationCompletions();
@@ -714,6 +1201,11 @@ chrome.alarms.onAlarm.addListener((alarm) => {
 });
 
 async function retryQueuedOfferSyncs() {
+  const context = await getStoredHouseholdContext();
+  const selectedMember = context
+    ? await getSelectedHouseholdMember(context)
+    : null;
+  if (context && selectedMember && !selectedMember.isPrimary) return;
   const result = await retryPendingOfferSyncs();
   await Promise.all(result.savedRunIds.map(async (runId) => {
     await offerOperations.patch(runId, {
@@ -734,6 +1226,6 @@ void getAuth().then((auth) => {
     });
     void retryQueuedOfferSyncs();
     void retryPendingOfferActivationCompletions();
-    void pullOfferUrlCache();
+    void pullPrimaryOfferUrlCache();
   }
 });

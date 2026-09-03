@@ -1,4 +1,4 @@
-import type { ProviderId } from "../../lib/types";
+import type { ProviderId, PushToNextCardResult } from "../../lib/types";
 import type { ProviderDefinition } from "../../providers/provider-registry";
 import type { createRuntimeStateStore } from "../core/runtime-state";
 import {
@@ -29,7 +29,7 @@ interface HyattSyncDeps {
   pushToNextCard: (
     providerId: "hyatt",
     data: unknown,
-  ) => Promise<{ ok: boolean; error?: string }>;
+  ) => Promise<PushToNextCardResult>;
 }
 
 function isAwardsMessage(
@@ -228,7 +228,7 @@ export function createHyattSync(options: HyattSyncDeps) {
 
       options.stateStore.assertRunActive("hyatt", attemptId);
       const pushResult = await options.pushToNextCard("hyatt", overviewData);
-      if (!pushResult.ok) {
+      if (!pushResult.ok && !pushResult.awaitingConfirmation) {
         console.warn("[NextCard SW] Hyatt push failed:", pushResult.error);
       }
       options.stateStore.finishSyncRun("hyatt", attemptId);

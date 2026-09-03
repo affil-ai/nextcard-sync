@@ -1,4 +1,4 @@
-import type { AmexLoyaltyData } from "../../lib/types";
+import type { AmexLoyaltyData, PushToNextCardResult } from "../../lib/types";
 import { extractLastFourDigits } from "../../lib/card-digits";
 import type { ProviderDefinition } from "../../providers/provider-registry";
 import type { createRuntimeStateStore } from "../core/runtime-state";
@@ -38,7 +38,7 @@ interface AmexSyncDeps {
   pushToNextCard: (
     providerId: "amex",
     data: unknown,
-  ) => Promise<{ ok: boolean; error?: string }>;
+  ) => Promise<PushToNextCardResult>;
 }
 
 export function createAmexSync(options: AmexSyncDeps) {
@@ -289,7 +289,7 @@ export function createAmexSync(options: AmexSyncDeps) {
 
       options.stateStore.assertRunActive("amex", attemptId);
       const result = await options.pushToNextCard("amex", multiCardData);
-      if (!result.ok) {
+      if (!result.ok && !result.awaitingConfirmation) {
         console.warn("[NextCard SW] Amex push failed:", result.error);
       }
       options.stateStore.finishSyncRun("amex", attemptId);

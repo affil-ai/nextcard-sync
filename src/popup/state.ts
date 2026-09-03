@@ -117,6 +117,7 @@ function isSyncStatus(value: unknown): value is SyncStatus {
     || value === "detecting_login"
     || value === "waiting_for_login"
     || value === "extracting"
+    || value === "awaiting_confirmation"
     || value === "done"
     || value === "cancelled"
     || value === "error"
@@ -306,37 +307,23 @@ export async function refreshExtensionProfile() {
 }
 
 export async function loadInitialPopupState(): Promise<PopupSnapshot> {
-  const [auth, allStates, extensionProfile, rewardsSummaries, travelSyncState] = await Promise.all(
-    [
-      getAuthState(),
-      loadStoredProviderStates(),
-      refreshExtensionProfile(),
-      loadStoredRewardsSummaries(),
-      getTravelSyncStatus(),
-    ],
-  );
+  const auth = await getAuthState();
+  const [liveStates, extensionProfile, rewardsSummaries, travelSyncState] = await Promise.all([
+    auth
+      ? chrome.runtime.sendMessage({ type: "GET_ALL_STATUS" }).catch(() => null)
+      : Promise.resolve(null),
+    refreshExtensionProfile(),
+    loadStoredRewardsSummaries(),
+    getTravelSyncStatus(),
+  ]);
+  const allStates = normalizeRuntimeProviderStates(liveStates);
 
   return { auth, allStates, extensionProfile, rewardsSummaries, travelSyncState };
 }
 
-export async function pollPopupSnapshot() {
-  const auth = await getAuthState();
-  if (!auth) {
-    return {
-      auth,
-      allStates: null,
-      extensionProfile: null,
-      travelSyncState: idleTravelSyncState,
-    };
-  }
-
-  const [liveStates, extensionProfile, travelSyncState] = await Promise.all([
-    chrome.runtime.sendMessage({ type: "GET_ALL_STATUS" }),
-    getExtensionProfile(),
-    getTravelSyncStatus(),
-  ]);
-  const record = isRecord(liveStates) ? liveStates : {};
-  const allStates = {
+function normalizeRuntimeProviderStates(value: unknown): ProviderStateMap {
+  const record = isRecord(value) ? value : {};
+  return {
     marriott: normalizeProviderState(marriottProviderDataSchema, record.marriott),
     atmos: normalizeProviderState(atmosProviderDataSchema, record.atmos),
     chase: normalizeProviderState(chaseProviderDataSchema, record.chase),
@@ -354,7 +341,6 @@ export async function pollPopupSnapshot() {
     discover: normalizeProviderState(discoverProviderDataSchema, record.discover),
     citi: normalizeProviderState(citiProviderDataSchema, record.citi),
   };
-  return { auth, allStates, extensionProfile, travelSyncState };
 }
 
 export async function getTravelSyncStatus() {
@@ -387,6 +373,26 @@ export async function resetTravelSyncStatus() {
   });
   if (!isRecord(response) || response.ok !== true) return null;
   return normalizeTravelSyncState(response.state);
+}
+
+export async function pollPopupSnapshot() {
+  const auth = await getAuthState();
+  if (!auth) {
+    return {
+      auth,
+      allStates: null,
+      extensionProfile: null,
+      travelSyncState: idleTravelSyncState,
+    };
+  }
+
+  const [liveStates, extensionProfile, travelSyncState] = await Promise.all([
+    chrome.runtime.sendMessage({ type: "GET_ALL_STATUS" }),
+    getExtensionProfile(),
+    getTravelSyncStatus(),
+  ]);
+  const allStates = normalizeRuntimeProviderStates(liveStates);
+  return { auth, allStates, extensionProfile, travelSyncState };
 }
 
 const syncStartRequestsInFlight = new Set<ProviderId>();

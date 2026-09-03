@@ -46,6 +46,9 @@ describe("travel sync coordinator", () => {
     const coordinator = createTravelSyncCoordinator({
       storage,
       isProviderId,
+      prepareProvider: async (providerId) => {
+        events.push(`prepare:${providerId}`);
+      },
       startProvider: async (providerId) => {
         events.push(`start:${providerId}`);
         return true;
@@ -61,8 +64,10 @@ describe("travel sync coordinator", () => {
     const state = await waitForStatus(coordinator, "complete");
 
     expect(events).toEqual([
+      "prepare:aa",
       "start:aa",
       "finish:aa",
+      "prepare:marriott",
       "start:marriott",
       "finish:marriott",
     ]);
@@ -131,7 +136,7 @@ describe("travel sync coordinator", () => {
     });
 
     await Promise.all([coordinator.resume(), coordinator.getStatus()]);
-    expect(startProvider).toHaveBeenCalledTimes(1);
+    await vi.waitFor(() => expect(startProvider).toHaveBeenCalledTimes(1));
     expect(storage.get).toHaveBeenCalledTimes(1);
     finish({ succeeded: true });
     await waitForStatus(coordinator, "complete");

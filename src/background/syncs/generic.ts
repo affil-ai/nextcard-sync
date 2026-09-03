@@ -8,6 +8,7 @@ import type {
   HiltonLoyaltyData,
   MarriottLoyaltyData,
   ProviderId,
+  PushToNextCardResult,
   SouthwestLoyaltyData,
   UnitedLoyaltyData,
 } from "../../lib/types";
@@ -38,7 +39,7 @@ interface GenericSyncDeps {
   pushToNextCard: (
     providerId: ProviderId,
     data: unknown,
-  ) => Promise<{ ok: boolean; error?: string }>;
+  ) => Promise<PushToNextCardResult>;
 }
 
 const ATMOS_REWARDS_URL =
@@ -533,7 +534,7 @@ export function createGenericSyncHandlers(options: GenericSyncDeps) {
 
       options.stateStore.assertRunActive("atmos", attemptId);
       const result = await options.pushToNextCard("atmos", fullData);
-      if (!result.ok) {
+      if (!result.ok && !result.awaitingConfirmation) {
         console.warn("[NextCard SW] Atmos push failed:", result.error);
       }
       options.stateStore.finishSyncRun("atmos", attemptId);
@@ -835,7 +836,7 @@ export function createGenericSyncHandlers(options: GenericSyncDeps) {
           });
           options.stateStore.assertRunActive(providerId, attemptId);
           const pushResult = await options.pushToNextCard(providerId, data);
-          if (!pushResult.ok) {
+          if (!pushResult.ok && !pushResult.awaitingConfirmation) {
             console.warn(
               `[NextCard SW] ${definition.name} push failed:`,
               pushResult.error,
@@ -1018,7 +1019,7 @@ export function createGenericSyncHandlers(options: GenericSyncDeps) {
 
         options.stateStore.assertRunActive(providerId, attemptId);
         const pushResult = await options.pushToNextCard(providerId, data);
-        if (!pushResult.ok) {
+        if (!pushResult.ok && !pushResult.awaitingConfirmation) {
           console.warn(
             `[NextCard SW] ${definition.name} push failed:`,
             pushResult.error,

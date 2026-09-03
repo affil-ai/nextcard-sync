@@ -15,6 +15,7 @@ export const STATUS_LABELS: Record<SyncStatus, string> = {
   detecting_login: "Opening...",
   waiting_for_login: "Waiting for sign in",
   extracting: "Syncing your account...",
+  awaiting_confirmation: "Ready to confirm",
   done: "Sync complete",
   cancelled: "Sync cancelled",
   error: "Something went wrong",
@@ -26,6 +27,7 @@ export const STATUS_SUBTITLES: Record<SyncStatus, string> = {
   waiting_for_login: "",
   extracting:
     "Sit tight — we're navigating your account pages. Please don't close or switch the tab.",
+  awaiting_confirmation: "Review the account owner above before saving.",
   done: "",
   cancelled: "",
   error: "",
@@ -36,6 +38,7 @@ export const STATUS_DOT_CLASS: Record<SyncStatus, string> = {
   detecting_login: "waiting",
   waiting_for_login: "waiting",
   extracting: "extracting",
+  awaiting_confirmation: "confirmation",
   done: "done",
   cancelled: "idle",
   error: "error",

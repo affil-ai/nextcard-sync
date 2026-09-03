@@ -557,6 +557,10 @@
         background: #f6b156;
         animation: pulse 1.2s ease-in-out infinite;
       }
+      .status-dot.confirmation {
+        background: #ae752c;
+        box-shadow: 0 0 0 3px rgb(174 117 44 / 13%);
+      }
       .status-dot.done {
         background: #34c759;
       }
@@ -3173,4 +3177,192 @@
   .offers-progress-bar {
     background: #f1dfca;
   }
+}
+.household-sync-target,
+.household-sync-confirmation {
+  margin: 12px 14px;
+}
+
+.household-sync-target {
+  position: relative;
+  display: grid;
+  grid-template-columns: 32px minmax(0, 1fr) 12px;
+  gap: 10px;
+  align-items: center;
+  margin-right: 20px;
+  margin-left: 20px;
+  padding: 9px 11px;
+  border: 1px solid color-mix(in srgb, var(--border-color, #d8d8dc) 78%, transparent);
+  border-radius: 11px;
+  background: color-mix(in srgb, var(--surface-card, #fff) 82%, #f5efe8);
+  cursor: pointer;
+}
+
+.household-sync-target[hidden],
+.household-sync-confirmation[hidden] {
+  display: none;
+}
+
+.household-sync-confirmation strong {
+  display: block;
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.household-sync-confirmation span {
+  display: block;
+  margin-top: 3px;
+  color: var(--text-secondary, #6b6b73);
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.household-sync-confirmation button {
+  min-height: 36px;
+  border: 1px solid var(--border-color, #d8d8dc);
+  border-radius: 9px;
+  background: var(--surface-card, #fff);
+  color: inherit;
+  font: inherit;
+}
+
+.household-sync-target label {
+  display: block;
+  color: var(--text-secondary, #6b6b73);
+  font-size: 10px;
+  font-weight: 550;
+  line-height: 1.25;
+}
+
+.household-sync-target-icon {
+  display: grid;
+  width: 32px;
+  height: 32px;
+  place-items: center;
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--accent, #9a651e) 12%, transparent);
+  color: var(--accent, #9a651e);
+}
+
+.household-sync-target-icon svg {
+  width: 18px;
+  height: 18px;
+}
+
+.household-sync-target-copy {
+  min-width: 0;
+}
+
+.household-sync-target-copy strong {
+  display: block;
+  margin-top: 1px;
+  overflow: hidden;
+  color: var(--text-primary, #242327);
+  font-size: 13px;
+  font-weight: 650;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.household-sync-target-chevron {
+  color: var(--text-secondary, #6b6b73);
+}
+
+.household-sync-target select {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  padding: 0;
+  appearance: none;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+  opacity: 0;
+}
+
+.household-sync-target:focus-within {
+  border-color: var(--accent, #9a651e);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent, #9a651e) 18%, transparent);
+}
+
+.household-sync-target:has(select:disabled) {
+  cursor: wait;
+  opacity: 0.6;
+}
+
+.household-sync-target select:disabled {
+  cursor: wait;
+}
+
+.visually-hidden {
+  position: absolute !important;
+  width: 1px !important;
+  height: 1px !important;
+  padding: 0 !important;
+  overflow: hidden !important;
+  clip: rect(0, 0, 0, 0) !important;
+  white-space: nowrap !important;
+  border: 0 !important;
+}
+
+.household-sync-confirmation {
+  margin-right: 20px;
+  margin-left: 20px;
+  padding: 12px;
+  border: 1px solid color-mix(in srgb, var(--accent, #9a651e) 25%, transparent);
+  border-radius: 12px;
+  outline: none;
+  background: color-mix(in srgb, var(--accent, #9a651e) 7%, var(--surface-card, #fff));
+}
+
+.household-sync-confirmation:focus-visible {
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent, #9a651e) 20%, transparent);
+}
+
+.household-sync-confirmation-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.household-sync-confirmation button {
+  padding: 0 11px;
+}
+
+#householdSyncConfirmationConfirm {
+  border-color: #ae752c;
+  background: #ae752c;
+  color: #fff;
+}
+
+#householdSyncConfirmationCancel:hover,
+#householdSyncConfirmationCancel:focus-visible {
+  border-color: #b8a79a;
+  background: #f7f1eb;
+  outline: none;
+}
+
+#householdSyncConfirmationConfirm:hover,
+#householdSyncConfirmationConfirm:focus-visible {
+  border-color: #915d20;
+  background: #915d20;
+  outline: none;
+}
+
+.household-sync-confirmation button:focus-visible {
+  box-shadow: 0 0 0 2px #fff, 0 0 0 4px rgb(174 117 44 / 35%);
+}
+
+.household-sync-confirmation button:disabled {
+  cursor: wait;
+  opacity: 0.6;
+}
+
+.provider-status-dot.attention {
+  background: #ae752c;
+  box-shadow: 0 0 0 3px rgb(174 117 44 / 13%);
 }

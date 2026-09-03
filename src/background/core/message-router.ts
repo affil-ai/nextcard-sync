@@ -237,6 +237,7 @@ function isSyncStartInProgress(status: string) {
     status === "detecting_login"
     || status === "waiting_for_login"
     || status === "extracting"
+    || status === "awaiting_confirmation"
   );
 }
 
@@ -252,6 +253,11 @@ export function createMessageRouter(options: {
   recordConsent: (message: Record<string, unknown>) => Promise<void>;
   pushToNextCard: (providerId: ProviderId, data: unknown) => Promise<unknown>;
   deleteFromNextCard: (providerId: ProviderId) => Promise<{ ok: boolean; error?: string }>;
+  prepareSyncTarget?: (providerId: ProviderId) => Promise<boolean>;
+  confirmHouseholdSync?: () => Promise<{ ok: boolean; error?: string }>;
+  cancelHouseholdSyncConfirmation?: () => Promise<{ ok: boolean }>;
+  switchHouseholdMember?: (memberId: string) => Promise<{ ok: boolean; error?: string }>;
+  getHouseholdState?: () => Promise<unknown>;
   isProviderLocked?: (providerId: ProviderId) => Promise<boolean>;
   getExtensionProfile?: () => Promise<ExtensionProfile | null>;
   refreshExtensionProfile?: () => Promise<ExtensionProfile | null>;
@@ -325,6 +331,7 @@ export function createMessageRouter(options: {
             return;
           }
 
+          await options.prepareSyncTarget?.(providerId);
           if (await options.isProviderLocked?.(providerId)) {
             sendResponse({ ok: false, error: "selection_locked" });
             return;
@@ -700,31 +707,77 @@ export function createMessageRouter(options: {
       case "CLEAR_DATA": {
         const providerId = message.provider;
         if (options.stateStore.isProviderId(providerId)) {
-          options.stateStore.updateProvider(providerId, {
-            status: "idle",
-            data: null,
-            error: null,
-            lastSyncedAt: null,
-            progressMessage: null,
-            backendSyncStatus: null,
-            backendSyncError: null,
-            pendingBackendPush: false,
-            lastBackendPushAttemptAt: null,
-          });
-          options.stateStore.setTabId(providerId, null);
           void options.deleteFromNextCard(providerId).then((result) => {
-            if (result.ok) {
-            } else {
+            if (!result.ok) {
               console.warn(
                 `[NextCard SW] Delete failed for ${providerId}:`,
                 result.error,
               );
             }
+            sendResponse(result);
+          }).catch((error) => {
+            sendResponse({
+              ok: false,
+              error: error instanceof Error ? error.message : "Delete failed",
+            });
           });
+          return true;
         }
-        sendResponse({ ok: true });
+        sendResponse({ ok: false, error: "unknown_provider" });
         return true;
       }
+
+      case "GET_HOUSEHOLD_STATE": {
+        if (!options.getHouseholdState) {
+          sendResponse(null);
+          return true;
+        }
+        void options.getHouseholdState()
+          .then((state) => sendResponse(state))
+          .catch(() => sendResponse(null));
+        return true;
+      }
+
+      case "SWITCH_HOUSEHOLD_MEMBER": {
+        const memberId = message.memberId;
+        if (typeof memberId !== "string" || !options.switchHouseholdMember) {
+          sendResponse({ ok: false, error: "invalid_member" });
+          return true;
+        }
+        void options.switchHouseholdMember(memberId)
+          .then(sendResponse)
+          .catch((error) => sendResponse({
+            ok: false,
+            error: error instanceof Error ? error.message : "member_switch_failed",
+          }));
+        return true;
+      }
+
+      case "CONFIRM_HOUSEHOLD_SYNC":
+        if (!options.confirmHouseholdSync) {
+          sendResponse({ ok: false, error: "household_sync_unavailable" });
+          return true;
+        }
+        void options.confirmHouseholdSync()
+          .then(sendResponse)
+          .catch((error) => sendResponse({
+            ok: false,
+            error: error instanceof Error ? error.message : "confirmation_failed",
+          }));
+        return true;
+
+      case "CANCEL_HOUSEHOLD_SYNC_CONFIRMATION":
+        if (!options.cancelHouseholdSyncConfirmation) {
+          sendResponse({ ok: false, error: "household_sync_unavailable" });
+          return true;
+        }
+        void options.cancelHouseholdSyncConfirmation()
+          .then(sendResponse)
+          .catch((error) => sendResponse({
+            ok: false,
+            error: error instanceof Error ? error.message : "confirmation_cancel_failed",
+          }));
+        return true;
 
       case "GET_STATUS": {
         const providerId = message.provider;

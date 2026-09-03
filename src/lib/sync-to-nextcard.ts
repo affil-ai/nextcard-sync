@@ -32,6 +32,13 @@ import {
 import type { StandardizedLoyaltyData, StandardizedIssuerData, QualifyingMetric, Stat } from "../contracts/loyalty-provider-data";
 import { getAuth } from "./auth";
 import { normalizeRewardsSummaries } from "./rewards-summary";
+import type { HouseholdSyncTarget } from "./household-context";
+
+function getExtensionVersion() {
+  return typeof chrome === "undefined"
+    ? "0.8.1"
+    : chrome.runtime.getManifest().version;
+}
 
 function maskId(value: string | null | undefined): string | null {
   if (!value || value.length <= 4) return value ?? null;
@@ -709,7 +716,12 @@ export async function pullFromNextCard(): Promise<{
 
 export async function pushToNextCard(
   provider: ProviderId,
-  data: AnyProviderData
+  data: AnyProviderData,
+  options?: {
+    target?: HouseholdSyncTarget | null;
+    identityConfirmed?: boolean;
+    manualConversionConfirmed?: boolean;
+  },
 ): Promise<PushToNextCardResult> {
   const auth = await getAuth();
   if (!auth) {
@@ -723,23 +735,77 @@ export async function pushToNextCard(
   }
 
   const standardized = toStandardizedProviderData(provider, validatedProviderData.data);
-  const common = extractCommonFields(provider, validatedProviderData.data);
+  const commonFields = extractCommonFields(provider, validatedProviderData.data);
   const body = maskSensitiveFields({
     provider,
     loyaltyProgramSlug: PROVIDER_TO_SLUG[provider],
-    ...common,
+    ...commonFields,
     providerData: standardized,
     rawProviderData: data,
   });
 
   try {
-    const response = await fetch(`${__CONVEX_SITE_URL__}/extension/sync`, {
+    if (options?.target) {
+      const preflightResponse = await fetch(
+        `${__CONVEX_SITE_URL__}/extension/v2/preflight`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${auth.token}`,
+            "X-Nextcard-Extension-Version": getExtensionVersion(),
+            "X-Nextcard-Protocol-Version": "2",
+          },
+          body: JSON.stringify({
+            operationId: options.target.operationId,
+            memberId: options.target.memberId,
+            contextRevision: options.target.contextRevision,
+            input: body,
+            identityEvidence: {
+              memberNumber: commonFields.memberNumber,
+            },
+            identityConfirmed: options.identityConfirmed === true,
+            manualConversionConfirmed:
+              options.manualConversionConfirmed === true,
+          }),
+        },
+      );
+      const preflight = await preflightResponse.json().catch(() => ({}));
+      if (!preflightResponse.ok) {
+        const code = typeof preflight.code === "string"
+          ? preflight.code
+          : `HTTP ${preflightResponse.status}`;
+        return {
+          ok: false,
+          error: code,
+          code,
+          existingMemberId:
+            typeof preflight.existingMemberId === "string"
+              ? preflight.existingMemberId
+              : undefined,
+          confirmationRequired:
+            code === "identity_confirmation_required"
+            || code === "confirmation_required",
+          manualConversionRequired: code === "manual_conversion_required",
+        };
+      }
+    }
+
+    const endpoint = options?.target
+      ? "/extension/v2/sync"
+      : "/extension/sync";
+    const requestBody = options?.target
+      ? { operationId: options.target.operationId, input: body }
+      : body;
+    const response = await fetch(`${__CONVEX_SITE_URL__}${endpoint}`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
         Authorization: `Bearer ${auth.token}`,
+        "X-Nextcard-Extension-Version": getExtensionVersion(),
+        "X-Nextcard-Protocol-Version": options?.target ? "2" : "1",
       },
-      body: JSON.stringify(body),
+      body: JSON.stringify(requestBody),
     });
 
     const result = await response.json().catch(() => ({}));
@@ -757,7 +823,14 @@ export async function pushToNextCard(
     if (!response.ok) {
       return {
         ok: false,
-        error: typeof result.error === "string" ? result.error : `HTTP ${response.status}`,
+        error: typeof result.error === "string"
+          ? result.error
+          : typeof result.code === "string"
+            ? result.code
+            : `HTTP ${response.status}`,
+        code: typeof result.code === "string" ? result.code : undefined,
+        manualConversionRequired:
+          result.code === "manual_conversion_required",
         ...metadata,
       };
     }
@@ -765,6 +838,43 @@ export async function pushToNextCard(
     return { ok: true, ...metadata };
   } catch (err) {
     return { ok: false, error: err instanceof Error ? err.message : "Network error" };
+  }
+}
+
+export async function pullHouseholdMemberFromNextCard(memberId: string) {
+  const auth = await getAuth();
+  if (!auth) return { ok: false, error: "Not signed in to NextCard" };
+  try {
+    const url = new URL(`${__CONVEX_SITE_URL__}/extension/v2/pull`);
+    url.searchParams.set("memberId", memberId);
+    const response = await fetch(url, {
+      headers: {
+        Authorization: `Bearer ${auth.token}`,
+        "X-Nextcard-Extension-Version": getExtensionVersion(),
+        "X-Nextcard-Protocol-Version": "2",
+      },
+    });
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      return {
+        ok: false,
+        error: typeof result.code === "string"
+          ? result.code
+          : `HTTP ${response.status}`,
+      };
+    }
+    return {
+      ok: true,
+      accounts: Array.isArray(result.accounts) ? result.accounts : [],
+      summaries: Array.isArray(result.summaries)
+        ? normalizeRewardsSummaries(result.summaries)
+        : [],
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      error: error instanceof Error ? error.message : "Network error",
+    };
   }
 }
 
@@ -789,5 +899,43 @@ export async function deleteFromNextCard(provider: ProviderId): Promise<{ ok: bo
     return { ok: true };
   } catch (err) {
     return { ok: false, error: err instanceof Error ? err.message : "Network error" };
+  }
+}
+
+export async function deleteHouseholdProviderFromNextCard(
+  target: HouseholdSyncTarget,
+): Promise<{ ok: boolean; error?: string }> {
+  const auth = await getAuth();
+  if (!auth) return { ok: false, error: "Not signed in" };
+  try {
+    const response = await fetch(`${__CONVEX_SITE_URL__}/extension/v2/delete`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${auth.token}`,
+        "X-Nextcard-Extension-Version": getExtensionVersion(),
+        "X-Nextcard-Protocol-Version": "2",
+      },
+      body: JSON.stringify({
+        memberId: target.memberId,
+        provider: target.provider,
+        requestId: target.operationId,
+      }),
+    });
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      return {
+        ok: false,
+        error: typeof result.code === "string"
+          ? result.code
+          : `HTTP ${response.status}`,
+      };
+    }
+    return { ok: true };
+  } catch (error) {
+    return {
+      ok: false,
+      error: error instanceof Error ? error.message : "Network error",
+    };
   }
 }

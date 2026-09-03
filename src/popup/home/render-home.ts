@@ -180,7 +180,14 @@ export function createHomeRenderer(options: {
           state?.pendingBackendPush
           || state?.status === "error"
           || state?.backendSyncStatus === "partial";
-        const dotClass = isSyncing ? "syncing" : hasError ? "error" : "done";
+        const awaitingConfirmation = state?.status === "awaiting_confirmation";
+        const dotClass = isSyncing
+          ? "syncing"
+          : awaitingConfirmation
+            ? "attention"
+            : hasError
+              ? "error"
+              : "done";
         const balance = formatRewardsSummaryBalance(summary);
         const meta = getRewardsSummaryMeta(summary);
         const lastSyncedAt = state?.lastSyncedAt ?? summary.lastSyncedAt;
@@ -198,7 +205,7 @@ export function createHomeRenderer(options: {
               <strong>${escapeHtml(summary.programName)}</strong>
               ${providerLabel ? `<span>${escapeHtml(providerLabel)}</span>` : ""}
             </div>
-            <div class="provider-status-dot ${dotClass}" aria-label="${isSyncing ? "Syncing" : hasError ? "Needs attention" : "Synced"}"></div>
+            <div class="provider-status-dot ${dotClass}" aria-label="${isSyncing ? "Syncing" : awaitingConfirmation ? "Ready to confirm" : hasError ? "Needs attention" : "Synced"}"></div>
           </div>
           <div class="rewards-summary-body">
             ${balance ? `<strong class="rewards-summary-balance" aria-label="Balance ${escapeHtml(balance)}">${escapeHtml(balance)}</strong>` : ""}
@@ -263,6 +270,8 @@ export function createHomeRenderer(options: {
           || state?.status === "waiting_for_login";
         const dotClass = isSyncing
           ? "syncing"
+          : state?.status === "awaiting_confirmation"
+            ? "attention"
           : state?.pendingBackendPush
             ? "error"
             : state?.status === "done"

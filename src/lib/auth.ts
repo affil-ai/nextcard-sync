@@ -40,6 +40,9 @@ export async function clearAuth(): Promise<void> {
     || key === "offerUrlCache"
     || key === "detectedOfferUrlCache"
     || key === "pendingOfferSyncs"
+    || key === "nextcard_household_context_v2"
+    || key === "nextcard_household_selected_member_v2"
+    || key === "pending_household_sync_confirmation_v2"
     || key === "disclosureAccepted"
     || key === "consentGiven"
     || key === "firstSyncCompleted"
@@ -47,6 +50,7 @@ export async function clearAuth(): Promise<void> {
     || key === "pendingDestination"
     || key === "pendingTab"
     || key.startsWith("provider_")
+    || key.startsWith("rewards_summaries_v2::")
   ));
   if (accountScopedKeys.length > 0) {
     await chrome.storage.local.remove(accountScopedKeys);
