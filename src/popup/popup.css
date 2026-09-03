@@ -211,6 +211,28 @@
         white-space: nowrap;
       }
 
+      .rewards-sync-all-actions {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+
+      .rewards-sync-all-cancel {
+        border: 0;
+        background: transparent;
+        color: #5a4a3e;
+        cursor: pointer;
+        font: inherit;
+        font-size: 12px;
+        font-weight: 600;
+        padding: 6px 2px;
+      }
+
+      .rewards-sync-all-cancel:hover,
+      .rewards-sync-all-cancel:focus-visible {
+        text-decoration: underline;
+      }
+
       .rewards-sync-all-btn:hover,
       .rewards-sync-all-btn:focus-visible {
         border-color: #f6b156;

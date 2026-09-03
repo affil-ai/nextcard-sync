@@ -59,6 +59,7 @@ export function createHomeRenderer(options: {
   onSummarySelected: (summary: ExtensionRewardsSummary) => void;
   onSummarySyncRequested: (providerId: ProviderId) => void;
   onSyncAllRequested: (providerIds: ProviderId[]) => void;
+  onSyncAllCancelRequested: () => void;
 }) {
   let lastHomeSnapshot = "";
 
@@ -110,7 +111,9 @@ export function createHomeRenderer(options: {
       groupLabel.textContent = "Your rewards";
       heading.appendChild(groupLabel);
 
-      if (travelProviderIds.length > 1) {
+      if (travelProviderIds.length > 1 || syncAllState.status === "running") {
+        const actions = document.createElement("div");
+        actions.className = "rewards-sync-all-actions";
         const syncAllButton = document.createElement("button");
         syncAllButton.className = "rewards-sync-all-btn";
         syncAllButton.type = "button";
@@ -128,7 +131,16 @@ export function createHomeRenderer(options: {
         syncAllButton.addEventListener("click", () =>
           options.onSyncAllRequested(travelProviderIds)
         );
-        heading.appendChild(syncAllButton);
+        actions.appendChild(syncAllButton);
+        if (syncAllState.status === "running") {
+          const cancelButton = document.createElement("button");
+          cancelButton.className = "rewards-sync-all-cancel";
+          cancelButton.type = "button";
+          cancelButton.textContent = "Cancel all";
+          cancelButton.addEventListener("click", options.onSyncAllCancelRequested);
+          actions.appendChild(cancelButton);
+        }
+        heading.appendChild(actions);
       }
       options.providerList.appendChild(heading);
 
@@ -141,6 +153,10 @@ export function createHomeRenderer(options: {
         progress.setAttribute("aria-live", "polite");
         if (syncAllState.status === "running" && syncAllState.currentProviderId) {
           progress.textContent = `Syncing ${syncAllState.processedCount + 1} of ${syncAllState.providerIds.length}: ${providerRegistry[syncAllState.currentProviderId].name}.`;
+        } else if (syncAllState.status === "cancelled") {
+          progress.textContent = syncAllState.processedCount === 0
+            ? "Travel sync cancelled."
+            : `Travel sync cancelled after ${syncAllState.processedCount} of ${syncAllState.providerIds.length} programs.`;
         } else {
           const succeededCount = syncAllState.processedCount - syncAllState.failedCount;
           progress.textContent = syncAllState.failedCount === 0

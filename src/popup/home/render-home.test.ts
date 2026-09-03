@@ -2,13 +2,11 @@ import { describe, expect, it } from "vitest";
 
 import type {
   ExtensionRewardsSummary,
-  ProviderId,
   ProviderSyncState,
 } from "../../lib/types";
 import {
   getConnectedTravelProviderIds,
   hasConnectedRewards,
-  syncRewardsProvidersSequentially,
 } from "./home-state";
 
 const summary: ExtensionRewardsSummary = {
@@ -78,51 +76,5 @@ describe("getConnectedTravelProviderIds", () => {
     expect(getConnectedTravelProviderIds(summaries, ["hilton"])).toEqual([
       "aa",
     ]);
-  });
-});
-
-describe("syncRewardsProvidersSequentially", () => {
-  it("waits for each program before starting the next", async () => {
-    const events: string[] = [];
-
-    const failedCount = await syncRewardsProvidersSequentially({
-      providerIds: ["aa", "marriott"],
-      startProvider: async (providerId) => {
-        events.push(`start:${providerId}`);
-        return true;
-      },
-      waitForCompletion: async (providerId) => {
-        events.push(`finish:${providerId}`);
-        return { succeeded: true };
-      },
-      onProgress: (providerId) => events.push(`progress:${providerId}`),
-    });
-
-    expect(events).toEqual([
-      "progress:aa",
-      "start:aa",
-      "finish:aa",
-      "progress:marriott",
-      "start:marriott",
-      "finish:marriott",
-    ]);
-    expect(failedCount).toBe(0);
-  });
-
-  it("continues after a program fails", async () => {
-    const started: ProviderId[] = [];
-
-    const failedCount = await syncRewardsProvidersSequentially({
-      providerIds: ["aa", "marriott"],
-      startProvider: async (providerId) => {
-        started.push(providerId);
-        return providerId !== "aa";
-      },
-      waitForCompletion: async () => ({ succeeded: true }),
-      onProgress: () => {},
-    });
-
-    expect(started).toEqual(["aa", "marriott"]);
-    expect(failedCount).toBe(1);
   });
 });

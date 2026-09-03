@@ -20,7 +20,11 @@ import { syncOffersToNextCard, syncDetectedOffersToNextCard, retryPendingOfferSy
 import type { OfferSyncPayload, DetectedOfferSyncPayload } from "../lib/sync-offers-to-nextcard";
 import { retryPendingOfferActivationCompletions } from "../lib/offer-activation-usage";
 import { providerRegistry } from "../providers/provider-registry";
-import { createMessageRouter, createExternalMessageRouter } from "./core/message-router";
+import {
+  createMessageRouter,
+  createExternalMessageRouter,
+  resolveSyncStarter,
+} from "./core/message-router";
 import { createRuntimeStateStore } from "./core/runtime-state";
 import {
   createExtensionNavigationState,
@@ -36,6 +40,7 @@ import { createHyattSync } from "./syncs/hyatt";
 import { registerMerchantOfferAlertMonitor } from "./merchant-offer-alerts";
 import { createOfferOperationStore } from "./offer-operation-store";
 import { createOfferOperationCoordinator } from "./offer-operation-coordinator";
+import { createTravelSyncCoordinator } from "./travel-sync-coordinator";
 
 const VERIFY_INTERVAL_MS = 5 * 60 * 1000;
 const BACKEND_PUSH_RETRY_COOLDOWN_MS = 30 * 1000;
@@ -309,11 +314,14 @@ async function recordConsent(message: Record<string, unknown>) {
   }
 }
 
-function onSignOut() {
+async function onSignOut() {
   resetAuthCache();
   stateStore.resetAllStates();
-  void setStoredExtensionProfile(null);
-  void offerCoordinator.clearAccountState();
+  await Promise.all([
+    setStoredExtensionProfile(null),
+    offerCoordinator.clearAccountState(),
+    travelSyncCoordinator.clear(),
+  ]);
 }
 
 async function pushScrapedData(providerId: ProviderId, data: unknown) {
@@ -502,6 +510,80 @@ const syncHandlers = {
   }),
 };
 
+async function providerIsLocked(providerId: ProviderId) {
+  const profile = await getBestAvailableExtensionProfile();
+  if (isProviderLocked(profile, providerId)) {
+    return true;
+  }
+
+  if (profile?.accountLevel === "pro") {
+    return false;
+  }
+
+  try {
+    const selection = await selectExtensionSyncProvider(providerId);
+    return !selection.ok;
+  } catch (error) {
+    console.warn("[NextCard SW] Extension provider selection failed:", error);
+    return true;
+  }
+}
+
+async function startProviderForTravelSync(providerId: ProviderId) {
+  await persistedStateHydrated;
+  const status = stateStore.states[providerId].status;
+  if (
+    stateStore.getRun(providerId)
+    || status === "detecting_login"
+    || status === "waiting_for_login"
+    || status === "extracting"
+  ) {
+    return true;
+  }
+  if (await providerIsLocked(providerId)) return false;
+
+  const startSync = resolveSyncStarter(providerId, providerRegistry, syncHandlers);
+  void startSync().catch((error) => {
+    const errorMessage = error instanceof Error ? error.message : "Sync failed";
+    stateStore.updateProvider(providerId, {
+      status: "error",
+      error: errorMessage,
+      progressMessage: null,
+    });
+  });
+  return stateStore.waitForSyncStart(providerId);
+}
+
+async function waitForTravelProviderCompletion(providerId: ProviderId) {
+  while (true) {
+    const state = stateStore.states[providerId];
+    const active = state.status === "detecting_login"
+      || state.status === "waiting_for_login"
+      || state.status === "extracting";
+    if (!active) {
+      return {
+        succeeded:
+          state.status === "done"
+          && state.pendingBackendPush !== true
+          && state.backendSyncStatus !== "partial"
+          && state.backendSyncStatus !== "blocked"
+          && state.backendSyncStatus !== "failed",
+      };
+    }
+    await new Promise((resolve) => setTimeout(resolve, 300));
+  }
+}
+
+const travelSyncCoordinator = createTravelSyncCoordinator({
+  storage: chrome.storage.local,
+  isProviderId: stateStore.isProviderId,
+  startProvider: startProviderForTravelSync,
+  waitForCompletion: waitForTravelProviderCompletion,
+  cancelProvider: (providerId) => cancelRun(providerId),
+});
+
+void persistedStateHydrated.then(() => travelSyncCoordinator.resume());
+
 chrome.action.onClicked.addListener((tab) => {
   if (tab.windowId) {
     chrome.sidePanel.open({ windowId: tab.windowId });
@@ -529,29 +611,13 @@ chrome.runtime.onMessage.addListener(
     recordConsent,
     pushToNextCard: pushScrapedData,
     deleteFromNextCard: deleteProviderFromNextCard,
-    isProviderLocked: async (providerId) => {
-      const profile = await getBestAvailableExtensionProfile();
-      if (isProviderLocked(profile, providerId)) {
-        return true;
-      }
-
-      if (profile?.accountLevel === "pro") {
-        return false;
-      }
-
-      try {
-        const selection = await selectExtensionSyncProvider(providerId);
-        return !selection.ok;
-      } catch (error) {
-        console.warn("[NextCard SW] Extension provider selection failed:", error);
-        return true;
-      }
-    },
+    isProviderLocked: providerIsLocked,
     getExtensionProfile: getStoredExtensionProfile,
     refreshExtensionProfile,
     openUpgrade: openUpgradeTab,
     offerOperations,
     offerCoordinator,
+    travelSyncCoordinator,
     syncEnrolledOffers: async (issuer, message) => {
       // Reuse the sync payload shape so message handlers stay aligned with backend expectations.
       const enrolledOffers = message.enrolledOffers as EnrolledOfferSyncMessage[];

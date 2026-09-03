@@ -1,4 +1,9 @@
-import type { ExtensionProfile, NextCardAuth, ProviderId } from "../../lib/types";
+import type {
+  ExtensionProfile,
+  NextCardAuth,
+  ProviderId,
+  TravelSyncState,
+} from "../../lib/types";
 import {
   isOfferIssuer,
   type OfferOperationCard,
@@ -243,7 +248,7 @@ export function createMessageRouter(options: {
   startSignIn: () => Promise<void>;
   clearAuth: () => Promise<void>;
   getCachedAuth: () => Promise<NextCardAuth | null>;
-  onSignOut: () => void;
+  onSignOut: () => Promise<void>;
   recordConsent: (message: Record<string, unknown>) => Promise<void>;
   pushToNextCard: (providerId: ProviderId, data: unknown) => Promise<unknown>;
   deleteFromNextCard: (providerId: ProviderId) => Promise<{ ok: boolean; error?: string }>;
@@ -253,6 +258,12 @@ export function createMessageRouter(options: {
   openUpgrade?: () => Promise<void>;
   offerOperations: OfferOperationStore;
   offerCoordinator: OfferOperationCoordinator;
+  travelSyncCoordinator: {
+    start: (providerIds: ProviderId[]) => Promise<TravelSyncState>;
+    getStatus: () => Promise<TravelSyncState>;
+    cancel: () => Promise<TravelSyncState>;
+    resetResult: () => Promise<TravelSyncState>;
+  };
   syncEnrolledOffers?: (
     issuer: string,
     message: Record<string, unknown>,
@@ -354,6 +365,52 @@ export function createMessageRouter(options: {
             error instanceof Error ? error.message : "Failed to start sync";
           sendResponse({ ok: false, error: errorMessage });
         });
+        return true;
+      }
+
+      case "START_TRAVEL_SYNC": {
+        void (async () => {
+          const requested = Array.isArray(message.providerIds)
+            ? message.providerIds.filter(options.stateStore.isProviderId)
+            : [];
+          const eligible: ProviderId[] = [];
+          for (const providerId of requested) {
+            if (options.providerRegistry[providerId].group === "Banks") continue;
+            if (await options.isProviderLocked?.(providerId)) continue;
+            eligible.push(providerId);
+          }
+          const state = await options.travelSyncCoordinator.start(eligible);
+          sendResponse({ ok: eligible.length > 0, state });
+        })().catch((error) => {
+          sendResponse({
+            ok: false,
+            error: error instanceof Error ? error.message : "Failed to start travel sync",
+          });
+        });
+        return true;
+      }
+
+      case "GET_TRAVEL_SYNC_STATUS": {
+        void options.travelSyncCoordinator.getStatus()
+          .then((state) => sendResponse(state))
+          .catch(() => sendResponse(null));
+        return true;
+      }
+
+      case "CANCEL_TRAVEL_SYNC": {
+        void options.travelSyncCoordinator.cancel()
+          .then((state) => sendResponse({ ok: true, state }))
+          .catch((error) => sendResponse({
+            ok: false,
+            error: error instanceof Error ? error.message : "Failed to cancel travel sync",
+          }));
+        return true;
+      }
+
+      case "RESET_TRAVEL_SYNC_STATUS": {
+        void options.travelSyncCoordinator.resetResult()
+          .then((state) => sendResponse({ ok: true, state }))
+          .catch(() => sendResponse({ ok: false }));
         return true;
       }
 
@@ -706,8 +763,13 @@ export function createMessageRouter(options: {
         return true;
 
       case "SIGN_OUT_NEXTCARD":
-        options.onSignOut();
-        void options.clearAuth().then(() => sendResponse({ ok: true }));
+        void Promise.all([
+          options.onSignOut(),
+          options.clearAuth(),
+        ]).then(
+          () => sendResponse({ ok: true }),
+          () => sendResponse({ ok: false, error: "sign_out_failed" }),
+        );
         return true;
 
       case "GET_AUTH_STATE":

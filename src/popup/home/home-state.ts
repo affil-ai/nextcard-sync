@@ -2,30 +2,12 @@ import type {
   ExtensionRewardsSummary,
   ProviderId,
   ProviderSyncState,
+  TravelSyncState,
 } from "../../lib/types";
 import { orderedProviderIds } from "../../providers/provider-groups";
 import { providerRegistry } from "../../providers/provider-registry";
 
-export interface RewardsSyncAllState {
-  status: "idle" | "running" | "complete";
-  providerIds: ProviderId[];
-  currentProviderId: ProviderId | null;
-  processedCount: number;
-  failedCount: number;
-}
-
-interface RewardsSyncQueueOptions {
-  providerIds: ProviderId[];
-  startProvider: (providerId: ProviderId) => Promise<boolean>;
-  waitForCompletion: (
-    providerId: ProviderId,
-  ) => Promise<{ succeeded: boolean }>;
-  onProgress: (
-    providerId: ProviderId,
-    processedCount: number,
-    failedCount: number,
-  ) => void;
-}
+export type RewardsSyncAllState = TravelSyncState;
 
 export function getConnectedTravelProviderIds(
   rewardsSummaries: ExtensionRewardsSummary[],
@@ -41,33 +23,6 @@ export function getConnectedTravelProviderIds(
     && providerRegistry[providerId].group !== "Banks"
     && !locked.has(providerId)
   ));
-}
-
-export async function syncRewardsProvidersSequentially(
-  options: RewardsSyncQueueOptions,
-) {
-  let failedCount = 0;
-
-  for (const [index, providerId] of options.providerIds.entries()) {
-    options.onProgress(providerId, index, failedCount);
-
-    try {
-      const started = await options.startProvider(providerId);
-      if (!started) {
-        failedCount += 1;
-        continue;
-      }
-
-      const completion = await options.waitForCompletion(providerId);
-      if (!completion.succeeded) {
-        failedCount += 1;
-      }
-    } catch {
-      failedCount += 1;
-    }
-  }
-
-  return failedCount;
 }
 
 export function hasConnectedRewards(

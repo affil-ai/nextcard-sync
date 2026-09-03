@@ -8,6 +8,7 @@ import type {
 } from "../lib/types";
 import {
   getOfferOperationStatusText,
+  getOfferPostEnrollmentNextStep,
   getOfferSaveStatusText,
   isOfferCompletionContinuing,
   isOfferOperationActive,
@@ -26,10 +27,12 @@ import {
   loadInitialPopupState,
   loadOnboardingFlags,
   pollPopupSnapshot,
+  cancelTravelSync,
+  resetTravelSyncStatus,
   startProviderSync,
+  startTravelSync,
   subscribeToOnboardingFlags,
   subscribeToRewardsSummaries,
-  waitForProviderSyncCompletion,
 } from "./state";
 import {
   createConsentController,
@@ -37,10 +40,7 @@ import {
   getOnboardingCompletionAction,
 } from "./onboarding";
 import { createHomeRenderer } from "./home/render-home";
-import {
-  syncRewardsProvidersSequentially,
-  type RewardsSyncAllState,
-} from "./home/home-state";
+import type { RewardsSyncAllState } from "./home/home-state";
 import {
   getOffersSetupCompletedStorageKey,
   getOffersSetupState,
@@ -2281,6 +2281,8 @@ let rewardsSyncAllState: RewardsSyncAllState = {
   currentProviderId: null,
   processedCount: 0,
   failedCount: 0,
+  startedAt: null,
+  updatedAt: null,
 };
 let extensionProfile: ExtensionProfile | null = null;
 let offersSetupCompleted = false;
@@ -2655,12 +2657,7 @@ function renderBackgroundOwnedIssuerState(snapshot: OfferOperationSnapshot) {
       );
       if (!recentResult.hidden) {
         const saveOutcome = getOfferSaveStatusText(state);
-        const hasRemainingOffers = state.cards.some(
-          (card) => (card.availableCount ?? 0) > 0,
-        );
-        const nextStep = hasRemainingOffers
-          ? "Choose another card to keep going."
-          : "All currently available offers have been added.";
+        const nextStep = getOfferPostEnrollmentNextStep(state);
         recentResult.textContent = `${state.added} ${state.added === 1 ? "offer" : "offers"} added${saveOutcome ? ` · ${saveOutcome}` : ""}. ${nextStep}`;
       }
     }
@@ -3376,50 +3373,22 @@ function resetRewardsSyncAllState() {
     currentProviderId: null,
     processedCount: 0,
     failedCount: 0,
+    startedAt: null,
+    updatedAt: null,
   };
   renderRewardsSyncAllState();
+  void resetTravelSyncStatus();
 }
 
 async function runRewardsSyncAll(providerIds: ProviderId[]) {
   if (rewardsSyncAllState.status === "running") return;
 
-  const lockedProviders = new Set(extensionProfile?.lockedProviders ?? []);
-  const eligibleProviderIds = providerIds.filter(
-    (providerId) => !lockedProviders.has(providerId),
-  );
-  if (eligibleProviderIds.length === 0) return;
-
-  rewardsSyncAllState = {
-    status: "running",
-    providerIds: eligibleProviderIds,
-    currentProviderId: eligibleProviderIds[0] ?? null,
-    processedCount: 0,
-    failedCount: 0,
-  };
-  renderRewardsSyncAllState();
-
-  const failedCount = await syncRewardsProvidersSequentially({
-    providerIds: eligibleProviderIds,
-    startProvider: startSyncFlow,
-    waitForCompletion: waitForProviderSyncCompletion,
-    onProgress: (providerId, processedCount, currentFailedCount) => {
-      rewardsSyncAllState = {
-        ...rewardsSyncAllState,
-        currentProviderId: providerId,
-        processedCount,
-        failedCount: currentFailedCount,
-      };
-      renderRewardsSyncAllState();
-    },
-  });
-
-  rewardsSyncAllState = {
-    status: "complete",
-    providerIds: eligibleProviderIds,
-    currentProviderId: null,
-    processedCount: eligibleProviderIds.length,
-    failedCount,
-  };
+  const state = await startTravelSync(providerIds);
+  if (!state) return;
+  rewardsSyncAllState = state;
+  destinationRestored = true;
+  setDestination("rewards");
+  showView("home");
   renderRewardsSyncAllState();
 }
 
@@ -3427,6 +3396,13 @@ function requestRewardsSyncAll(providerIds: ProviderId[]) {
   requestToolConsent(() => {
     void runRewardsSyncAll(providerIds);
   });
+}
+
+async function cancelRewardsSyncAll() {
+  const state = await cancelTravelSync();
+  if (!state) return;
+  rewardsSyncAllState = state;
+  renderRewardsSyncAllState();
 }
 
 let upgradeRequestInFlight = false;
@@ -3469,6 +3445,9 @@ const renderHome = createHomeRenderer({
     void requestSync(providerId);
   },
   onSyncAllRequested: requestRewardsSyncAll,
+  onSyncAllCancelRequested: () => {
+    void cancelRewardsSyncAll();
+  },
 });
 
 function getInitials(name: string | null) {
@@ -3695,6 +3674,7 @@ async function refreshPopupState() {
     if (!snapshot.auth || !snapshot.allStates) return;
 
     latestProviderStates = snapshot.allStates;
+    rewardsSyncAllState = snapshot.travelSyncState;
     renderHome(snapshot.allStates);
     renderAllProviders(snapshot.allStates);
     updateActiveWalletButton(snapshot.allStates);
@@ -3800,6 +3780,7 @@ async function initializePopup() {
   renderAuthState(initialSnapshot.auth);
   if (initialSnapshot.auth) {
     latestRewardsSummaries = initialSnapshot.rewardsSummaries;
+    rewardsSyncAllState = initialSnapshot.travelSyncState;
     latestProviderStates = initialSnapshot.allStates;
     renderHome(initialSnapshot.allStates);
     renderAllProviders(initialSnapshot.allStates);

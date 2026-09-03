@@ -148,13 +148,51 @@ describe("syncOffersToNextCard", () => {
 });
 
 describe("retryPendingOfferSyncs", () => {
-  it("returns saved run ids so operation status can recover after retry", async () => {
+  it("keeps a run pending until every same-run card payload is saved", async () => {
+    const secondCardPayload = {
+      ...payload,
+      issuerCardId: "card-456",
+      issuerCardName: "Freedom",
+      issuerCardLastDigits: "4567",
+    };
+    vi.stubGlobal("fetch", vi.fn()
+      .mockResolvedValueOnce({ ok: true, json: async () => ({}) })
+      .mockResolvedValueOnce({
+        ok: false,
+        status: 503,
+        json: async () => ({ error: "Temporarily unavailable" }),
+      }));
+    storageGet.mockImplementation(async (key: string) => (
+      key === "pendingOfferSyncs"
+        ? { pendingOfferSyncs: [payload, secondCardPayload] }
+        : {}
+    ));
+    storageSet.mockResolvedValue(undefined);
+
+    await expect(retryPendingOfferSyncs()).resolves.toEqual({
+      savedRunIds: [],
+      remainingRunIds: ["run-123"],
+    });
+    expect(storageSet).toHaveBeenCalledWith({
+      pendingOfferSyncs: [secondCardPayload],
+    });
+  });
+
+  it("returns a run as saved after every same-run card payload succeeds", async () => {
+    const secondCardPayload = {
+      ...payload,
+      issuerCardId: "card-456",
+      issuerCardName: "Freedom",
+      issuerCardLastDigits: "4567",
+    };
     vi.stubGlobal("fetch", vi.fn(async () => ({
       ok: true,
       json: async () => ({}),
     })));
     storageGet.mockImplementation(async (key: string) => (
-      key === "pendingOfferSyncs" ? { pendingOfferSyncs: [payload] } : {}
+      key === "pendingOfferSyncs"
+        ? { pendingOfferSyncs: [payload, secondCardPayload] }
+        : {}
     ));
     storageSet.mockResolvedValue(undefined);
 
@@ -163,6 +201,26 @@ describe("retryPendingOfferSyncs", () => {
       remainingRunIds: [],
     });
     expect(storageSet).toHaveBeenCalledWith({ pendingOfferSyncs: [] });
+  });
+
+  it("keeps successful retries pending when the queue update cannot be persisted", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => ({
+      ok: true,
+      json: async () => ({}),
+    })));
+    storageGet.mockImplementation(async (key: string) => (
+      key === "pendingOfferSyncs" ? { pendingOfferSyncs: [payload] } : {}
+    ));
+    storageSet.mockImplementation(async (values: Record<string, unknown>) => {
+      if ("pendingOfferSyncs" in values) {
+        throw new Error("storage quota exceeded");
+      }
+    });
+
+    await expect(retryPendingOfferSyncs()).resolves.toEqual({
+      savedRunIds: [],
+      remainingRunIds: ["run-123"],
+    });
   });
 });
 

@@ -5,6 +5,7 @@ import type {
   ProviderId,
   ProviderStateMap,
   ProviderSyncState,
+  TravelSyncState,
   SyncStatus,
   BackendSyncStatus,
 } from "../lib/types";
@@ -44,6 +45,52 @@ export interface PopupSnapshot {
   allStates: ProviderStateMap;
   extensionProfile: ExtensionProfile | null;
   rewardsSummaries: ExtensionRewardsSummary[];
+  travelSyncState: TravelSyncState;
+}
+
+const idleTravelSyncState: TravelSyncState = {
+  status: "idle",
+  providerIds: [],
+  currentProviderId: null,
+  processedCount: 0,
+  failedCount: 0,
+  startedAt: null,
+  updatedAt: null,
+};
+
+function isKnownProviderId(value: unknown): value is ProviderId {
+  return typeof value === "string"
+    && orderedProviderIds.some((candidate) => candidate === value);
+}
+
+function normalizeTravelSyncState(value: unknown): TravelSyncState {
+  if (!isRecord(value)) return idleTravelSyncState;
+  const providerIds = Array.isArray(value.providerIds)
+    ? value.providerIds.filter(
+        isKnownProviderId,
+      )
+    : [];
+  const status = value.status === "running"
+    || value.status === "complete"
+    || value.status === "cancelled"
+    ? value.status
+    : "idle";
+  return {
+    status,
+    providerIds,
+    currentProviderId:
+      isKnownProviderId(value.currentProviderId)
+        ? value.currentProviderId
+        : null,
+    processedCount: typeof value.processedCount === "number"
+      ? Math.max(0, Math.floor(value.processedCount))
+      : 0,
+    failedCount: typeof value.failedCount === "number"
+      ? Math.max(0, Math.floor(value.failedCount))
+      : 0,
+    startedAt: typeof value.startedAt === "string" ? value.startedAt : null,
+    updatedAt: typeof value.updatedAt === "string" ? value.updatedAt : null,
+  };
 }
 
 function emptyProviderState<T>(): ProviderSyncState<T> {
@@ -259,27 +306,34 @@ export async function refreshExtensionProfile() {
 }
 
 export async function loadInitialPopupState(): Promise<PopupSnapshot> {
-  const [auth, allStates, extensionProfile, rewardsSummaries] = await Promise.all(
+  const [auth, allStates, extensionProfile, rewardsSummaries, travelSyncState] = await Promise.all(
     [
       getAuthState(),
       loadStoredProviderStates(),
       refreshExtensionProfile(),
       loadStoredRewardsSummaries(),
+      getTravelSyncStatus(),
     ],
   );
 
-  return { auth, allStates, extensionProfile, rewardsSummaries };
+  return { auth, allStates, extensionProfile, rewardsSummaries, travelSyncState };
 }
 
 export async function pollPopupSnapshot() {
   const auth = await getAuthState();
   if (!auth) {
-    return { auth, allStates: null, extensionProfile: null };
+    return {
+      auth,
+      allStates: null,
+      extensionProfile: null,
+      travelSyncState: idleTravelSyncState,
+    };
   }
 
-  const [liveStates, extensionProfile] = await Promise.all([
+  const [liveStates, extensionProfile, travelSyncState] = await Promise.all([
     chrome.runtime.sendMessage({ type: "GET_ALL_STATUS" }),
     getExtensionProfile(),
+    getTravelSyncStatus(),
   ]);
   const record = isRecord(liveStates) ? liveStates : {};
   const allStates = {
@@ -300,7 +354,39 @@ export async function pollPopupSnapshot() {
     discover: normalizeProviderState(discoverProviderDataSchema, record.discover),
     citi: normalizeProviderState(citiProviderDataSchema, record.citi),
   };
-  return { auth, allStates, extensionProfile };
+  return { auth, allStates, extensionProfile, travelSyncState };
+}
+
+export async function getTravelSyncStatus() {
+  const response: unknown = await chrome.runtime.sendMessage({
+    type: "GET_TRAVEL_SYNC_STATUS",
+  });
+  return normalizeTravelSyncState(response);
+}
+
+export async function startTravelSync(providerIds: ProviderId[]) {
+  const response: unknown = await chrome.runtime.sendMessage({
+    type: "START_TRAVEL_SYNC",
+    providerIds,
+  });
+  if (!isRecord(response) || response.ok !== true) return null;
+  return normalizeTravelSyncState(response.state);
+}
+
+export async function cancelTravelSync() {
+  const response: unknown = await chrome.runtime.sendMessage({
+    type: "CANCEL_TRAVEL_SYNC",
+  });
+  if (!isRecord(response) || response.ok !== true) return null;
+  return normalizeTravelSyncState(response.state);
+}
+
+export async function resetTravelSyncStatus() {
+  const response: unknown = await chrome.runtime.sendMessage({
+    type: "RESET_TRAVEL_SYNC_STATUS",
+  });
+  if (!isRecord(response) || response.ok !== true) return null;
+  return normalizeTravelSyncState(response.state);
 }
 
 const syncStartRequestsInFlight = new Set<ProviderId>();

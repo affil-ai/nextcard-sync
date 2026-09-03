@@ -24,6 +24,16 @@ export type ProviderId = "marriott" | "atmos" | "chase" | "aa" | "delta" | "unit
 export type SyncStatus = "idle" | "detecting_login" | "waiting_for_login" | "extracting" | "done" | "cancelled" | "error";
 export type BackendSyncStatus = "saved" | "partial" | "blocked" | "failed";
 
+export interface TravelSyncState {
+  status: "idle" | "running" | "complete" | "cancelled";
+  providerIds: ProviderId[];
+  currentProviderId: ProviderId | null;
+  processedCount: number;
+  failedCount: number;
+  startedAt: string | null;
+  updatedAt: string | null;
+}
+
 export interface RewardsProgramSyncSummary {
   id: string;
   slug: string;

@@ -7,6 +7,7 @@ import {
   canTransitionOfferOperation,
   createOfferOperation,
   getOfferOperationStatusText,
+  getOfferPostEnrollmentNextStep,
   getOfferSaveStatusText,
   isOfferCompletionContinuing,
   isOfferOperationHistoryFresh,
@@ -181,6 +182,45 @@ describe("offer operation state", () => {
       selectedCardKeys: [],
       saveStatus: "saved",
     })).toBe(false);
+  });
+
+  it("does not claim all offers were added when refreshed counts are unknown", () => {
+    const state = {
+      ...createOfferOperation("chase", "run-unknown"),
+      phase: "ready_to_add" as const,
+      added: 100,
+      total: 100,
+      cards: [{
+        key: "card-0",
+        name: "Sapphire",
+        lastDigits: "1234",
+        availableCount: null,
+        countStatus: "unknown" as const,
+      }],
+    };
+
+    expect(getOfferPostEnrollmentNextStep(state)).toBe(
+      "Refresh the card list to check for any offers still available.",
+    );
+  });
+
+  it("only claims completion from complete zero counts", () => {
+    const state = {
+      ...createOfferOperation("citi", "run-complete"),
+      phase: "ready_to_add" as const,
+      added: 4,
+      cards: [{
+        key: "card-0",
+        name: "Citi card",
+        lastDigits: "5678",
+        availableCount: 0,
+        countStatus: "complete" as const,
+      }],
+    };
+
+    expect(getOfferPostEnrollmentNextStep(state)).toBe(
+      "All currently available offers have been added.",
+    );
   });
 
   it("normalizes corrupt persisted snapshots safely", () => {

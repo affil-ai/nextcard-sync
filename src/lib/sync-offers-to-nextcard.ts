@@ -319,6 +319,22 @@ export interface OfferSyncResult {
   error: string | null;
 }
 
+interface PendingOfferSyncRetryResult {
+  savedRunIds: string[];
+  remainingRunIds: string[];
+}
+
+function buildPendingOfferSyncRetryResult(
+  savedRunIds: string[],
+  remainingRunIds: string[],
+): PendingOfferSyncRetryResult {
+  const remaining = new Set(remainingRunIds);
+  return {
+    savedRunIds: Array.from(new Set(savedRunIds)).filter((runId) => !remaining.has(runId)),
+    remainingRunIds: Array.from(remaining),
+  };
+}
+
 export async function syncOffersToNextCard(payload: OfferSyncPayload): Promise<OfferSyncResult> {
   if (payload.offers.length === 0) return { status: "saved", error: null };
 
@@ -418,13 +434,13 @@ async function retryPendingEnrolledOfferSyncs(): Promise<{
     if (remaining.length > 0) {
       console.warn(`[NextCard Offers Sync] ${remaining.length} syncs still pending after retry`);
     }
-    return {
+    return buildPendingOfferSyncRetryResult(
       savedRunIds,
-      remainingRunIds: remaining.flatMap((payload) => payload.runId ? [payload.runId] : []),
-    };
+      remaining.flatMap((payload) => payload.runId ? [payload.runId] : []),
+    );
   } catch (e) {
     console.error("[NextCard Offers Sync] retryPendingOfferSyncs error:", e);
-    return { savedRunIds, remainingRunIds: [] };
+    return buildPendingOfferSyncRetryResult([], savedRunIds);
   }
 }
 
@@ -548,13 +564,13 @@ async function runPendingDetectedOfferSyncs(): Promise<{
     }
 
     await chrome.storage.local.set({ [DETECTED_STORAGE_KEY]: remaining });
-    return {
+    return buildPendingOfferSyncRetryResult(
       savedRunIds,
-      remainingRunIds: remaining.flatMap((payload) => payload.runId ? [payload.runId] : []),
-    };
+      remaining.flatMap((payload) => payload.runId ? [payload.runId] : []),
+    );
   } catch (error) {
     console.error("[NextCard Detected Offers] retryPendingDetectedOfferSyncs error:", error);
-    return { savedRunIds, remainingRunIds: [] };
+    return buildPendingOfferSyncRetryResult([], savedRunIds);
   }
 }
 
@@ -573,16 +589,16 @@ export async function retryPendingOfferSyncs(): Promise<{
     retryPendingEnrolledOfferSyncs(),
     retryPendingDetectedOfferSyncs(),
   ]);
-  return {
-    savedRunIds: Array.from(new Set([
+  return buildPendingOfferSyncRetryResult(
+    [
       ...enrolledResult.savedRunIds,
       ...detectedResult.savedRunIds,
-    ])),
-    remainingRunIds: Array.from(new Set([
+    ],
+    [
       ...enrolledResult.remainingRunIds,
       ...detectedResult.remainingRunIds,
-    ])),
-  };
+    ],
+  );
 }
 
 /** Pull offers from backend and rebuild both URL caches. Call on startup/re-auth. */

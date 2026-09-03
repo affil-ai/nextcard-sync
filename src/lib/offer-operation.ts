@@ -353,6 +353,20 @@ export function getOfferOperationStatusText(
   }
 }
 
+export function getOfferPostEnrollmentNextStep(state: OfferOperationState) {
+  const hasRemainingOffers = state.cards.some(
+    (card) => card.availableCount != null && card.availableCount > 0,
+  );
+  if (hasRemainingOffers) return "Choose another card to keep going.";
+
+  const hasCompleteCounts = state.cards.length > 0 && state.cards.every(
+    (card) => card.countStatus === "complete" && card.availableCount === 0,
+  );
+  return hasCompleteCounts
+    ? "All currently available offers have been added."
+    : "Refresh the card list to check for any offers still available.";
+}
+
 export function getOfferSaveStatusText(
   state: OfferOperationState,
   now = Date.now(),
