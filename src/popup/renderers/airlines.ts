@@ -19,7 +19,7 @@ import {
   renderAirline,
   renderIssueReportHtml,
   renderValue,
-  showConfirmDelete,
+  confirmDeleteProvider,
   STATUS_SUBTITLES,
   wireAirlineEvents,
 } from "./shared";
@@ -189,9 +189,7 @@ export function createAirlineRenderers(
     chrome.runtime.sendMessage({ type: "CANCEL_SYNC", provider: "atmos" });
   });
   atmosEls.clearBtn.addEventListener("click", async () => {
-    if (await showConfirmDelete("Alaska Atmos")) {
-      chrome.runtime.sendMessage({ type: "CLEAR_DATA", provider: "atmos" });
-    }
+    await confirmDeleteProvider("Alaska Atmos", "atmos");
   });
   atmosEls.rawToggle.addEventListener("click", () => {
     atmosEls.rawData.classList.toggle("visible");

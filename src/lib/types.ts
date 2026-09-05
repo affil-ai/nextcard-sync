@@ -21,7 +21,15 @@ import type {
 
 export type ProviderId = "marriott" | "atmos" | "chase" | "aa" | "delta" | "united" | "southwest" | "ihg" | "hyatt" | "amex" | "capitalone" | "hilton" | "frontier" | "bilt" | "discover" | "citi";
 
-export type SyncStatus = "idle" | "detecting_login" | "waiting_for_login" | "extracting" | "done" | "cancelled" | "error";
+export type SyncStatus =
+  | "idle"
+  | "detecting_login"
+  | "waiting_for_login"
+  | "extracting"
+  | "awaiting_confirmation"
+  | "done"
+  | "cancelled"
+  | "error";
 export type BackendSyncStatus = "saved" | "partial" | "blocked" | "failed";
 
 export interface TravelSyncState {
@@ -45,6 +53,11 @@ export interface RewardsProgramSyncSummary {
 export interface PushToNextCardResult {
   ok: boolean;
   error?: string;
+  code?: string;
+  confirmationRequired?: boolean;
+  manualConversionRequired?: boolean;
+  awaitingConfirmation?: boolean;
+  existingMemberId?: string;
   isLimited?: boolean;
   syncedRewardsPrograms?: RewardsProgramSyncSummary[];
   skippedRewardsPrograms?: RewardsProgramSyncSummary[];
@@ -77,6 +90,15 @@ export interface ProviderSyncState<T = unknown> {
   backendSyncError?: string | null;
   pendingBackendPush?: boolean;
   lastBackendPushAttemptAt?: string | null;
+  syncTarget?: {
+    accountScopeId: string;
+    memberId: string;
+    memberDisplayName: string;
+    memberLifecycleVersion: number;
+    provider: ProviderId;
+    contextRevision: string;
+    operationId: string;
+  } | null;
 }
 
 // ── Provider data types ─────────────────────────────────────

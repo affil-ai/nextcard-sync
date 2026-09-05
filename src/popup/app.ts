@@ -11,6 +11,7 @@ import {
   getOfferPostEnrollmentNextStep,
   getOfferSaveStatusText,
   isOfferCompletionContinuing,
+  isOfferIssuer,
   isOfferOperationActive,
   isOfferResultFresh,
   normalizeOfferOperationSnapshot,
@@ -30,6 +31,7 @@ import {
   cancelTravelSync,
   resetTravelSyncStatus,
   startProviderSync,
+  setDisplayedHouseholdScope,
   startTravelSync,
   subscribeToOnboardingFlags,
   subscribeToRewardsSummaries,
@@ -46,6 +48,12 @@ import {
   getOffersSetupState,
   isOffersSetupComplete,
 } from "./offers-setup";
+import type {
+  HouseholdExtensionContext,
+  HouseholdExtensionMember,
+} from "../lib/household-context";
+import { providerRegistry } from "../providers/provider-registry";
+import { getHouseholdSyncAvailability } from "./household-capabilities";
 
 type ViewName = keyof typeof views;
 
@@ -75,6 +83,334 @@ let offerActivationUsageFetchedAt = 0;
 let offerActivationUsageRequest: Promise<void> | null = null;
 const usageRefreshedOfferRunIds = new Set<string>();
 let offerLimitDialogTrigger: HTMLElement | null = null;
+let householdSyncWritesEnabled = true;
+let householdIssuerSyncEnabled = true;
+let householdOfferWritesEnabled = true;
+const householdSyncTarget = document.getElementById("householdSyncTarget");
+const householdMemberSelectElement = document.getElementById("householdMemberSelect");
+const householdMemberSelect = householdMemberSelectElement instanceof HTMLSelectElement
+  ? householdMemberSelectElement
+  : null;
+const householdSelectedMemberLabel = document.getElementById(
+  "householdSelectedMemberLabel",
+);
+const manageHouseholdBtn = document.getElementById("manageHouseholdBtn");
+const householdSyncConfirmation = document.getElementById(
+  "householdSyncConfirmation",
+);
+const householdSyncConfirmationTitle = document.getElementById(
+  "householdSyncConfirmationTitle",
+);
+const householdSyncConfirmationText = document.getElementById(
+  "householdSyncConfirmationText",
+);
+const householdSyncConfirmationCancelElement = document.getElementById(
+  "householdSyncConfirmationCancel",
+);
+const householdSyncConfirmationCancel = householdSyncConfirmationCancelElement
+  instanceof HTMLButtonElement
+  ? householdSyncConfirmationCancelElement
+  : null;
+const householdSyncConfirmationConfirmElement = document.getElementById(
+  "householdSyncConfirmationConfirm",
+);
+const householdSyncConfirmationConfirm = householdSyncConfirmationConfirmElement
+  instanceof HTMLButtonElement
+  ? householdSyncConfirmationConfirmElement
+  : null;
+let householdConfirmationWasVisible = false;
+
+type HouseholdPopupState = {
+  context: HouseholdExtensionContext;
+  selectedMemberId: string | null;
+  pendingConfirmation: {
+    memberDisplayName: string;
+    provider: string;
+    manualConversionRequired: boolean;
+    collisionMemberDisplayName: string | null;
+  } | null;
+};
+
+function isHouseholdPopupState(value: unknown): value is HouseholdPopupState {
+  if (
+    !value
+    || typeof value !== "object"
+    || !("context" in value)
+    || !("selectedMemberId" in value)
+  ) return false;
+  const { context, selectedMemberId } = value;
+  return Boolean(
+    context
+    && typeof context === "object"
+    && "members" in context
+    && Array.isArray(context.members)
+    && (selectedMemberId === null || typeof selectedMemberId === "string"),
+  );
+}
+
+function getHouseholdMemberLabel(
+  member: HouseholdExtensionMember,
+  members: HouseholdExtensionMember[],
+) {
+  if (member.isPrimary) return `${member.displayName} · You`;
+  const sameNameMembers = members
+    .filter(
+      (candidate) => candidate.displayName.trim().toLocaleLowerCase()
+        === member.displayName.trim().toLocaleLowerCase(),
+    )
+    .sort((left, right) => left.id.localeCompare(right.id));
+  if (sameNameMembers.length < 2) return member.displayName;
+  return `${member.displayName} · Household member ${
+    sameNameMembers.findIndex((candidate) => candidate.id === member.id) + 1
+  }`;
+}
+
+function getProviderDisplayName(provider: string) {
+  return Object.values(providerRegistry).find(
+    (definition) => definition.id === provider,
+  )?.name ?? provider;
+}
+
+const HOUSEHOLD_ISSUER_PROVIDERS = new Set([
+  "chase",
+  "amex",
+  "capitalone",
+  "bilt",
+  "discover",
+  "citi",
+]);
+
+function setHouseholdSyncButtonsEnabled(
+  loyaltySyncEnabled: boolean,
+  issuerSyncEnabled = true,
+) {
+  for (const provider of Object.values(providerRegistry)) {
+    const button = document.getElementById(`${provider.id}SyncBtn`);
+    if (button instanceof HTMLButtonElement) {
+      const providerEnabled = HOUSEHOLD_ISSUER_PROVIDERS.has(provider.id)
+        ? issuerSyncEnabled
+        : loyaltySyncEnabled;
+      const awaitingConfirmation =
+        latestProviderStates?.[provider.id]?.status === "awaiting_confirmation";
+      button.disabled = !providerEnabled || awaitingConfirmation;
+      button.setAttribute(
+        "aria-disabled",
+        String(!providerEnabled || awaitingConfirmation),
+      );
+    }
+  }
+}
+
+async function refreshHouseholdUi() {
+  let response: unknown;
+  try {
+    response = await chrome.runtime.sendMessage({
+      type: "GET_HOUSEHOLD_STATE",
+    });
+  } catch {
+    return;
+  }
+  const availability = isHouseholdPopupState(response)
+    ? getHouseholdSyncAvailability(response.context, response.selectedMemberId)
+    : null;
+  setDisplayedHouseholdScope(
+    isHouseholdPopupState(response) ? response.context : null,
+    isHouseholdPopupState(response) ? response.selectedMemberId : null,
+  );
+  if (!availability?.householdVisible || !isHouseholdPopupState(response)) {
+    if (householdSyncTarget) householdSyncTarget.hidden = true;
+    if (householdSyncConfirmation) householdSyncConfirmation.hidden = true;
+    householdSyncWritesEnabled = true;
+    householdIssuerSyncEnabled = true;
+    householdOfferWritesEnabled = true;
+    setHouseholdSyncButtonsEnabled(true);
+    const offersTabButton = document.getElementById("offersTab");
+    if (offersTabButton instanceof HTMLButtonElement) {
+      offersTabButton.disabled = false;
+      offersTabButton.title = "";
+    }
+    return;
+  }
+
+  if (householdSyncTarget) householdSyncTarget.hidden = false;
+  if (householdMemberSelect) {
+    householdMemberSelect.replaceChildren();
+    if (response.selectedMemberId === null) {
+      const placeholder = document.createElement("option");
+      placeholder.value = "";
+      placeholder.textContent = "Choose a profile";
+      placeholder.disabled = true;
+      placeholder.selected = true;
+      householdMemberSelect.appendChild(placeholder);
+    }
+    for (const member of response.context.members) {
+      const option = document.createElement("option");
+      option.value = member.id;
+      option.textContent = getHouseholdMemberLabel(member, response.context.members);
+      option.selected = member.id === response.selectedMemberId;
+      householdMemberSelect.appendChild(option);
+    }
+    householdMemberSelect.disabled = false;
+  }
+  const help = document.getElementById("householdSyncTargetHelp");
+  const selected = response.context.members.find(
+    (member) => member.id === response.selectedMemberId,
+  );
+  householdSyncWritesEnabled = availability.loyaltyWrites;
+  if (householdSelectedMemberLabel) {
+    householdSelectedMemberLabel.textContent = selected
+      ? getHouseholdMemberLabel(selected, response.context.members)
+      : "Choose a profile";
+  }
+  householdIssuerSyncEnabled = availability.issuerWrites;
+  householdOfferWritesEnabled = availability.offerWrites;
+  setHouseholdSyncButtonsEnabled(
+    householdSyncWritesEnabled,
+    householdIssuerSyncEnabled,
+  );
+  if (help) {
+    help.textContent = selected && !selected.isPrimary
+      && !response.context.capabilities.loyaltyWrites
+      ? response.context.capabilities.memberIssuerCardSync
+        ? "Rewards sync is paused, but supported bank logins can still sync to this profile."
+        : "Household rewards sync is temporarily unavailable. Switch to Primary to keep syncing."
+      : selected && !selected.isPrimary
+        ? response.context.capabilities.memberIssuerCardSync
+          ? "This bank or rewards login and all of its synced data belong to this profile."
+          : "Bank sync is not enabled for this profile yet. Airlines and hotels remain available."
+        : "Choose which household profile owns this login and its synced data.";
+  }
+  const offersTabButtonElement = document.getElementById("offersTab");
+  const offersTabButton = offersTabButtonElement instanceof HTMLButtonElement
+    ? offersTabButtonElement
+    : null;
+  if (offersTabButton) {
+    const memberOffersEnabled = availability.offerReads;
+    offersTabButton.disabled = !memberOffersEnabled;
+    offersTabButton.title = !memberOffersEnabled
+      ? "Card offers are not enabled for this Household profile yet."
+      : "";
+  }
+  if (
+    selected
+    && !selected.isPrimary
+    && !response.context.capabilities.memberOfferReads
+    && activeDestination === "offers"
+  ) {
+    setDestination("rewards");
+  }
+
+  const confirmation = response.pendingConfirmation;
+  if (householdSyncConfirmation) {
+    householdSyncConfirmation.hidden = !confirmation;
+  }
+  if (confirmation) {
+    const providerName = getProviderDisplayName(confirmation.provider);
+    if (householdSyncConfirmationTitle) {
+      householdSyncConfirmationTitle.textContent = confirmation.collisionMemberDisplayName
+        ? "Possible profile mismatch"
+        : confirmation.manualConversionRequired
+          ? "Review saved balance"
+          : "Ready to confirm";
+    }
+    if (householdSyncConfirmationText) {
+      householdSyncConfirmationText.textContent = confirmation.collisionMemberDisplayName
+        ? `This ${providerName} account looks like ${confirmation.collisionMemberDisplayName}'s account, not ${confirmation.memberDisplayName}. Nothing was saved.`
+        : confirmation.manualConversionRequired
+          ? `Convert the manual balance and sync ${providerName} for ${confirmation.memberDisplayName}?`
+          : `Does this ${providerName} account belong to ${confirmation.memberDisplayName}? Nothing is saved until you confirm.`;
+    }
+    if (householdSyncConfirmationConfirm) {
+      householdSyncConfirmationConfirm.textContent = confirmation.collisionMemberDisplayName
+        ? `Sync to ${confirmation.collisionMemberDisplayName}`
+        : "Confirm and save";
+    }
+    if (!householdConfirmationWasVisible && householdSyncConfirmation) {
+      householdSyncConfirmation.focus({ preventScroll: false });
+    }
+  }
+  householdConfirmationWasVisible = Boolean(confirmation);
+}
+
+householdMemberSelect?.addEventListener("change", async () => {
+  householdMemberSelect.disabled = true;
+  try {
+    const result = await chrome.runtime.sendMessage({
+      type: "SWITCH_HOUSEHOLD_MEMBER",
+      memberId: householdMemberSelect.value,
+    });
+    if (!result?.ok) throw new Error(result?.error ?? "Could not switch wallets.");
+    await refreshHouseholdUi();
+    await refreshPopupState();
+  } catch (error) {
+    console.error("[NextCard Popup] Household wallet switch failed:", error);
+    await refreshHouseholdUi();
+  } finally {
+    householdMemberSelect.disabled = false;
+  }
+});
+
+manageHouseholdBtn?.addEventListener("click", () => {
+  void chrome.tabs.create({
+    url: `${__NEXTCARD_URL__}/dashboard/settings?tab=account`,
+  });
+});
+
+householdSyncConfirmationCancel?.addEventListener("click", async () => {
+  householdSyncConfirmationCancel.disabled = true;
+  try {
+    await chrome.runtime.sendMessage({
+      type: "CANCEL_HOUSEHOLD_SYNC_CONFIRMATION",
+    });
+    await refreshHouseholdUi();
+    await refreshPopupState();
+  } finally {
+    householdSyncConfirmationCancel.disabled = false;
+  }
+});
+
+householdSyncConfirmationConfirm?.addEventListener("click", async () => {
+  let keepConfirmDisabled = false;
+  householdSyncConfirmationConfirm.disabled = true;
+  if (householdSyncConfirmationCancel) {
+    householdSyncConfirmationCancel.disabled = true;
+  }
+  try {
+    const result = await chrome.runtime.sendMessage({
+      type: "CONFIRM_HOUSEHOLD_SYNC",
+    });
+    if (result?.manualConversionRequired) {
+      await refreshHouseholdUi();
+      await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+      const conversionPromptVisible =
+        householdSyncConfirmation?.hidden === false
+        && householdSyncConfirmationTitle?.textContent
+          === "Review saved balance";
+      if (!conversionPromptVisible) {
+        keepConfirmDisabled = true;
+        if (householdSyncConfirmationText) {
+          householdSyncConfirmationText.textContent =
+            "Reload the extension to review and confirm the saved balance conversion.";
+        }
+      }
+      return;
+    }
+    if (!result?.ok) throw new Error(result?.error ?? "Could not save this sync.");
+    await refreshHouseholdUi();
+    await refreshPopupState();
+  } catch (error) {
+    if (householdSyncConfirmationText) {
+      householdSyncConfirmationText.textContent = error instanceof Error
+        ? error.message
+        : "Could not save this sync. Please try again.";
+    }
+  } finally {
+    householdSyncConfirmationConfirm.disabled = keepConfirmDisabled;
+    if (householdSyncConfirmationCancel) {
+      householdSyncConfirmationCancel.disabled = false;
+    }
+  }
+});
 
 function setDestination(destination: "offers" | "rewards", options: { persist?: boolean } = {}) {
   activeDestination = destination;
@@ -223,11 +559,59 @@ async function patchOfferOperation(
   }).catch(() => null);
 }
 
+function renderOfferWritesUnavailable() {
+  renderOfferActivityMessage(
+    "Offer saving is temporarily unavailable",
+    "You can still view saved offers on nextcard. Switch profiles or try again later to check and add offers.",
+  );
+}
+
 async function beginTrackedOfferCheck(
   issuer: OfferIssuer,
   action: () => void,
 ) {
+  if (!householdOfferWritesEnabled) {
+    renderOfferWritesUnavailable();
+    return;
+  }
   if (!offersFirstUiEnabled) {
+    const response: unknown = await chrome.runtime.sendMessage({
+      type: "START_LEGACY_OFFER_OPERATION",
+      issuer,
+    }).catch(() => null);
+    const state = response && typeof response === "object"
+      ? Reflect.get(response, "state")
+      : null;
+    const runId = state && typeof state === "object"
+      && typeof Reflect.get(state, "runId") === "string"
+      ? Reflect.get(state, "runId")
+      : null;
+    if (
+      !response
+      || typeof response !== "object"
+      || Reflect.get(response, "ok") !== true
+      || !runId
+    ) {
+      const error = response && typeof response === "object"
+        ? Reflect.get(response, "error")
+        : null;
+      if (error === "member_offer_writes_disabled") {
+        renderOfferWritesUnavailable();
+        return;
+      }
+      const busy = response && typeof response === "object"
+        ? Reflect.get(response, "busy")
+        : null;
+      const activeIssuer = isOfferIssuer(busy)
+        ? offerIssuerNames[busy]
+        : "another issuer";
+      renderOfferActivityMessage(
+        `Finish or stop ${activeIssuer} first`,
+        "Only one card-offer check can run at a time.",
+      );
+      return;
+    }
+    activeOfferRunIds.set(issuer, runId);
     action();
     return;
   }
@@ -241,6 +625,13 @@ async function beginTrackedOfferCheck(
   } | null;
 
   if (!response?.ok || !response.state?.runId) {
+    const error = response && typeof response === "object"
+      ? Reflect.get(response, "error")
+      : null;
+    if (error === "member_offer_writes_disabled") {
+      renderOfferWritesUnavailable();
+      return;
+    }
     const activeIssuer = response?.busy ? offerIssuerNames[response.busy] : "another issuer";
     renderOfferActivityMessage(
       `Finish or stop ${activeIssuer} first`,
@@ -296,7 +687,11 @@ async function startTrackedEnrollment(
   selectedCardKeys: string[],
   total: number | null,
   options: { addMatchingOffersAcrossCards?: boolean } = {},
-): Promise<"started" | "limit_reached" | "failed"> {
+): Promise<"started" | "limit_reached" | "writes_disabled" | "failed"> {
+  if (!householdOfferWritesEnabled) {
+    renderOfferWritesUnavailable();
+    return "writes_disabled";
+  }
   const runId = activeOfferRunIds.get(issuer);
   if (!runId) return "failed";
   const response = await chrome.runtime.sendMessage({
@@ -321,14 +716,19 @@ async function startTrackedEnrollment(
     showOfferQuotaUnavailableDialog();
     return "failed";
   }
+  if (response?.error === "member_offer_writes_disabled") {
+    renderOfferWritesUnavailable();
+    return "writes_disabled";
+  }
   if (response?.ok === true) {
     offerActivationUsageFetchedAt = 0;
   }
   return response?.ok === true ? "started" : "failed";
 }
 
-async function reserveLegacyEnrollment(requested: number) {
-  const runId = crypto.randomUUID();
+async function reserveLegacyEnrollment(issuer: OfferIssuer, requested: number) {
+  const runId = activeOfferRunIds.get(issuer);
+  if (!runId) return null;
   const response = await chrome.runtime.sendMessage({
     type: "RESERVE_OFFER_ACTIVATION",
     runId,
@@ -621,7 +1021,9 @@ document.addEventListener("click", (event) => {
             "The issuer session or selected card is no longer available.",
           );
         }
-        void refreshOfferOperationUi();
+        if (result !== "writes_disabled") {
+          void refreshOfferOperationUi();
+        }
       });
     }
     return;
@@ -875,7 +1277,10 @@ function initAmexOffers() {
 
   function tryDiscoverOffers(tabId: number, gen: number, retriesLeft = 10) {
     if (gen !== amexDiscoverGen) return;
-    chrome.tabs.sendMessage(tabId, { type: "AMEX_OFFERS_DISCOVER" }, (resp) => {
+    chrome.tabs.sendMessage(tabId, {
+      type: "AMEX_OFFERS_DISCOVER",
+      runId: activeOfferRunIds.get("amex"),
+    }, (resp) => {
       if (gen !== amexDiscoverGen) return;
       if (chrome.runtime.lastError || !resp) {
         if (retriesLeft > 0) {
@@ -1032,9 +1437,15 @@ function initAmexOffers() {
           ),
         );
     const reservation = await reserveLegacyEnrollment(
+      "amex",
       requested || 100,
     );
     if (!reservation) return;
+    await patchOfferOperation("amex", {
+      phase: "adding",
+      selectedCardKeys: [selectedCardId],
+      total: reservation.maxOffers,
+    });
     showState("Running");
     if (progressBar) progressBar.style.width = "0%";
     if (progressDetail) progressDetail.textContent = "";
@@ -1131,7 +1542,10 @@ function initAmexOffers() {
 
   // Listen for progress + completion messages from the content script
   chrome.runtime.onMessage.addListener((msg) => {
-    if (amexActiveRunId && msg.runId !== amexActiveRunId) return;
+    if (
+      (msg.type === "AMEX_OFFERS_PROGRESS" || msg.type === "AMEX_OFFERS_SYNCED")
+      && msg.runId !== activeOfferRunIds.get("amex")
+    ) return;
     if (msg.type === "AMEX_OFFERS_PROGRESS") {
       const added = msg.added ?? 0;
       const skipped = msg.skipped ?? 0;
@@ -1276,7 +1690,10 @@ function initChaseOffers() {
 
   function tryDiscover(tabId: number, gen: number, retriesLeft = 15) {
     if (gen !== chaseDiscoverGen) return;
-    chrome.tabs.sendMessage(tabId, { type: "CHASE_OFFERS_DISCOVER" }, (resp) => {
+    chrome.tabs.sendMessage(tabId, {
+      type: "CHASE_OFFERS_DISCOVER",
+      runId: activeOfferRunIds.get("chase"),
+    }, (resp) => {
       if (gen !== chaseDiscoverGen) return;
       if (chrome.runtime.lastError || !resp) {
         if (retriesLeft > 0) {
@@ -1393,8 +1810,13 @@ function initChaseOffers() {
     const requested = typeof chaseOfferCounts[selectedCardId] === "number"
       ? chaseOfferCounts[selectedCardId]
       : 100;
-    const reservation = await reserveLegacyEnrollment(requested);
+    const reservation = await reserveLegacyEnrollment("chase", requested);
     if (!reservation) return;
+    await patchOfferOperation("chase", {
+      phase: "adding",
+      selectedCardKeys: [selectedCardId],
+      total: reservation.maxOffers,
+    });
     showState("Running");
     if (progressBar) progressBar.style.width = "0%";
     if (progressDetail) progressDetail.textContent = "";
@@ -1446,6 +1868,10 @@ function initChaseOffers() {
   document.getElementById("chaseOffersRetryBtn")?.addEventListener("click", () => showState("Initial"));
 
   chrome.runtime.onMessage.addListener((msg) => {
+    if (
+      (msg.type === "CHASE_OFFERS_PROGRESS" || msg.type === "CHASE_OFFERS_COMPLETE")
+      && msg.runId !== activeOfferRunIds.get("chase")
+    ) return;
     if (msg.type === "CHASE_OFFERS_PROGRESS") {
       const added = msg.added ?? 0;
       const total = msg.total ?? 0;
@@ -1576,7 +2002,10 @@ function initCitiOffers() {
 
   function tryDiscover(tabId: number, gen: number, retriesLeft = 15) {
     if (gen !== citiDiscoverGen) return;
-    chrome.tabs.sendMessage(tabId, { type: "CITI_OFFERS_DISCOVER" }, (resp) => {
+    chrome.tabs.sendMessage(tabId, {
+      type: "CITI_OFFERS_DISCOVER",
+      runId: activeOfferRunIds.get("citi"),
+    }, (resp) => {
       if (gen !== citiDiscoverGen) return;
       if (chrome.runtime.lastError || !resp) {
         if (retriesLeft > 0) { setTimeout(() => tryDiscover(tabId, gen, retriesLeft - 1), 3000); return; }
@@ -1687,8 +2116,13 @@ function initCitiOffers() {
     const requested = typeof citiOfferCounts[selectedAccountId] === "number"
       ? citiOfferCounts[selectedAccountId]
       : 100;
-    const reservation = await reserveLegacyEnrollment(requested);
+    const reservation = await reserveLegacyEnrollment("citi", requested);
     if (!reservation) return;
+    await patchOfferOperation("citi", {
+      phase: "adding",
+      selectedCardKeys: [selectedAccountId],
+      total: reservation.maxOffers,
+    });
     showState("Running");
     if (progressBar) progressBar.style.width = "0%";
     const citiSelectedCard = citiCards.find((c) => c.id === selectedAccountId);
@@ -1737,6 +2171,10 @@ function initCitiOffers() {
   document.getElementById("citiOffersRetryBtn")?.addEventListener("click", () => showState("Initial"));
 
   chrome.runtime.onMessage.addListener((msg) => {
+    if (
+      (msg.type === "CITI_OFFERS_PROGRESS" || msg.type === "CITI_OFFERS_COMPLETE")
+      && msg.runId !== activeOfferRunIds.get("citi")
+    ) return;
     if (msg.type === "CITI_OFFERS_PROGRESS") {
       const added = msg.added ?? 0;
       const total = msg.total ?? 0;
@@ -1876,7 +2314,10 @@ function initCapitalOneOffers() {
 
   function tryDiscover(tabId: number, gen: number, retriesLeft = 15) {
     if (gen !== capitalOneDiscoverGen) return;
-    chrome.tabs.sendMessage(tabId, { type: "CAPITALONE_OFFERS_DISCOVER" }, (resp) => {
+    chrome.tabs.sendMessage(tabId, {
+      type: "CAPITALONE_OFFERS_DISCOVER",
+      runId: activeOfferRunIds.get("capitalone"),
+    }, (resp) => {
       if (gen !== capitalOneDiscoverGen) return;
       if (chrome.runtime.lastError || !resp) {
         if (retriesLeft > 0) { setTimeout(() => tryDiscover(tabId, gen, retriesLeft - 1), 3000); return; }
@@ -2007,7 +2448,10 @@ function initCapitalOneOffers() {
     showState("Running");
     if (progressBar) progressBar.style.width = "0%";
     if (progressDetail) progressDetail.textContent = "Syncing all accounts...";
-    chrome.tabs.sendMessage(capitalOneTabId, { type: "CAPITALONE_OFFERS_RUN" });
+    chrome.tabs.sendMessage(capitalOneTabId, {
+      type: "CAPITALONE_OFFERS_RUN",
+      runId: activeOfferRunIds.get("capitalone"),
+    });
   }));
 
   document.getElementById("capitaloneOffersStopBtn")?.addEventListener("click", () => {
@@ -2036,6 +2480,13 @@ function initCapitalOneOffers() {
   document.getElementById("capitaloneOffersRetryBtn")?.addEventListener("click", () => showState("Initial"));
 
   chrome.runtime.onMessage.addListener((msg) => {
+    if (
+      (
+        msg.type === "CAPITALONE_OFFERS_PROGRESS"
+        || msg.type === "CAPITALONE_OFFERS_COMPLETE"
+      )
+      && msg.runId !== activeOfferRunIds.get("capitalone")
+    ) return;
     if (msg.type === "CAPITALONE_OFFERS_PROGRESS") {
       if (msg.phase === "discovering") {
         const pct = typeof msg.progress === "number" ? Math.max(4, Math.min(95, msg.progress)) : 12;
@@ -3677,6 +4128,10 @@ async function refreshPopupState() {
     rewardsSyncAllState = snapshot.travelSyncState;
     renderHome(snapshot.allStates);
     renderAllProviders(snapshot.allStates);
+    setHouseholdSyncButtonsEnabled(
+      householdSyncWritesEnabled,
+      householdIssuerSyncEnabled,
+    );
     updateActiveWalletButton(snapshot.allStates);
     maybeShowCongratsBanner(snapshot.allStates);
   } catch {
@@ -3785,7 +4240,20 @@ async function initializePopup() {
     renderHome(initialSnapshot.allStates);
     renderAllProviders(initialSnapshot.allStates);
     updateActiveWalletButton(initialSnapshot.allStates);
+    await refreshHouseholdUi();
   }
+
+  chrome.storage.onChanged.addListener((changes, areaName) => {
+    if (
+      areaName === "local"
+      && (
+        "pending_household_sync_confirmation_v2" in changes
+        || "nextcard_household_context_v2" in changes
+      )
+    ) {
+      void refreshHouseholdUi();
+    }
+  });
 
   setInterval(() => {
     void refreshPopupState();

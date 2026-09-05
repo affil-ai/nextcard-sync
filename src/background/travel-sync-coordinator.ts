@@ -1,4 +1,5 @@
 import type { ProviderId, TravelSyncState } from "../lib/types";
+import type { HouseholdOperationScope } from "../lib/household-context";
 
 export const TRAVEL_SYNC_STORAGE_KEY = "nextcard_travel_sync_v1";
 export const TRAVEL_SYNC_RESULT_FRESHNESS_MS = 60 * 60 * 1000;
@@ -12,14 +13,20 @@ interface TravelSyncStorage {
 interface TravelSyncCoordinatorOptions {
   storage: TravelSyncStorage;
   isProviderId: (value: unknown) => value is ProviderId;
+  prepareProvider?: (
+    providerId: ProviderId,
+    scope: HouseholdOperationScope | null,
+  ) => Promise<boolean | void>;
   startProvider: (providerId: ProviderId) => Promise<boolean>;
   waitForCompletion: (providerId: ProviderId) => Promise<{ succeeded: boolean }>;
   cancelProvider: (providerId: ProviderId) => Promise<void>;
+  getCurrentScope?: () => Promise<HouseholdOperationScope | null>;
   now?: () => number;
 }
 
 interface PersistedTravelSyncState extends TravelSyncState {
   cancelRequested: boolean;
+  scope: HouseholdOperationScope | null;
 }
 
 function idleState(): PersistedTravelSyncState {
@@ -32,11 +39,43 @@ function idleState(): PersistedTravelSyncState {
     startedAt: null,
     updatedAt: null,
     cancelRequested: false,
+    scope: null,
   };
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function normalizeScope(value: unknown): HouseholdOperationScope | null {
+  if (!isRecord(value)) return null;
+  if (
+    typeof value.accountScopeId !== "string"
+    || typeof value.memberId !== "string"
+    || typeof value.memberDisplayName !== "string"
+    || typeof value.memberLifecycleVersion !== "number"
+    || typeof value.contextRevision !== "string"
+  ) {
+    return null;
+  }
+  return {
+    accountScopeId: value.accountScopeId,
+    memberId: value.memberId,
+    memberDisplayName: value.memberDisplayName,
+    memberLifecycleVersion: value.memberLifecycleVersion,
+    contextRevision: value.contextRevision,
+  };
+}
+
+function scopesMatch(
+  left: HouseholdOperationScope | null,
+  right: HouseholdOperationScope | null,
+) {
+  if (!left || !right) return left === right;
+  return left.accountScopeId === right.accountScopeId
+    && left.memberId === right.memberId
+    && left.memberLifecycleVersion === right.memberLifecycleVersion
+    && left.contextRevision === right.contextRevision;
 }
 
 export function createTravelSyncCoordinator(
@@ -113,6 +152,7 @@ export function createTravelSyncCoordinator(
             startedAt: typeof value.startedAt === "string" ? value.startedAt : null,
             updatedAt: typeof value.updatedAt === "string" ? value.updatedAt : null,
             cancelRequested: value.cancelRequested === true,
+            scope: normalizeScope(value.scope),
           };
           if (state.status === "running" && providerIds.length === 0) {
             state = idleState();
@@ -159,6 +199,11 @@ export function createTravelSyncCoordinator(
 
       let succeeded = false;
       try {
+        const prepared = await options.prepareProvider?.(providerId, state.scope);
+        if (prepared === false) {
+          await finishCancelled();
+          return;
+        }
         const started = await options.startProvider(providerId);
         if (state.cancelRequested) {
           if (started) await options.cancelProvider(providerId);
@@ -202,6 +247,18 @@ export function createTravelSyncCoordinator(
     });
   }
 
+  async function ensureScopeStillCurrent() {
+    if (state.status !== "running" || !options.getCurrentScope) return true;
+    const currentScope = await options.getCurrentScope();
+    if (scopesMatch(state.scope, currentScope)) return true;
+    if (runPromise) {
+      await cancel();
+    } else {
+      await finishCancelled();
+    }
+    return false;
+  }
+
   async function cancel() {
     await hydrate();
     if (state.status !== "running") return publicState();
@@ -226,13 +283,13 @@ export function createTravelSyncCoordinator(
   return {
     async resume() {
       await hydrate();
-      ensureRunning();
+      if (await ensureScopeStillCurrent()) ensureRunning();
       return publicState();
     },
 
     async getStatus() {
       await hydrate();
-      ensureRunning();
+      if (await ensureScopeStillCurrent()) ensureRunning();
       return publicState();
     },
 
@@ -241,6 +298,7 @@ export function createTravelSyncCoordinator(
       if (state.status === "running") return publicState();
       const uniqueProviderIds = [...new Set(providerIds)];
       if (uniqueProviderIds.length === 0) return publicState();
+      const scope = await options.getCurrentScope?.() ?? null;
       const now = new Date(options.now?.() ?? Date.now()).toISOString();
       state = {
         status: "running",
@@ -251,6 +309,7 @@ export function createTravelSyncCoordinator(
         startedAt: now,
         updatedAt: now,
         cancelRequested: false,
+        scope,
       };
       await persist();
       ensureRunning();

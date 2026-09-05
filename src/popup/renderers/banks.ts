@@ -15,7 +15,7 @@ import {
   getProviderStatusLabel,
   renderIssueReportHtml,
   renderValue,
-  showConfirmDelete,
+  confirmDeleteProvider,
   STATUS_SUBTITLES,
 } from "./shared";
 
@@ -226,9 +226,7 @@ export function createBankRenderers(
     chrome.runtime.sendMessage({ type: "CANCEL_SYNC", provider: "chase" });
   });
   chaseEls.clearBtn.addEventListener("click", async () => {
-    if (await showConfirmDelete("Chase")) {
-      chrome.runtime.sendMessage({ type: "CLEAR_DATA", provider: "chase" });
-    }
+    await confirmDeleteProvider("Chase", "chase");
   });
   chaseEls.rawToggle.addEventListener("click", () => {
     chaseEls.rawData.classList.toggle("visible");
@@ -389,9 +387,7 @@ export function createBankRenderers(
     chrome.runtime.sendMessage({ type: "CANCEL_SYNC", provider: "amex" });
   });
   amexEls.clearBtn.addEventListener("click", async () => {
-    if (await showConfirmDelete("American Express")) {
-      chrome.runtime.sendMessage({ type: "CLEAR_DATA", provider: "amex" });
-    }
+    await confirmDeleteProvider("American Express", "amex");
   });
   amexEls.rawToggle.addEventListener("click", () => {
     amexEls.rawData.classList.toggle("visible");
@@ -544,9 +540,7 @@ export function createBankRenderers(
     chrome.runtime.sendMessage({ type: "CANCEL_SYNC", provider: "capitalone" });
   });
   capitaloneEls.clearBtn.addEventListener("click", async () => {
-    if (await showConfirmDelete("Capital One")) {
-      chrome.runtime.sendMessage({ type: "CLEAR_DATA", provider: "capitalone" });
-    }
+    await confirmDeleteProvider("Capital One", "capitalone");
   });
   capitaloneEls.rawToggle.addEventListener("click", () => {
     capitaloneEls.rawData.classList.toggle("visible");
@@ -702,9 +696,7 @@ export function createBankRenderers(
     chrome.runtime.sendMessage({ type: "CANCEL_SYNC", provider: "bilt" });
   });
   biltEls.clearBtn.addEventListener("click", async () => {
-    if (await showConfirmDelete("Bilt Rewards")) {
-      chrome.runtime.sendMessage({ type: "CLEAR_DATA", provider: "bilt" });
-    }
+    await confirmDeleteProvider("Bilt Rewards", "bilt");
   });
   biltEls.rawToggle.addEventListener("click", () => {
     biltEls.rawData.classList.toggle("visible");
@@ -782,7 +774,7 @@ export function createBankRenderers(
   discoverEls.cancelBtn.addEventListener("click", () => chrome.runtime.sendMessage({ type: "CANCEL_SYNC", provider: "discover" }));
   discoverEls.walletBtn?.addEventListener("click", () => { /* openWallet */ });
   discoverEls.clearBtn.addEventListener("click", async () => {
-    if (await showConfirmDelete("Discover")) chrome.runtime.sendMessage({ type: "CLEAR_DATA", provider: "discover" });
+    await confirmDeleteProvider("Discover", "discover");
   });
   discoverEls.rawToggle.addEventListener("click", () => {
     discoverEls.rawData.classList.toggle("visible");
@@ -871,7 +863,7 @@ export function createBankRenderers(
   citiEls.cancelBtn.addEventListener("click", () => chrome.runtime.sendMessage({ type: "CANCEL_SYNC", provider: "citi" }));
   citiEls.walletBtn?.addEventListener("click", () => { /* openWallet */ });
   citiEls.clearBtn.addEventListener("click", async () => {
-    if (await showConfirmDelete("Citi")) chrome.runtime.sendMessage({ type: "CLEAR_DATA", provider: "citi" });
+    await confirmDeleteProvider("Citi", "citi");
   });
   citiEls.rawToggle.addEventListener("click", () => {
     citiEls.rawData.classList.toggle("visible");

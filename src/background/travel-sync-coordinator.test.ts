@@ -27,6 +27,14 @@ function isProviderId(value: unknown): value is ProviderId {
   return value === "aa" || value === "marriott" || value === "hilton";
 }
 
+const memberScope = {
+  accountScopeId: "household:one",
+  memberId: "member:one",
+  memberDisplayName: "Alex",
+  memberLifecycleVersion: 2,
+  contextRevision: "revision:one",
+};
+
 async function waitForStatus(
   coordinator: ReturnType<typeof createTravelSyncCoordinator>,
   expected: "complete" | "cancelled",
@@ -46,6 +54,9 @@ describe("travel sync coordinator", () => {
     const coordinator = createTravelSyncCoordinator({
       storage,
       isProviderId,
+      prepareProvider: async (providerId) => {
+        events.push(`prepare:${providerId}`);
+      },
       startProvider: async (providerId) => {
         events.push(`start:${providerId}`);
         return true;
@@ -61,8 +72,10 @@ describe("travel sync coordinator", () => {
     const state = await waitForStatus(coordinator, "complete");
 
     expect(events).toEqual([
+      "prepare:aa",
       "start:aa",
       "finish:aa",
+      "prepare:marriott",
       "start:marriott",
       "finish:marriott",
     ]);
@@ -85,6 +98,7 @@ describe("travel sync coordinator", () => {
       startedAt: "2026-08-31T10:00:00.000Z",
       updatedAt: "2026-08-31T10:01:00.000Z",
       cancelRequested: false,
+      scope: memberScope,
     });
     const started: ProviderId[] = [];
     const coordinator = createTravelSyncCoordinator({
@@ -96,6 +110,7 @@ describe("travel sync coordinator", () => {
       },
       waitForCompletion: async () => ({ succeeded: true }),
       cancelProvider: vi.fn(async () => {}),
+      getCurrentScope: vi.fn(async () => memberScope),
     });
 
     await coordinator.resume();
@@ -104,6 +119,102 @@ describe("travel sync coordinator", () => {
     expect(started).toEqual(["marriott"]);
     expect(state.processedCount).toBe(2);
     expect(state.failedCount).toBe(1);
+  });
+
+  it("refuses to resume a run for a different household member", async () => {
+    const storage = createStorage({
+      status: "running",
+      providerIds: ["aa"],
+      currentProviderId: "aa",
+      processedCount: 0,
+      failedCount: 0,
+      startedAt: "2026-08-31T10:00:00.000Z",
+      updatedAt: "2026-08-31T10:01:00.000Z",
+      cancelRequested: false,
+      scope: memberScope,
+    });
+    const startProvider = vi.fn(async () => true);
+    const coordinator = createTravelSyncCoordinator({
+      storage,
+      isProviderId,
+      startProvider,
+      waitForCompletion: vi.fn(async () => ({ succeeded: true })),
+      cancelProvider: vi.fn(async () => {}),
+      getCurrentScope: vi.fn(async () => ({
+        ...memberScope,
+        memberId: "member:two",
+      })),
+    });
+
+    expect(await coordinator.resume()).toMatchObject({ status: "cancelled" });
+    expect(startProvider).not.toHaveBeenCalled();
+  });
+
+  it("cancels an in-memory provider when its household scope changes", async () => {
+    const storage = createStorage();
+    let currentScope = memberScope;
+    let finish = (_value: { succeeded: boolean }) => {};
+    const completion = new Promise<{ succeeded: boolean }>((resolve) => {
+      finish = resolve;
+    });
+    const cancelProvider = vi.fn(async () => {
+      finish({ succeeded: false });
+    });
+    const coordinator = createTravelSyncCoordinator({
+      storage,
+      isProviderId,
+      startProvider: vi.fn(async () => true),
+      waitForCompletion: () => completion,
+      cancelProvider,
+      getCurrentScope: vi.fn(async () => currentScope),
+    });
+
+    await coordinator.start(["aa", "marriott"]);
+    await vi.waitFor(() => expect(storage.set).toHaveBeenCalled());
+    currentScope = { ...memberScope, memberId: "member:two" };
+
+    expect(await coordinator.getStatus()).toMatchObject({ status: "cancelled" });
+    expect(cancelProvider).toHaveBeenCalledWith("aa");
+  });
+
+  it("persists the frozen household member scope when a run starts", async () => {
+    const storage = createStorage();
+    const coordinator = createTravelSyncCoordinator({
+      storage,
+      isProviderId,
+      startProvider: vi.fn(async () => false),
+      waitForCompletion: vi.fn(async () => ({ succeeded: false })),
+      cancelProvider: vi.fn(async () => {}),
+      getCurrentScope: vi.fn(async () => memberScope),
+    });
+
+    await coordinator.start(["aa"]);
+    await waitForStatus(coordinator, "complete");
+
+    expect(storage.values[TRAVEL_SYNC_STORAGE_KEY]).toMatchObject({
+      scope: memberScope,
+    });
+  });
+
+  it("stops the batch when the next provider cannot retain the frozen scope", async () => {
+    const storage = createStorage();
+    const startProvider = vi.fn(async () => true);
+    const coordinator = createTravelSyncCoordinator({
+      storage,
+      isProviderId,
+      prepareProvider: vi.fn(async (providerId) => providerId !== "marriott"),
+      startProvider,
+      waitForCompletion: vi.fn(async () => ({ succeeded: true })),
+      cancelProvider: vi.fn(async () => {}),
+      getCurrentScope: vi.fn(async () => memberScope),
+    });
+
+    await coordinator.start(["aa", "marriott"]);
+    const state = await waitForStatus(coordinator, "cancelled");
+
+    expect(state.processedCount).toBe(1);
+    expect(startProvider).toHaveBeenCalledTimes(1);
+    expect(startProvider).toHaveBeenCalledWith("aa");
   });
 
   it("uses one resume loop when startup and status requests race", async () => {
@@ -131,7 +242,7 @@ describe("travel sync coordinator", () => {
     });
 
     await Promise.all([coordinator.resume(), coordinator.getStatus()]);
-    expect(startProvider).toHaveBeenCalledTimes(1);
+    await vi.waitFor(() => expect(startProvider).toHaveBeenCalledTimes(1));
     expect(storage.get).toHaveBeenCalledTimes(1);
     finish({ succeeded: true });
     await waitForStatus(coordinator, "complete");

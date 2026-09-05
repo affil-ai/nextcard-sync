@@ -31,6 +31,13 @@ jobs:
       - name: Typecheck
         run: pnpm typecheck
 
+      - name: Test
+        run: pnpm test
+
+      - name: Verify package and manifest versions match
+        run: >-
+          node -e 'const p=require("./package.json"); const m=require("./manifest.json"); if(p.version!==m.version) throw new Error(`Version mismatch: ${p.version} vs ${m.version}`)'
+
       - name: Build extension
         run: pnpm build
 

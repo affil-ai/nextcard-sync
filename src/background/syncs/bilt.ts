@@ -1,4 +1,4 @@
-import type { ProviderId } from "../../lib/types";
+import type { ProviderId, PushToNextCardResult } from "../../lib/types";
 import type { ProviderDefinition } from "../../providers/provider-registry";
 import type { createRuntimeStateStore } from "../core/runtime-state";
 import {
@@ -29,7 +29,7 @@ interface BiltSyncDeps {
   pushToNextCard: (
     providerId: "bilt",
     data: unknown,
-  ) => Promise<{ ok: boolean; error?: string }>;
+  ) => Promise<PushToNextCardResult>;
 }
 
 function isProgressMessage(value: Record<string, unknown>) {
@@ -229,7 +229,7 @@ export function createBiltSync(options: BiltSyncDeps) {
 
       options.stateStore.assertRunActive("bilt", attemptId);
       const pushResult = await options.pushToNextCard("bilt", accountData);
-      if (!pushResult.ok) {
+      if (!pushResult.ok && !pushResult.awaitingConfirmation) {
         console.warn("[NextCard SW] Bilt push failed:", pushResult.error);
       }
       options.stateStore.finishSyncRun("bilt", attemptId);

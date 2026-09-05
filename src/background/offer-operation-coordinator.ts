@@ -1,4 +1,11 @@
-import type { OfferIssuer, OfferOperationCard } from "../lib/offer-operation";
+import {
+  type OfferIssuer,
+  type OfferOperationCard,
+} from "../lib/offer-operation";
+import {
+  householdOperationScopesMatch,
+  type HouseholdOperationScope,
+} from "../lib/household-context";
 import type { OfferOperationStore } from "./offer-operation-store";
 
 const ISSUER_CONFIG: Record<OfferIssuer, {
@@ -151,8 +158,24 @@ function normalizeDiscoveryCards(
   });
 }
 
-export function createOfferOperationCoordinator(store: OfferOperationStore) {
+export function createOfferOperationCoordinator(
+  store: OfferOperationStore,
+  getCurrentScope?: () => Promise<HouseholdOperationScope | null>,
+  isLegacyScopeCurrent?: () => Promise<boolean>,
+) {
   const runningDiscoveries = new Set<string>();
+
+  async function operationScopeIsCurrent(
+    scope: HouseholdOperationScope | null,
+  ) {
+    if (!getCurrentScope) return true;
+    const currentScope = await getCurrentScope();
+    if (scope === null && currentScope === null) {
+      return await isLegacyScopeCurrent?.() === true;
+    }
+    if (scope === null || currentScope === null) return false;
+    return householdOperationScopesMatch(scope, currentScope);
+  }
 
   async function discover(issuer: OfferIssuer, runId: string, tabId: number) {
     if (runningDiscoveries.has(runId)) return;
@@ -222,6 +245,13 @@ export function createOfferOperationCoordinator(store: OfferOperationStore) {
     const active = snapshot.active;
     if (
       active
+      && !await operationScopeIsCurrent(active.scope)
+    ) {
+      await store.clearAccountState();
+      return;
+    }
+    if (
+      active
       && active.ownedTabId != null
       && (active.phase === "opening"
         || active.phase === "waiting_for_login"
@@ -232,7 +262,11 @@ export function createOfferOperationCoordinator(store: OfferOperationStore) {
   }
 
   async function startCheck(issuer: OfferIssuer) {
-    const result = await store.start(issuer);
+    const scope = await getCurrentScope?.() ?? null;
+    if (!scope && getCurrentScope && !await isLegacyScopeCurrent?.()) {
+      return { ok: false as const, error: "account_scope_unavailable" };
+    }
+    const result = await store.start(issuer, scope);
     if (!result.ok) return result;
     try {
       const tab = await chrome.tabs.create({
@@ -271,6 +305,13 @@ export function createOfferOperationCoordinator(store: OfferOperationStore) {
     const active = snapshot.active;
     if (!active || active.runId !== runId || active.ownedTabId == null) {
       return { ok: false as const, error: "run_not_active" };
+    }
+    if (!await operationScopeIsCurrent(active.scope)) {
+      await store.patch(runId, {
+        phase: "interrupted",
+        error: "The selected household profile changed. Check offers again.",
+      });
+      return { ok: false as const, error: "stale_offer_operation" };
     }
     const tab = await chrome.tabs.get(active.ownedTabId).catch(() => null);
     if (!tab || !tabMatchesIssuer(tab.url, active.issuer)) {
@@ -312,6 +353,14 @@ export function createOfferOperationCoordinator(store: OfferOperationStore) {
     }
     const transitioned = await store.beginEnrollment(runId, selectedCardKeys, total);
     if (!transitioned.ok) return transitioned;
+
+    if (!await operationScopeIsCurrent(active.scope)) {
+      await store.patch(runId, {
+        phase: "interrupted",
+        error: "The selected household profile changed. Check offers again.",
+      });
+      return { ok: false as const, error: "stale_offer_operation" };
+    }
 
     const config = ISSUER_CONFIG[active.issuer];
     if (!config.runMessage) return { ok: false as const, error: "enrollment_not_supported" };

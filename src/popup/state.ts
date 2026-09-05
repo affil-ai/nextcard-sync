@@ -28,6 +28,24 @@ import {
   citiProviderDataSchema,
 } from "../contracts/loyalty-provider-data";
 import { orderedProviderIds } from "../providers/provider-groups";
+import type { HouseholdExtensionContext, HouseholdOperationScope } from "../lib/household-context";
+
+let displayedHouseholdScope: HouseholdOperationScope | null | undefined;
+
+export function setDisplayedHouseholdScope(context: HouseholdExtensionContext | null, memberId: string | null) {
+  const member = context?.members.find((candidate) => candidate.id === memberId);
+  displayedHouseholdScope = context && member ? {
+    accountScopeId: context.accountScopeId,
+    memberId: member.id,
+    memberDisplayName: member.displayName,
+    memberLifecycleVersion: member.lifecycleVersion,
+    contextRevision: context.contextRevision,
+  } : context && !context.householdActivated ? null : undefined;
+}
+
+export function getDisplayedHouseholdScope() {
+  return displayedHouseholdScope;
+}
 import { normalizeExtensionProfile } from "../lib/extension-profile";
 import {
   normalizeRewardsSummaries,
@@ -117,6 +135,7 @@ function isSyncStatus(value: unknown): value is SyncStatus {
     || value === "detecting_login"
     || value === "waiting_for_login"
     || value === "extracting"
+    || value === "awaiting_confirmation"
     || value === "done"
     || value === "cancelled"
     || value === "error"
@@ -306,37 +325,23 @@ export async function refreshExtensionProfile() {
 }
 
 export async function loadInitialPopupState(): Promise<PopupSnapshot> {
-  const [auth, allStates, extensionProfile, rewardsSummaries, travelSyncState] = await Promise.all(
-    [
-      getAuthState(),
-      loadStoredProviderStates(),
-      refreshExtensionProfile(),
-      loadStoredRewardsSummaries(),
-      getTravelSyncStatus(),
-    ],
-  );
+  const auth = await getAuthState();
+  const [liveStates, extensionProfile, rewardsSummaries, travelSyncState] = await Promise.all([
+    auth
+      ? chrome.runtime.sendMessage({ type: "GET_ALL_STATUS" }).catch(() => null)
+      : Promise.resolve(null),
+    refreshExtensionProfile(),
+    loadStoredRewardsSummaries(),
+    getTravelSyncStatus(),
+  ]);
+  const allStates = normalizeRuntimeProviderStates(liveStates);
 
   return { auth, allStates, extensionProfile, rewardsSummaries, travelSyncState };
 }
 
-export async function pollPopupSnapshot() {
-  const auth = await getAuthState();
-  if (!auth) {
-    return {
-      auth,
-      allStates: null,
-      extensionProfile: null,
-      travelSyncState: idleTravelSyncState,
-    };
-  }
-
-  const [liveStates, extensionProfile, travelSyncState] = await Promise.all([
-    chrome.runtime.sendMessage({ type: "GET_ALL_STATUS" }),
-    getExtensionProfile(),
-    getTravelSyncStatus(),
-  ]);
-  const record = isRecord(liveStates) ? liveStates : {};
-  const allStates = {
+function normalizeRuntimeProviderStates(value: unknown): ProviderStateMap {
+  const record = isRecord(value) ? value : {};
+  return {
     marriott: normalizeProviderState(marriottProviderDataSchema, record.marriott),
     atmos: normalizeProviderState(atmosProviderDataSchema, record.atmos),
     chase: normalizeProviderState(chaseProviderDataSchema, record.chase),
@@ -354,7 +359,6 @@ export async function pollPopupSnapshot() {
     discover: normalizeProviderState(discoverProviderDataSchema, record.discover),
     citi: normalizeProviderState(citiProviderDataSchema, record.citi),
   };
-  return { auth, allStates, extensionProfile, travelSyncState };
 }
 
 export async function getTravelSyncStatus() {
@@ -389,6 +393,26 @@ export async function resetTravelSyncStatus() {
   return normalizeTravelSyncState(response.state);
 }
 
+export async function pollPopupSnapshot() {
+  const auth = await getAuthState();
+  if (!auth) {
+    return {
+      auth,
+      allStates: null,
+      extensionProfile: null,
+      travelSyncState: idleTravelSyncState,
+    };
+  }
+
+  const [liveStates, extensionProfile, travelSyncState] = await Promise.all([
+    chrome.runtime.sendMessage({ type: "GET_ALL_STATUS" }),
+    getExtensionProfile(),
+    getTravelSyncStatus(),
+  ]);
+  const allStates = normalizeRuntimeProviderStates(liveStates);
+  return { auth, allStates, extensionProfile, travelSyncState };
+}
+
 const syncStartRequestsInFlight = new Set<ProviderId>();
 
 export interface ProviderSyncCompletion {
@@ -397,6 +421,8 @@ export interface ProviderSyncCompletion {
 }
 
 export function startProviderSync(providerId: ProviderId) {
+  const expectedScope = getDisplayedHouseholdScope();
+  if (expectedScope === undefined) return Promise.resolve(false);
   if (syncStartRequestsInFlight.has(providerId)) {
     return Promise.resolve(true);
   }
@@ -405,7 +431,7 @@ export function startProviderSync(providerId: ProviderId) {
 
   return new Promise<boolean>((resolve) => {
     chrome.runtime.sendMessage(
-      { type: "REQUEST_SYNC", provider: providerId },
+      { type: "REQUEST_SYNC", provider: providerId, expectedScope },
       (response: { ok?: boolean; error?: string } | undefined) => {
         syncStartRequestsInFlight.delete(providerId);
 

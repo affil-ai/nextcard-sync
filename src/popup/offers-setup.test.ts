@@ -19,6 +19,7 @@ function operation(
   return {
     runId: `${issuer}-run`,
     issuer,
+    scope: null,
     phase,
     ownedTabId: null,
     startedAt: updatedAt,

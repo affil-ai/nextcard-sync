@@ -8,7 +8,35 @@
  * retry on next extension startup.
  */
 
-import { getAuth } from "./auth";
+import { getAuth, getAuthGeneration } from "./auth";
+import {
+  getCurrentHouseholdOperationScope,
+  getHouseholdScopedStorageKey,
+  householdOperationScopesMatch,
+  isLegacyHouseholdOperationMode,
+  type HouseholdOperationScope,
+} from "./household-context";
+
+function readOfferSyncError(value: unknown, status: number) {
+  if (typeof value === "object" && value !== null) {
+    if ("code" in value && typeof value.code === "string") return value.code;
+    if ("error" in value && typeof value.error === "string") return value.error;
+  }
+  return `HTTP ${status}`;
+}
+
+function isTerminalOfferScopeError(error: string | null | undefined) {
+  return error === "stale_offer_operation"
+    || error === "context_stale"
+    || error === "member_unavailable"
+    || error === "member_gone"
+    || error === "household_capability_disabled"
+    || error === "extension_writes_disabled"
+    || error === "extension_reads_disabled"
+    || error === "member_offer_writes_disabled"
+    || error === "unsupported_extension"
+    || error === "invalid_request";
+}
 
 async function getIssuerCardKey(issuer: string, issuerCardId: string): Promise<string> {
   if (!issuerCardId) return "";
@@ -30,6 +58,7 @@ function getLegacyIssuerCardId(issuerCardId: string): string {
 
 export interface OfferSyncPayload {
   runId?: string;
+  scope: HouseholdOperationScope | null;
   issuer: string;
   issuerCardId: string;
   issuerCardName: string;
@@ -79,6 +108,7 @@ export const DETECTED_OFFER_URL_CACHE_KEY = "detectedOfferUrlCache";
 
 export interface DetectedOfferSyncPayload {
   runId?: string;
+  scope: HouseholdOperationScope | null;
   issuer: string;
   issuerCardId: string;
   issuerCardName: string;
@@ -105,14 +135,49 @@ export interface DetectedOfferSyncPayload {
   }>;
 }
 
+function offerSyncScopeMatches(
+  payloadScope: HouseholdOperationScope | null | undefined,
+  currentScope: HouseholdOperationScope | null,
+) {
+  if (!payloadScope || !currentScope) return payloadScope == null && currentScope == null;
+  return householdOperationScopesMatch(payloadScope, currentScope);
+}
+
+async function offerSyncScopeIsCurrent(
+  scope: HouseholdOperationScope | null,
+) {
+  const generation = getAuthGeneration();
+  if (!await getAuth()) return false;
+  const currentScope = await getCurrentHouseholdOperationScope();
+  const matches = scope === null
+    ? currentScope === null && await isLegacyHouseholdOperationMode()
+    : currentScope !== null
+      && householdOperationScopesMatch(scope, currentScope);
+  return generation === getAuthGeneration() && matches;
+}
+
 const MAX_RETRIES = 2;
 const RETRY_DELAY_MS = 2000;
 const STORAGE_KEY = "pendingOfferSyncs";
 const DETECTED_STORAGE_KEY = "pendingDetectedOfferSyncs";
+
+function hasOptionalRunId(value: unknown): value is { runId?: unknown } {
+  return typeof value === "object" && value !== null;
+}
 // Detected-offer upserts can require a substantial read of the user's offer
 // history. Keep each request well below Convex's per-function read limit.
 const DETECTED_OFFER_SYNC_CHUNK_SIZE = 50;
 let detectedOfferSyncQueue: Promise<void> = Promise.resolve();
+let enrolledOfferSyncQueue: Promise<void> = Promise.resolve();
+
+function enqueueEnrolledOfferTask<T>(task: () => Promise<T>): Promise<T> {
+  const queued = enrolledOfferSyncQueue.then(task, task);
+  enrolledOfferSyncQueue = queued.then(
+    () => undefined,
+    () => undefined,
+  );
+  return queued;
+}
 
 function enqueueDetectedOfferTask<T>(task: () => Promise<T>): Promise<T> {
   const queued = detectedOfferSyncQueue.then(task, task);
@@ -125,6 +190,27 @@ function enqueueDetectedOfferTask<T>(task: () => Promise<T>): Promise<T> {
 
 function delay(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
+}
+
+function storageValuesEqual(left: unknown, right: unknown) {
+  try {
+    return JSON.stringify(left) === JSON.stringify(right);
+  } catch {
+    return false;
+  }
+}
+
+async function removeStorageValuesIfUnchanged(
+  expected: Record<string, unknown>,
+) {
+  const keys = Object.keys(expected);
+  const stored = await chrome.storage.local.get(keys);
+  const unchangedKeys = keys.filter((key) =>
+    storageValuesEqual(stored[key], expected[key])
+  );
+  if (unchangedKeys.length > 0) {
+    await chrome.storage.local.remove(unchangedKeys);
+  }
 }
 
 export function normalizeHostname(urlOrHostname: string): string | null {
@@ -159,18 +245,37 @@ function splitOfferMapByStatus(offerMap: OfferUrlCache): { enrolled: OfferUrlCac
   return { enrolled, detected };
 }
 
-async function saveOfferMaps(offerMap: OfferUrlCache): Promise<void> {
+async function saveOfferMaps(
+  offerMap: OfferUrlCache,
+  scope: HouseholdOperationScope | null,
+): Promise<void> {
+  if (!await offerSyncScopeIsCurrent(scope)) return;
+  const generation = getAuthGeneration();
   const { enrolled, detected } = splitOfferMapByStatus(offerMap);
+  const enrolledKey = getHouseholdScopedStorageKey(OFFER_URL_CACHE_KEY, scope);
+  const detectedKey = getHouseholdScopedStorageKey(DETECTED_OFFER_URL_CACHE_KEY, scope);
   await chrome.storage.local.set({
-    [OFFER_URL_CACHE_KEY]: enrolled,
-    [DETECTED_OFFER_URL_CACHE_KEY]: detected,
+    [enrolledKey]: enrolled,
+    [detectedKey]: detected,
   });
+  if (generation !== getAuthGeneration()) {
+    await removeStorageValuesIfUnchanged({
+      [enrolledKey]: enrolled,
+      [detectedKey]: detected,
+    });
+  }
 }
 
 async function updateOfferUrlCache(payload: OfferSyncPayload): Promise<void> {
   try {
-    const stored = await chrome.storage.local.get(OFFER_URL_CACHE_KEY);
-    const cache: OfferUrlCache = stored[OFFER_URL_CACHE_KEY] ?? {};
+    if (!await offerSyncScopeIsCurrent(payload.scope)) return;
+    const generation = getAuthGeneration();
+    const storageKey = getHouseholdScopedStorageKey(
+      OFFER_URL_CACHE_KEY,
+      payload.scope,
+    );
+    const stored = await chrome.storage.local.get(storageKey);
+    const cache: OfferUrlCache = stored[storageKey] ?? {};
 
     for (const offer of payload.offers) {
       if (!offer.merchantUrl) continue;
@@ -206,7 +311,11 @@ async function updateOfferUrlCache(payload: OfferSyncPayload): Promise<void> {
       }
     }
 
-    await chrome.storage.local.set({ [OFFER_URL_CACHE_KEY]: cache });
+    if (generation !== getAuthGeneration()) return;
+    await chrome.storage.local.set({ [storageKey]: cache });
+    if (generation !== getAuthGeneration()) {
+      await removeStorageValuesIfUnchanged({ [storageKey]: cache });
+    }
   } catch (e) {
     console.error("[NextCard Offers] Failed to update offer URL cache:", e);
   }
@@ -219,19 +328,41 @@ async function postOfferSync(
   if (!auth) {
     return { ok: false, error: "Not signed in to NextCard" };
   }
+  if (!await offerSyncScopeIsCurrent(payload.scope)) {
+    return { ok: false, error: "stale_offer_operation" };
+  }
   const issuerCardKey = await getIssuerCardKey(payload.issuer, payload.issuerCardId);
   if (!issuerCardKey) {
     return { ok: false, error: "Missing issuer card identity" };
   }
+  const { scope: localScope, ...wirePayload } = payload;
+  void localScope;
 
-  const response = await fetch(`${__CONVEX_SITE_URL__}/extension/offers-sync`, {
+  const endpoint = payload.scope
+    ? `${__CONVEX_SITE_URL__}/extension/v2/offers-sync`
+    : `${__CONVEX_SITE_URL__}/extension/offers-sync`;
+
+  const response = await fetch(endpoint, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
       Authorization: `Bearer ${auth.token}`,
+      ...(payload.scope
+        ? {
+            "X-Nextcard-Extension-Version": chrome.runtime.getManifest().version,
+            "X-Nextcard-Protocol-Version": "2",
+          }
+        : {}),
     },
     body: JSON.stringify({
-      ...payload,
+      ...wirePayload,
+      ...(payload.scope
+        ? {
+            memberId: payload.scope.memberId,
+            contextRevision: payload.scope.contextRevision,
+            memberLifecycleVersion: payload.scope.memberLifecycleVersion,
+          }
+        : {}),
       issuerCardId: issuerCardKey,
       legacyIssuerCardId: getLegacyIssuerCardId(payload.issuerCardId),
     }),
@@ -239,7 +370,7 @@ async function postOfferSync(
 
   if (!response.ok) {
     const result = await response.json().catch(() => ({}));
-    return { ok: false, error: (result as Record<string, string>).error ?? `HTTP ${response.status}` };
+    return { ok: false, error: readOfferSyncError(result, response.status) };
   }
 
   const body = await response.json().catch(() => ({}));
@@ -251,22 +382,38 @@ async function postOfferSync(
 }
 
 async function persistForRetry(payload: OfferSyncPayload): Promise<boolean> {
-  try {
-    const stored = await chrome.storage.local.get(STORAGE_KEY);
-    const pending: OfferSyncPayload[] = stored[STORAGE_KEY] ?? [];
-    pending.push(payload);
-    await chrome.storage.local.set({ [STORAGE_KEY]: pending });
-    return true;
-  } catch (e) {
-    console.error("[NextCard Offers Sync] Failed to persist for retry:", e);
-    return false;
-  }
+  return enqueueEnrolledOfferTask(async () => {
+    try {
+      const generation = getAuthGeneration();
+      if (!await offerSyncScopeIsCurrent(payload.scope)) return false;
+      const storageKey = getHouseholdScopedStorageKey(STORAGE_KEY, payload.scope);
+      const stored = await chrome.storage.local.get(storageKey);
+      const pending: OfferSyncPayload[] = stored[storageKey] ?? [];
+      pending.push(payload);
+      if (getAuthGeneration() !== generation) return false;
+      await chrome.storage.local.set({ [storageKey]: pending });
+      if (getAuthGeneration() !== generation) {
+        await removeStorageValuesIfUnchanged({ [storageKey]: pending });
+        return false;
+      }
+      return true;
+    } catch (e) {
+      console.error("[NextCard Offers Sync] Failed to persist for retry:", e);
+      return false;
+    }
+  });
 }
 
 async function persistDetectedForRetry(payload: DetectedOfferSyncPayload): Promise<boolean> {
   try {
-    const stored = await chrome.storage.local.get(DETECTED_STORAGE_KEY);
-    const pending: DetectedOfferSyncPayload[] = stored[DETECTED_STORAGE_KEY] ?? [];
+    const generation = getAuthGeneration();
+    if (!await offerSyncScopeIsCurrent(payload.scope)) return false;
+    const storageKey = getHouseholdScopedStorageKey(
+      DETECTED_STORAGE_KEY,
+      payload.scope,
+    );
+    const stored = await chrome.storage.local.get(storageKey);
+    const pending: DetectedOfferSyncPayload[] = stored[storageKey] ?? [];
     const payloadKey = [
       payload.runId ?? "",
       payload.issuer,
@@ -279,9 +426,13 @@ async function persistDetectedForRetry(payload: DetectedOfferSyncPayload): Promi
       entry.issuerCardId,
       entry.snapshot?.capturedAt ?? "",
     ].join(":") !== payloadKey);
-    await chrome.storage.local.set({
-      [DETECTED_STORAGE_KEY]: [...deduplicated, payload],
-    });
+    if (getAuthGeneration() !== generation) return false;
+    const nextPending = [...deduplicated, payload];
+    await chrome.storage.local.set({ [storageKey]: nextPending });
+    if (getAuthGeneration() !== generation) {
+      await removeStorageValuesIfUnchanged({ [storageKey]: nextPending });
+      return false;
+    }
     return true;
   } catch (error) {
     console.error("[NextCard Detected Offers] Failed to persist for retry:", error);
@@ -322,16 +473,24 @@ export interface OfferSyncResult {
 interface PendingOfferSyncRetryResult {
   savedRunIds: string[];
   remainingRunIds: string[];
+  failedRunIds: string[];
 }
 
 function buildPendingOfferSyncRetryResult(
   savedRunIds: string[],
   remainingRunIds: string[],
+  failedRunIds: string[] = [],
 ): PendingOfferSyncRetryResult {
-  const remaining = new Set(remainingRunIds);
+  const failed = new Set(failedRunIds);
+  const remaining = new Set(
+    remainingRunIds.filter((runId) => !failed.has(runId)),
+  );
   return {
-    savedRunIds: Array.from(new Set(savedRunIds)).filter((runId) => !remaining.has(runId)),
+    savedRunIds: Array.from(new Set(savedRunIds)).filter(
+      (runId) => !remaining.has(runId) && !failed.has(runId),
+    ),
     remainingRunIds: Array.from(remaining),
+    failedRunIds: Array.from(failed),
   };
 }
 
@@ -345,9 +504,12 @@ export async function syncOffersToNextCard(payload: OfferSyncPayload): Promise<O
     try {
       const result = await postOfferSync(payload);
       if (result.ok) {
+        if (!await offerSyncScopeIsCurrent(payload.scope)) {
+          return { status: "saved", error: null };
+        }
         if (result.offerMap) {
           try {
-            await saveOfferMaps(result.offerMap);
+            await saveOfferMaps(result.offerMap, payload.scope);
           } catch (error) {
             // The remote write already succeeded. A local reminder-cache
             // failure must not turn that successful write into a sync failure.
@@ -362,6 +524,10 @@ export async function syncOffersToNextCard(payload: OfferSyncPayload): Promise<O
         return { status: "saved", error: null };
       }
       lastError = result.error ?? lastError;
+
+      if (isTerminalOfferScopeError(result.error)) {
+        return { status: "failed", error: lastError };
+      }
 
       // Auth errors won't resolve with retry
       if (result.error?.includes("token") || result.error?.includes("401")) {
@@ -397,26 +563,40 @@ export async function syncOffersToNextCard(payload: OfferSyncPayload): Promise<O
 }
 
 /** Retry any pending syncs stored from previous failures. Call on startup. */
-async function retryPendingEnrolledOfferSyncs(): Promise<{
+async function retryPendingEnrolledOfferSyncs(
+  scope: HouseholdOperationScope | null,
+): Promise<{
   savedRunIds: string[];
   remainingRunIds: string[];
+  failedRunIds: string[];
 }> {
   const savedRunIds: string[] = [];
+  const failedRunIds: string[] = [];
   try {
-    const stored = await chrome.storage.local.get(STORAGE_KEY);
-    const pending: OfferSyncPayload[] = stored[STORAGE_KEY] ?? [];
-    if (pending.length === 0) return { savedRunIds, remainingRunIds: [] };
+    const storageKey = getHouseholdScopedStorageKey(STORAGE_KEY, scope);
+    const stored = await chrome.storage.local.get(storageKey);
+    const pending: OfferSyncPayload[] = stored[storageKey] ?? [];
+    if (pending.length === 0) {
+      return { savedRunIds, remainingRunIds: [], failedRunIds };
+    }
 
 
-    const remaining: OfferSyncPayload[] = [];
+    let remaining: OfferSyncPayload[] = [];
     for (const raw of pending) {
       const payload = normalizeOffers(raw);
+      if (!offerSyncScopeMatches(payload.scope, scope)) {
+        continue;
+      }
       const result = await postOfferSync(payload);
+      if (isTerminalOfferScopeError(result.error)) {
+        if (payload.runId) failedRunIds.push(payload.runId);
+        continue;
+      }
       if (!result.ok) {
         remaining.push(payload);
       } else if (result.offerMap) {
         try {
-          await saveOfferMaps(result.offerMap);
+          await saveOfferMaps(result.offerMap, payload.scope);
         } catch (error) {
           console.warn(
             "[NextCard Offers Sync] Retry saved remotely; local offer cache will refresh later:",
@@ -430,13 +610,19 @@ async function retryPendingEnrolledOfferSyncs(): Promise<{
       }
     }
 
-    await chrome.storage.local.set({ [STORAGE_KEY]: remaining });
+    const failed = new Set(failedRunIds);
+    remaining = remaining.filter(
+      (payload) => !payload.runId || !failed.has(payload.runId),
+    );
+
+    await chrome.storage.local.set({ [storageKey]: remaining });
     if (remaining.length > 0) {
       console.warn(`[NextCard Offers Sync] ${remaining.length} syncs still pending after retry`);
     }
     return buildPendingOfferSyncRetryResult(
       savedRunIds,
       remaining.flatMap((payload) => payload.runId ? [payload.runId] : []),
+      failedRunIds,
     );
   } catch (e) {
     console.error("[NextCard Offers Sync] retryPendingOfferSyncs error:", e);
@@ -449,11 +635,19 @@ async function postDetectedOfferSync(
 ): Promise<{ ok: boolean; error: string | null }> {
   const auth = await getAuth();
   if (!auth) return { ok: false, error: "Not signed in to NextCard" };
+  if (!await offerSyncScopeIsCurrent(payload.scope)) {
+    return { ok: false, error: "stale_offer_operation" };
+  }
 
   try {
     let latestOfferMap: OfferUrlCache | undefined;
     const issuerCardKey = await getIssuerCardKey(payload.issuer, payload.issuerCardId);
     if (!issuerCardKey) return { ok: false, error: "Missing issuer card identity" };
+    const { scope: localScope, ...wirePayload } = payload;
+    void localScope;
+    const endpoint = payload.scope
+      ? `${__CONVEX_SITE_URL__}/extension/v2/offers-detected`
+      : `${__CONVEX_SITE_URL__}/extension/offers-detected`;
     const chunkOffsets = payload.offers.length === 0 ? [0] : Array.from(
       { length: Math.ceil(payload.offers.length / DETECTED_OFFER_SYNC_CHUNK_SIZE) },
       (_, index) => index * DETECTED_OFFER_SYNC_CHUNK_SIZE,
@@ -462,14 +656,27 @@ async function postDetectedOfferSync(
     for (const offset of chunkOffsets) {
       const offers = payload.offers.slice(offset, offset + DETECTED_OFFER_SYNC_CHUNK_SIZE);
       const isLastChunk = offset + DETECTED_OFFER_SYNC_CHUNK_SIZE >= payload.offers.length;
-      const response = await fetch(`${__CONVEX_SITE_URL__}/extension/offers-detected`, {
+      const response = await fetch(endpoint, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
           Authorization: `Bearer ${auth.token}`,
+          ...(payload.scope
+            ? {
+                "X-Nextcard-Extension-Version": chrome.runtime.getManifest().version,
+                "X-Nextcard-Protocol-Version": "2",
+              }
+            : {}),
         },
         body: JSON.stringify({
-          ...payload,
+          ...wirePayload,
+          ...(payload.scope
+            ? {
+                memberId: payload.scope.memberId,
+                contextRevision: payload.scope.contextRevision,
+                memberLifecycleVersion: payload.scope.memberLifecycleVersion,
+              }
+            : {}),
           issuerCardId: issuerCardKey,
           legacyIssuerCardId: getLegacyIssuerCardId(payload.issuerCardId),
           offers,
@@ -484,7 +691,7 @@ async function postDetectedOfferSync(
 
       if (!response.ok) {
         const result = await response.json().catch(() => ({}));
-        const error = (result as Record<string, string>).error ?? `HTTP ${response.status}`;
+        const error = readOfferSyncError(result, response.status);
         console.warn("[NextCard Detected Offers] chunk sync failed:", {
           status: response.status,
           error,
@@ -506,8 +713,8 @@ async function postDetectedOfferSync(
       latestOfferMap = (body as Record<string, unknown>).offerMap as OfferUrlCache | undefined;
     }
 
-    if (latestOfferMap) {
-      await saveOfferMaps(latestOfferMap);
+    if (latestOfferMap && await offerSyncScopeIsCurrent(payload.scope)) {
+      await saveOfferMaps(latestOfferMap, payload.scope);
     }
     return { ok: true, error: null };
   } catch (error) {
@@ -527,6 +734,7 @@ async function runDetectedOfferSync(
     const isAuthFailure = result.error?.includes("token")
       || result.error?.includes("401")
       || result.error === "Not signed in to NextCard";
+    if (isTerminalOfferScopeError(result.error)) return "failed";
     if (isAuthFailure) break;
     if (attempt < MAX_RETRIES) await delay(RETRY_DELAY_MS);
   }
@@ -544,29 +752,45 @@ export function syncDetectedOffersToNextCard(
   return enqueueDetectedOfferTask(() => runDetectedOfferSync(payload));
 }
 
-async function runPendingDetectedOfferSyncs(): Promise<{
+async function runPendingDetectedOfferSyncs(
+  scope: HouseholdOperationScope | null,
+): Promise<{
   savedRunIds: string[];
   remainingRunIds: string[];
+  failedRunIds: string[];
 }> {
   const savedRunIds: string[] = [];
+  const failedRunIds: string[] = [];
   try {
-    const stored = await chrome.storage.local.get(DETECTED_STORAGE_KEY);
-    const pending: DetectedOfferSyncPayload[] = stored[DETECTED_STORAGE_KEY] ?? [];
-    const remaining: DetectedOfferSyncPayload[] = [];
+    const storageKey = getHouseholdScopedStorageKey(DETECTED_STORAGE_KEY, scope);
+    const stored = await chrome.storage.local.get(storageKey);
+    const pending: DetectedOfferSyncPayload[] = stored[storageKey] ?? [];
+    let remaining: DetectedOfferSyncPayload[] = [];
 
     for (const payload of pending) {
+      if (!offerSyncScopeMatches(payload.scope, scope)) {
+        continue;
+      }
       const result = await postDetectedOfferSync(payload);
       if (result.ok) {
         if (payload.runId) savedRunIds.push(payload.runId);
-      } else {
+      } else if (!isTerminalOfferScopeError(result.error)) {
         remaining.push(payload);
+      } else if (payload.runId) {
+        failedRunIds.push(payload.runId);
       }
     }
 
-    await chrome.storage.local.set({ [DETECTED_STORAGE_KEY]: remaining });
+    const failed = new Set(failedRunIds);
+    remaining = remaining.filter(
+      (payload) => !payload.runId || !failed.has(payload.runId),
+    );
+
+    await chrome.storage.local.set({ [storageKey]: remaining });
     return buildPendingOfferSyncRetryResult(
       savedRunIds,
       remaining.flatMap((payload) => payload.runId ? [payload.runId] : []),
+      failedRunIds,
     );
   } catch (error) {
     console.error("[NextCard Detected Offers] retryPendingDetectedOfferSyncs error:", error);
@@ -574,21 +798,54 @@ async function runPendingDetectedOfferSyncs(): Promise<{
   }
 }
 
-export function retryPendingDetectedOfferSyncs(): Promise<{
+export function retryPendingDetectedOfferSyncs(
+  scope: HouseholdOperationScope | null = null,
+): Promise<{
   savedRunIds: string[];
   remainingRunIds: string[];
+  failedRunIds: string[];
 }> {
-  return enqueueDetectedOfferTask(runPendingDetectedOfferSyncs);
+  return enqueueDetectedOfferTask(() => runPendingDetectedOfferSyncs(scope));
 }
 
-export async function retryPendingOfferSyncs(): Promise<{
+export async function retryPendingOfferSyncs(
+  scope: HouseholdOperationScope | null = null,
+): Promise<{
   savedRunIds: string[];
   remainingRunIds: string[];
+  failedRunIds: string[];
 }> {
   const [enrolledResult, detectedResult] = await Promise.all([
-    retryPendingEnrolledOfferSyncs(),
-    retryPendingDetectedOfferSyncs(),
+    enqueueEnrolledOfferTask(() => retryPendingEnrolledOfferSyncs(scope)),
+    retryPendingDetectedOfferSyncs(scope),
   ]);
+  const failedRunIds = Array.from(new Set([
+    ...enrolledResult.failedRunIds,
+    ...detectedResult.failedRunIds,
+  ]));
+  if (failedRunIds.length > 0) {
+    const failed = new Set(failedRunIds);
+    const removeFailedRuns = async (storageKey: string) => {
+      const stored = await chrome.storage.local.get(storageKey);
+      const pending = Array.isArray(stored[storageKey])
+        ? stored[storageKey].filter(hasOptionalRunId)
+        : [];
+      const remaining = pending.filter((payload) =>
+        typeof payload.runId !== "string" || !failed.has(payload.runId)
+      );
+      if (remaining.length !== pending.length) {
+        await chrome.storage.local.set({ [storageKey]: remaining });
+      }
+    };
+    await Promise.all([
+      enqueueEnrolledOfferTask(() => removeFailedRuns(
+        getHouseholdScopedStorageKey(STORAGE_KEY, scope),
+      )),
+      enqueueDetectedOfferTask(() => removeFailedRuns(
+        getHouseholdScopedStorageKey(DETECTED_STORAGE_KEY, scope),
+      )),
+    ]);
+  }
   return buildPendingOfferSyncRetryResult(
     [
       ...enrolledResult.savedRunIds,
@@ -598,18 +855,38 @@ export async function retryPendingOfferSyncs(): Promise<{
       ...enrolledResult.remainingRunIds,
       ...detectedResult.remainingRunIds,
     ],
+    failedRunIds,
   );
 }
 
 /** Pull offers from backend and rebuild both URL caches. Call on startup/re-auth. */
-export async function pullOfferUrlCache(): Promise<void> {
+export async function pullOfferUrlCache(
+  scope: HouseholdOperationScope | null = null,
+): Promise<void> {
   try {
+    const generation = getAuthGeneration();
     const auth = await getAuth();
     if (!auth) return;
+    if (!await offerSyncScopeIsCurrent(scope)) return;
 
-    const response = await fetch(`${__CONVEX_SITE_URL__}/extension/offers-pull`, {
+    const endpoint = scope
+      ? `${__CONVEX_SITE_URL__}/extension/v2/offers-pull?${new URLSearchParams({
+          memberId: scope.memberId,
+          contextRevision: scope.contextRevision,
+          memberLifecycleVersion: String(scope.memberLifecycleVersion),
+        }).toString()}`
+      : `${__CONVEX_SITE_URL__}/extension/offers-pull`;
+    const response = await fetch(endpoint, {
       method: "GET",
-      headers: { Authorization: `Bearer ${auth.token}` },
+      headers: {
+        Authorization: `Bearer ${auth.token}`,
+        ...(scope
+          ? {
+              "X-Nextcard-Extension-Version": chrome.runtime.getManifest().version,
+              "X-Nextcard-Protocol-Version": "2",
+            }
+          : {}),
+      },
     });
 
     if (!response.ok) return;
@@ -656,10 +933,21 @@ export async function pullOfferUrlCache(): Promise<void> {
       }
     }
 
+    if (!await offerSyncScopeIsCurrent(scope)) return;
+
+    const enrolledKey = getHouseholdScopedStorageKey(OFFER_URL_CACHE_KEY, scope);
+    const detectedKey = getHouseholdScopedStorageKey(DETECTED_OFFER_URL_CACHE_KEY, scope);
+    if (generation !== getAuthGeneration()) return;
     await chrome.storage.local.set({
-      [OFFER_URL_CACHE_KEY]: enrolledCache,
-      [DETECTED_OFFER_URL_CACHE_KEY]: detectedCache,
+      [enrolledKey]: enrolledCache,
+      [detectedKey]: detectedCache,
     });
+    if (generation !== getAuthGeneration()) {
+      await removeStorageValuesIfUnchanged({
+        [enrolledKey]: enrolledCache,
+        [detectedKey]: detectedCache,
+      });
+    }
   } catch (e) {
     console.error("[NextCard Offers] pullOfferUrlCache error:", e);
   }

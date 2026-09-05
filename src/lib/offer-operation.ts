@@ -1,3 +1,8 @@
+import {
+  householdOperationScopesMatch,
+  type HouseholdOperationScope,
+} from "./household-context";
+
 export type OfferIssuer = "chase" | "amex" | "citi" | "capitalone";
 
 export type OfferOperationPhase =
@@ -32,6 +37,7 @@ export interface OfferOperationCard {
 export interface OfferOperationState {
   runId: string;
   issuer: OfferIssuer;
+  scope: HouseholdOperationScope | null;
   phase: OfferOperationPhase;
   ownedTabId: number | null;
   startedAt: string;
@@ -127,10 +133,12 @@ export function createOfferOperation(
   issuer: OfferIssuer,
   runId: string,
   now = new Date().toISOString(),
+  scope: HouseholdOperationScope | null = null,
 ): OfferOperationState {
   return {
     runId,
     issuer,
+    scope,
     phase: "opening",
     ownedTabId: null,
     startedAt: now,
@@ -147,6 +155,34 @@ export function createOfferOperation(
     saveStatus: "not_started",
     saveError: null,
   };
+}
+
+function normalizeScope(value: unknown): HouseholdOperationScope | null {
+  if (!isRecord(value)) return null;
+  if (
+    typeof value.accountScopeId !== "string"
+    || typeof value.memberId !== "string"
+    || typeof value.memberDisplayName !== "string"
+    || typeof value.memberLifecycleVersion !== "number"
+    || typeof value.contextRevision !== "string"
+  ) {
+    return null;
+  }
+  return {
+    accountScopeId: value.accountScopeId,
+    memberId: value.memberId,
+    memberDisplayName: value.memberDisplayName,
+    memberLifecycleVersion: value.memberLifecycleVersion,
+    contextRevision: value.contextRevision,
+  };
+}
+
+export function offerOperationScopeMatches(
+  state: OfferOperationState,
+  scope: HouseholdOperationScope | null,
+) {
+  if (!state.scope || !scope) return state.scope === scope;
+  return householdOperationScopesMatch(state.scope, scope);
 }
 
 export function canTransitionOfferOperation(
@@ -248,6 +284,7 @@ export function normalizeOfferOperation(value: unknown): OfferOperationState | n
   return {
     runId: value.runId.slice(0, 100),
     issuer: value.issuer,
+    scope: normalizeScope(value.scope),
     phase,
     ownedTabId:
       typeof value.ownedTabId === "number" && Number.isInteger(value.ownedTabId)

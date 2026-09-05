@@ -4,8 +4,10 @@ import type {
   ProviderId,
   TravelSyncState,
 } from "../../lib/types";
+import { parseHouseholdOperationScope, type HouseholdOperationScope } from "../../lib/household-context";
 import {
   isOfferIssuer,
+  type OfferIssuer,
   type OfferOperationCard,
   type OfferOperationPhase,
   type OfferSaveStatus,
@@ -237,6 +239,7 @@ function isSyncStartInProgress(status: string) {
     status === "detecting_login"
     || status === "waiting_for_login"
     || status === "extracting"
+    || status === "awaiting_confirmation"
   );
 }
 
@@ -251,13 +254,25 @@ export function createMessageRouter(options: {
   onSignOut: () => Promise<void>;
   recordConsent: (message: Record<string, unknown>) => Promise<void>;
   pushToNextCard: (providerId: ProviderId, data: unknown) => Promise<unknown>;
-  deleteFromNextCard: (providerId: ProviderId) => Promise<{ ok: boolean; error?: string }>;
+  deleteFromNextCard: (providerId: ProviderId, expectedScope?: HouseholdOperationScope) => Promise<{ ok: boolean; error?: string }>;
+  prepareSyncTarget?: (providerId: ProviderId, expectedScope?: HouseholdOperationScope) => Promise<boolean>;
+  confirmHouseholdSync?: () => Promise<{ ok: boolean; error?: string }>;
+  cancelHouseholdSyncConfirmation?: () => Promise<{ ok: boolean }>;
+  switchHouseholdMember?: (memberId: string) => Promise<{ ok: boolean; error?: string }>;
+  getHouseholdState?: () => Promise<unknown>;
   isProviderLocked?: (providerId: ProviderId) => Promise<boolean>;
   getExtensionProfile?: () => Promise<ExtensionProfile | null>;
   refreshExtensionProfile?: () => Promise<ExtensionProfile | null>;
   openUpgrade?: () => Promise<void>;
+  canWriteOffers?: () => Promise<boolean>;
   offerOperations: OfferOperationStore;
   offerCoordinator: OfferOperationCoordinator;
+  startLegacyOfferOperation?: (
+    issuer: OfferIssuer,
+  ) => Promise<
+    Awaited<ReturnType<OfferOperationStore["start"]>>
+    | { ok: false; error: string }
+  >;
   travelSyncCoordinator: {
     start: (providerIds: ProviderId[]) => Promise<TravelSyncState>;
     getStatus: () => Promise<TravelSyncState>;
@@ -280,6 +295,9 @@ export function createMessageRouter(options: {
     runId: string,
     message: Record<string, unknown>,
   ) {
+    if (!await options.offerOperations.getActiveRun(issuer, runId)) {
+      return "failed";
+    }
     await options.offerOperations.patchActiveRun(issuer, runId, {
       saveStatus: "saving",
       saveError: null,
@@ -325,6 +343,9 @@ export function createMessageRouter(options: {
             return;
           }
 
+          const scope = parseHouseholdOperationScope(message.expectedScope);
+          if (message.expectedScope != null && !scope) throw new Error("household_scope_changed");
+          await options.prepareSyncTarget?.(providerId, scope);
           if (await options.isProviderLocked?.(providerId)) {
             sendResponse({ ok: false, error: "selection_locked" });
             return;
@@ -363,6 +384,15 @@ export function createMessageRouter(options: {
         })().catch((error) => {
           const errorMessage =
             error instanceof Error ? error.message : "Failed to start sync";
+          options.stateStore.updateProvider(providerId, {
+            status: "error",
+            error: errorMessage === "household_scope_changed"
+              ? "The household profile changed. Refresh and choose the profile again before syncing."
+              : errorMessage === "household_context_unavailable"
+                ? "Could not verify the household profile. Check your connection and try again."
+                : errorMessage,
+            progressMessage: null,
+          });
           sendResponse({ ok: false, error: errorMessage });
         });
         return true;
@@ -491,7 +521,24 @@ export function createMessageRouter(options: {
           sendResponse({ ok: false, error: "unsupported_issuer" });
           return true;
         }
-        void options.offerCoordinator.startCheck(message.issuer).then((result) => sendResponse(result));
+        const issuer = message.issuer;
+        void (async () => {
+          if (options.canWriteOffers && !await options.canWriteOffers()) {
+            sendResponse({ ok: false, error: "member_offer_writes_disabled" });
+            return;
+          }
+          sendResponse(await options.offerCoordinator.startCheck(issuer));
+        })();
+        return true;
+      }
+
+      case "START_LEGACY_OFFER_OPERATION": {
+        if (!isOfferIssuer(message.issuer) || !options.startLegacyOfferOperation) {
+          sendResponse({ ok: false, error: "unsupported_issuer" });
+          return true;
+        }
+        void options.startLegacyOfferOperation(message.issuer)
+          .then((result) => sendResponse(result));
         return true;
       }
 
@@ -599,6 +646,10 @@ export function createMessageRouter(options: {
         const addMatchingOffersAcrossCards =
           message.addMatchingOffersAcrossCards === true;
         void (async () => {
+          if (options.canWriteOffers && !await options.canWriteOffers()) {
+            sendResponse({ ok: false, error: "member_offer_writes_disabled" });
+            return;
+          }
           const [auth, profile] = await Promise.all([
             options.getCachedAuth(),
             options.getExtensionProfile?.() ?? Promise.resolve(null),
@@ -700,31 +751,82 @@ export function createMessageRouter(options: {
       case "CLEAR_DATA": {
         const providerId = message.provider;
         if (options.stateStore.isProviderId(providerId)) {
-          options.stateStore.updateProvider(providerId, {
-            status: "idle",
-            data: null,
-            error: null,
-            lastSyncedAt: null,
-            progressMessage: null,
-            backendSyncStatus: null,
-            backendSyncError: null,
-            pendingBackendPush: false,
-            lastBackendPushAttemptAt: null,
-          });
-          options.stateStore.setTabId(providerId, null);
-          void options.deleteFromNextCard(providerId).then((result) => {
-            if (result.ok) {
-            } else {
+          const scope = parseHouseholdOperationScope(message.expectedScope);
+          if (message.expectedScope != null && !scope) {
+            sendResponse({ ok: false, error: "household_scope_changed" });
+            return true;
+          }
+          void options.deleteFromNextCard(providerId, scope).then((result) => {
+            if (!result.ok) {
               console.warn(
                 `[NextCard SW] Delete failed for ${providerId}:`,
                 result.error,
               );
             }
+            sendResponse(result);
+          }).catch((error) => {
+            sendResponse({
+              ok: false,
+              error: error instanceof Error ? error.message : "Delete failed",
+            });
           });
+          return true;
         }
-        sendResponse({ ok: true });
+        sendResponse({ ok: false, error: "unknown_provider" });
         return true;
       }
+
+      case "GET_HOUSEHOLD_STATE": {
+        if (!options.getHouseholdState) {
+          sendResponse(null);
+          return true;
+        }
+        void options.getHouseholdState()
+          .then((state) => sendResponse(state))
+          .catch(() => sendResponse(null));
+        return true;
+      }
+
+      case "SWITCH_HOUSEHOLD_MEMBER": {
+        const memberId = message.memberId;
+        if (typeof memberId !== "string" || !options.switchHouseholdMember) {
+          sendResponse({ ok: false, error: "invalid_member" });
+          return true;
+        }
+        void options.switchHouseholdMember(memberId)
+          .then(sendResponse)
+          .catch((error) => sendResponse({
+            ok: false,
+            error: error instanceof Error ? error.message : "member_switch_failed",
+          }));
+        return true;
+      }
+
+      case "CONFIRM_HOUSEHOLD_SYNC":
+        if (!options.confirmHouseholdSync) {
+          sendResponse({ ok: false, error: "household_sync_unavailable" });
+          return true;
+        }
+        void options.confirmHouseholdSync()
+          .then(sendResponse)
+          .catch((error) => sendResponse({
+            ok: false,
+            error: error instanceof Error ? error.message : "confirmation_failed",
+          }));
+        return true;
+
+      case "CANCEL_HOUSEHOLD_SYNC_CONFIRMATION":
+        if (!options.cancelHouseholdSyncConfirmation) {
+          sendResponse({ ok: false, error: "household_sync_unavailable" });
+          return true;
+        }
+        void options.cancelHouseholdSyncConfirmation()
+          .then(sendResponse)
+          .catch((error) => sendResponse({
+            ok: false,
+            error: error instanceof Error ? error.message : "confirmation_cancel_failed",
+          }));
+        return true;
 
       case "GET_STATUS": {
         const providerId = message.provider;
@@ -763,10 +865,7 @@ export function createMessageRouter(options: {
         return true;
 
       case "SIGN_OUT_NEXTCARD":
-        void Promise.all([
-          options.onSignOut(),
-          options.clearAuth(),
-        ]).then(
+        void options.clearAuth().then(options.onSignOut).then(
           () => sendResponse({ ok: true }),
           () => sendResponse({ ok: false, error: "sign_out_failed" }),
         );
@@ -1198,10 +1297,14 @@ export function createMessageRouter(options: {
           sendResponse({ ok: false, error: "missing_run_id" });
           return true;
         }
-        amexEnrollmentFallbackRuns.delete(message.runId);
+        const runId = message.runId;
         const enrolledByCard = Array.isArray(message.enrolledByCard) ? message.enrolledByCard : null;
         void (async () => {
-          const runId = message.runId as string;
+          if (!await options.offerOperations.getActiveRun("amex", runId)) {
+            sendResponse({ ok: false, error: "stale_offer_operation" });
+            return;
+          }
+          amexEnrollmentFallbackRuns.delete(runId);
           const auth = await options.getCachedAuth();
           await recordOfferActivations(
             auth?.email,
@@ -1317,14 +1420,16 @@ export function createMessageRouter(options: {
       case "CHASE_OFFERS_COMPLETE":
         void (async () => {
           const runId = typeof message.runId === "string" ? message.runId : null;
-          if (runId) {
-            const auth = await options.getCachedAuth();
-            await recordOfferActivations(
-              auth?.email,
-              runId,
-              typeof message.added === "number" ? message.added : 0,
-            ).catch(() => {});
+          if (!runId || !await options.offerOperations.getActiveRun("chase", runId)) {
+            sendResponse({ ok: false, error: "stale_offer_operation" });
+            return;
           }
+          const auth = await options.getCachedAuth();
+          await recordOfferActivations(
+            auth?.email,
+            runId,
+            typeof message.added === "number" ? message.added : 0,
+          ).catch(() => {});
           const enrolledByCard = Array.isArray(message.enrolledByCard)
             ? message.enrolledByCard
             : null;
@@ -1476,14 +1581,16 @@ export function createMessageRouter(options: {
       case "CITI_OFFERS_COMPLETE":
         void (async () => {
           const runId = typeof message.runId === "string" ? message.runId : null;
-          if (runId) {
-            const auth = await options.getCachedAuth();
-            await recordOfferActivations(
-              auth?.email,
-              runId,
-              typeof message.added === "number" ? message.added : 0,
-            ).catch(() => {});
+          if (!runId || !await options.offerOperations.getActiveRun("citi", runId)) {
+            sendResponse({ ok: false, error: "stale_offer_operation" });
+            return;
           }
+          const auth = await options.getCachedAuth();
+          await recordOfferActivations(
+            auth?.email,
+            runId,
+            typeof message.added === "number" ? message.added : 0,
+          ).catch(() => {});
           const enrolledByCard = Array.isArray(message.enrolledByCard)
             ? message.enrolledByCard
             : null;
@@ -1577,6 +1684,10 @@ export function createMessageRouter(options: {
       case "CAPITALONE_OFFERS_COMPLETE":
         void (async () => {
           const runId = typeof message.runId === "string" ? message.runId : null;
+          if (!runId || !await options.offerOperations.getActiveRun("capitalone", runId)) {
+            sendResponse({ ok: false, error: "stale_offer_operation" });
+            return;
+          }
           const hasOffersToSave =
             Array.isArray(message.detectedOffers) && message.detectedOffers.length > 0;
           if (runId) {
@@ -1621,8 +1732,7 @@ export function createMessageRouter(options: {
           return true;
         }
         if (Array.isArray(message.detectedOffers) && message.detectedOffers.length > 0) {
-          void Promise.resolve(options.syncDetectedOffers?.("chase", message))
-            .then((saveStatus) => sendResponse({ ok: saveStatus !== "failed", saveStatus }));
+          sendResponse({ ok: false, error: "missing_run_id" });
           return true;
         }
         sendResponse({ ok: true });
@@ -1642,8 +1752,7 @@ export function createMessageRouter(options: {
           Array.isArray(message.detectedOffers)
           && (message.detectedOffers.length > 0 || message.snapshotComplete === true)
         ) {
-          void Promise.resolve(options.syncDetectedOffers?.("amex", message))
-            .then((saveStatus) => sendResponse({ ok: saveStatus !== "failed", saveStatus }));
+          sendResponse({ ok: false, error: "missing_run_id" });
           return true;
         }
         sendResponse({ ok: true });
@@ -1660,8 +1769,7 @@ export function createMessageRouter(options: {
           return true;
         }
         if (Array.isArray(message.detectedOffers) && message.detectedOffers.length > 0) {
-          void Promise.resolve(options.syncDetectedOffers?.("citi", message))
-            .then((saveStatus) => sendResponse({ ok: saveStatus !== "failed", saveStatus }));
+          sendResponse({ ok: false, error: "missing_run_id" });
           return true;
         }
         sendResponse({ ok: true });
@@ -1678,8 +1786,7 @@ export function createMessageRouter(options: {
           return true;
         }
         if (Array.isArray(message.detectedOffers) && message.detectedOffers.length > 0) {
-          void Promise.resolve(options.syncDetectedOffers?.("capitalone", message))
-            .then((saveStatus) => sendResponse({ ok: saveStatus !== "failed", saveStatus }));
+          sendResponse({ ok: false, error: "missing_run_id" });
           return true;
         }
         sendResponse({ ok: true });

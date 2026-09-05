@@ -5,6 +5,11 @@ import {
   type CachedOffer,
   type OfferUrlCache,
 } from "../lib/sync-offers-to-nextcard";
+import {
+  getCurrentHouseholdOperationScope,
+  getHouseholdScopedStorageKey,
+  householdOperationScopesMatch,
+} from "../lib/household-context";
 
 interface OfferGroup {
   merchantName: string;
@@ -26,6 +31,7 @@ const ISSUER_HOSTNAMES = new Set([
 
 const ALERT_ICON_PATH = "src/icons/icon128.png";
 const IGNORED_OFFER_ALERT_HOSTS_KEY = "ignoredOfferAlertHosts";
+let offerAlertGeneration = 0;
 
 function isScriptableUrl(url: string) {
   return url.startsWith("http://") || url.startsWith("https://");
@@ -53,9 +59,13 @@ async function maybeInjectOfferAlert(tab: chrome.tabs.Tab) {
   const hostname = normalizeHostname(tab.url);
   if (!hostname || ISSUER_HOSTNAMES.has(hostname)) return;
 
+  const generation = offerAlertGeneration;
+  const scope = await getCurrentHouseholdOperationScope();
+  const enrolledCacheKey = getHouseholdScopedStorageKey(OFFER_URL_CACHE_KEY, scope);
+  const detectedCacheKey = getHouseholdScopedStorageKey(DETECTED_OFFER_URL_CACHE_KEY, scope);
   const stored = await chrome.storage.local.get([
-    OFFER_URL_CACHE_KEY,
-    DETECTED_OFFER_URL_CACHE_KEY,
+    enrolledCacheKey,
+    detectedCacheKey,
     IGNORED_OFFER_ALERT_HOSTS_KEY,
   ]);
   const ignoredHosts: Record<string, boolean> = stored[IGNORED_OFFER_ALERT_HOSTS_KEY] ?? {};
@@ -63,11 +73,23 @@ async function maybeInjectOfferAlert(tab: chrome.tabs.Tab) {
 
   const matchingOffers = getMatchingOffers(
     hostname,
-    stored[OFFER_URL_CACHE_KEY],
-    stored[DETECTED_OFFER_URL_CACHE_KEY],
+    stored[enrolledCacheKey],
+    stored[detectedCacheKey],
   );
 
   if (matchingOffers.length === 0) return;
+  const currentScope = await getCurrentHouseholdOperationScope();
+  if (
+    generation !== offerAlertGeneration
+    || (
+      scope === null
+        ? currentScope !== null
+        : currentScope === null
+          || !householdOperationScopesMatch(scope, currentScope)
+    )
+  ) {
+    return;
+  }
 
   try {
     await chrome.scripting.executeScript({
@@ -81,9 +103,27 @@ async function maybeInjectOfferAlert(tab: chrome.tabs.Tab) {
         IGNORED_OFFER_ALERT_HOSTS_KEY,
       ],
     });
+    if (generation !== offerAlertGeneration) {
+      await removeOfferAlertFromTab(tab.id);
+    }
   } catch (error) {
     console.warn("[NextCard Offers] Failed to inject merchant alert:", error);
   }
+}
+
+async function removeOfferAlertFromTab(tabId: number) {
+  await chrome.scripting.executeScript({
+    target: { tabId },
+    func: () => document.getElementById("nextcard-offer-toast")?.remove(),
+  }).catch(() => undefined);
+}
+
+export async function clearInjectedOfferAlerts() {
+  offerAlertGeneration += 1;
+  const tabs = await chrome.tabs.query({}).catch(() => []);
+  await Promise.all(tabs.flatMap((tab) =>
+    tab.id === undefined ? [] : [removeOfferAlertFromTab(tab.id)]
+  ));
 }
 
 export function registerMerchantOfferAlertMonitor() {
@@ -103,6 +143,11 @@ export function registerMerchantOfferAlertMonitor() {
       void maybeInjectOfferAlert(tab);
     });
   });
+}
+
+export async function initializeMerchantOfferAlertMonitor() {
+  await clearInjectedOfferAlerts();
+  registerMerchantOfferAlertMonitor();
 }
 
 function injectOfferToast(

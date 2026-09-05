@@ -11,8 +11,10 @@ import {
   type OfferOperationSnapshot,
   type OfferOperationState,
 } from "../lib/offer-operation";
+import type { HouseholdOperationScope } from "../lib/household-context";
 
 type OperationPatch = Partial<Omit<OfferOperationState, "runId" | "issuer" | "startedAt">>;
+const UNATTACHED_OPENING_TTL_MS = 30_000;
 
 export function createOfferOperationStore() {
   let snapshot: OfferOperationSnapshot = { active: null, history: {} };
@@ -73,7 +75,13 @@ export function createOfferOperationStore() {
     }
 
     if (active.ownedTabId == null) {
-      if (active.phase !== "opening") {
+      const openingStartedAt = new Date(active.startedAt).getTime();
+      const openingExpired = active.phase === "opening"
+        && (
+          !Number.isFinite(openingStartedAt)
+          || Date.now() - openingStartedAt >= UNATTACHED_OPENING_TTL_MS
+        );
+      if (active.phase !== "opening" || openingExpired) {
         await patch(active.runId, {
           phase: "interrupted",
           error: "The issuer tab is no longer available.",
@@ -93,7 +101,10 @@ export function createOfferOperationStore() {
     return snapshot;
   }
 
-  async function start(issuer: OfferIssuer) {
+  async function start(
+    issuer: OfferIssuer,
+    scope: HouseholdOperationScope | null = null,
+  ) {
     let resolveResult!: (value:
       | { ok: false; busy: OfferIssuer; state: OfferOperationState }
       | { ok: true; state: OfferOperationState }
@@ -116,7 +127,12 @@ export function createOfferOperationStore() {
             resolveResult({ ok: false, busy: active.issuer, state: active });
             return;
           }
-          const state = createOfferOperation(issuer, crypto.randomUUID());
+          const state = createOfferOperation(
+            issuer,
+            crypto.randomUUID(),
+            new Date().toISOString(),
+            scope,
+          );
           snapshot = {
             active: state,
             history: { ...snapshot.history, [issuer]: state },
@@ -132,8 +148,9 @@ export function createOfferOperationStore() {
 
   async function patch(runId: string, changes: OperationPatch) {
     await hydrate();
+    const patchesActiveRun = snapshot.active?.runId === runId;
     const current =
-      snapshot.active?.runId === runId
+      patchesActiveRun
         ? snapshot.active
         : Object.values(snapshot.history).find((state) => state?.runId === runId) ?? null;
     if (!current) return null;
@@ -141,7 +158,9 @@ export function createOfferOperationStore() {
     const next = applyOfferOperationPatch(current, changes);
     if (!next) return null;
     snapshot = {
-      active: isOfferOperationActive(next.phase) ? next : null,
+      active: patchesActiveRun
+        ? isOfferOperationActive(next.phase) ? next : null
+        : snapshot.active,
       history: { ...snapshot.history, [next.issuer]: next },
     };
     await persist();
@@ -196,6 +215,22 @@ export function createOfferOperationStore() {
     return patch(runId, changes);
   }
 
+  async function getActiveRun(issuer: OfferIssuer, runId: string) {
+    await hydrate();
+    return snapshot.active?.issuer === issuer && snapshot.active.runId === runId
+      ? snapshot.active
+      : null;
+  }
+
+  async function getRun(issuer: OfferIssuer, runId: string) {
+    await hydrate();
+    if (snapshot.active?.issuer === issuer && snapshot.active.runId === runId) {
+      return snapshot.active;
+    }
+    const historical = snapshot.history[issuer];
+    return historical?.runId === runId ? historical : null;
+  }
+
   async function beginEnrollment(
     runId: string,
     selectedCardKeys: string[],
@@ -247,6 +282,7 @@ export function createOfferOperationStore() {
     ) {
       return null;
     }
+    if (snapshot.active && snapshot.active.runId !== runId) return null;
 
     const selectedKeys = new Set(completed.selectedCardKeys);
     const refreshAllCounts =
@@ -268,7 +304,12 @@ export function createOfferOperationStore() {
     });
     const now = new Date().toISOString();
     const next: OfferOperationState = {
-      ...createOfferOperation(completed.issuer, crypto.randomUUID(), now),
+      ...createOfferOperation(
+        completed.issuer,
+        crypto.randomUUID(),
+        now,
+        completed.scope,
+      ),
       phase: refreshAllCounts ? "checking" : "ready_to_add",
       ownedTabId: completed.ownedTabId,
       checkedAt: completed.checkedAt ?? now,
@@ -323,6 +364,8 @@ export function createOfferOperationStore() {
     patch,
     patchActiveIssuer,
     patchActiveRun,
+    getActiveRun,
+    getRun,
     beginEnrollment,
     continueAfterEnrollmentCompletion,
     markReady,

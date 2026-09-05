@@ -6,12 +6,14 @@ const storage = new Map<string, unknown>();
 const getTab = vi.fn();
 const removeTab = vi.fn();
 const sendMessage = vi.fn();
+const createTab = vi.fn();
 
 beforeEach(() => {
   storage.clear();
   getTab.mockReset();
   removeTab.mockReset();
   sendMessage.mockReset();
+  createTab.mockReset();
   getTab.mockResolvedValue({
     id: 42,
     url: "https://secure.chase.com/web/auth/dashboard",
@@ -37,7 +39,7 @@ beforeEach(() => {
       get: getTab,
       remove: removeTab,
       sendMessage,
-      create: vi.fn(),
+      create: createTab,
       update: vi.fn(),
       onUpdated: {
         addListener: vi.fn(),
@@ -107,6 +109,69 @@ async function readyAmex() {
 }
 
 describe("offer operation coordinator", () => {
+  it("does not open an issuer when the account scope is unavailable", async () => {
+    const store = createOfferOperationStore();
+    const coordinator = createOfferOperationCoordinator(store, async () => null);
+
+    await expect(coordinator.startCheck("chase")).resolves.toEqual({
+      ok: false,
+      error: "account_scope_unavailable",
+    });
+    expect(createTab).not.toHaveBeenCalled();
+    expect((await store.getSnapshot()).active).toBeNull();
+  });
+
+  it("keeps legacy offer checks available for ordinary accounts", async () => {
+    const store = createOfferOperationStore();
+    createTab.mockResolvedValue({ id: 42 });
+    const coordinator = createOfferOperationCoordinator(
+      store,
+      async () => null,
+      async () => true,
+    );
+
+    const result = await coordinator.startCheck("chase");
+
+    expect(result.ok).toBe(true);
+    expect((await store.getSnapshot()).active?.scope).toBeNull();
+    expect(createTab).toHaveBeenCalledOnce();
+  });
+
+  it("blocks enrollment when the frozen household revision changed", async () => {
+    const scope = {
+      accountScopeId: "account-a",
+      memberId: "member-a",
+      memberDisplayName: "Vishal",
+      memberLifecycleVersion: 1,
+      contextRevision: "revision-1",
+    };
+    const store = createOfferOperationStore();
+    const started = await store.start("chase", scope);
+    await store.patch(started.state.runId, {
+      phase: "checking",
+      ownedTabId: 42,
+    });
+    await store.markReady(started.state.runId, [{
+      key: "card-id-1",
+      name: "Sapphire",
+      lastDigits: "1234",
+      availableCount: 18,
+      countStatus: "complete",
+    }]);
+    const coordinator = createOfferOperationCoordinator(
+      store,
+      async () => ({ ...scope, contextRevision: "revision-2" }),
+    );
+
+    await expect(coordinator.startEnrollment(
+      started.state.runId,
+      ["card-id-1"],
+      18,
+    )).resolves.toEqual({ ok: false, error: "stale_offer_operation" });
+    expect(sendMessage).not.toHaveBeenCalled();
+    expect((await store.getSnapshot()).history.chase?.phase).toBe("interrupted");
+  });
+
   it("validates and records enrollment before sending the issuer command", async () => {
     const { store, runId } = await readyChase();
     const coordinator = createOfferOperationCoordinator(store);

@@ -33,6 +33,23 @@ beforeEach(() => {
 });
 
 describe("background offer operation store", () => {
+  it("freezes the household member scope for active and completed run lookups", async () => {
+    const store = createOfferOperationStore();
+    const scope = {
+      accountScopeId: "account:owner-a",
+      memberId: "member-primary",
+      memberDisplayName: "Vishal",
+      memberLifecycleVersion: 1,
+      contextRevision: "revision-1",
+    };
+    const started = await store.start("chase", scope);
+
+    expect(await store.getActiveRun("chase", started.state.runId)).toMatchObject({ scope });
+    await store.patch(started.state.runId, { phase: "failed" });
+    expect(await store.getActiveRun("chase", started.state.runId)).toBeNull();
+    expect(await store.getRun("chase", started.state.runId)).toMatchObject({ scope });
+  });
+
   it("enforces a single issuer operation globally", async () => {
     const store = createOfferOperationStore();
     const chase = await store.start("chase");
@@ -56,6 +73,34 @@ describe("background offer operation store", () => {
     const started = await store.start("chase");
     expect(await store.patch("late-run", { phase: "failed" })).toBeNull();
     expect((await store.getSnapshot()).active?.runId).toBe(started.state.runId);
+  });
+
+  it("does not let a completed historical run clear a newer active run", async () => {
+    const store = createOfferOperationStore();
+    const first = await store.start("chase");
+    await store.patch(first.state.runId, { phase: "checking" });
+    await store.patch(first.state.runId, { phase: "completed", saveStatus: "saving" });
+    const second = await store.start("amex");
+    expect(second.ok).toBe(true);
+
+    await store.patch(first.state.runId, { saveStatus: "saved" });
+
+    expect((await store.getSnapshot()).active?.runId).toBe(second.state.runId);
+    expect(await store.continueAfterEnrollmentCompletion(first.state.runId)).toBeNull();
+    expect((await store.getSnapshot()).active?.runId).toBe(second.state.runId);
+  });
+
+  it("interrupts an opening operation that never acquired a tab", async () => {
+    const startedAt = new Date(Date.now() - 30_001).toISOString();
+    storage.set(OFFER_OPERATION_STORAGE_KEY, {
+      active: createOfferOperation("chase", "stale-opening", startedAt),
+      history: {},
+    });
+
+    const snapshot = await createOfferOperationStore().getSnapshot();
+
+    expect(snapshot.active).toBeNull();
+    expect(snapshot.history.chase?.phase).toBe("interrupted");
   });
 
   it("marks an operation interrupted when its owned tab is missing", async () => {

@@ -1,6 +1,6 @@
 {
   "name": "nextcard-sync",
-  "version": "0.8.0",
+  "version": "0.8.2",
   "private": true,
   "type": "module",
   "packageManager": "pnpm@9.15.4",
@@ -8,8 +8,9 @@
     "dev": "vite build --watch --mode development",
     "build": "vite build",
     "clean": "rm -rf dist dist-dev extension.zip",
-    "test": "vitest run",
-    "typecheck": "tsc --noEmit"
+    "test": "vitest run src",
+    "typecheck": "tsc --noEmit",
+    "verify:artifact": "node scripts/verify-artifact.mjs"
   },
   "dependencies": {
     "immutable": "^5.1.5",

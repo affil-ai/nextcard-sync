@@ -15,6 +15,11 @@ import { REWARDS_SUMMARIES_STORAGE_KEY } from "./rewards-summary";
 const STORAGE_KEY = "nextcard_auth";
 
 const AUTH_BASE_URL = __NEXTCARD_URL__;
+let authGeneration = 0;
+
+export function getAuthGeneration() {
+  return authGeneration;
+}
 
 export function getAuthUrl(): string {
   const extId = chrome.runtime.id;
@@ -27,10 +32,12 @@ export async function getAuth(): Promise<NextCardAuth | null> {
 }
 
 export async function setAuth(auth: NextCardAuth): Promise<void> {
+  authGeneration += 1;
   await chrome.storage.local.set({ [STORAGE_KEY]: auth });
 }
 
 export async function clearAuth(): Promise<void> {
+  authGeneration += 1;
   const stored = await chrome.storage.local.get(null);
   const accountScopedKeys = Object.keys(stored).filter((key) => (
     key === STORAGE_KEY
@@ -40,6 +47,13 @@ export async function clearAuth(): Promise<void> {
     || key === "offerUrlCache"
     || key === "detectedOfferUrlCache"
     || key === "pendingOfferSyncs"
+    || key === "pendingDetectedOfferSyncs"
+    || key === "pendingOfferActivationCompletions"
+    || key === "nextcard_legacy_offer_queue_migration_v2"
+    || key === "nextcard_household_context_v2"
+    || key === "nextcard_household_context_write_token_v2"
+    || key === "nextcard_household_selected_member_v2"
+    || key === "pending_household_sync_confirmation_v2"
     || key === "disclosureAccepted"
     || key === "consentGiven"
     || key === "firstSyncCompleted"
@@ -47,6 +61,11 @@ export async function clearAuth(): Promise<void> {
     || key === "pendingDestination"
     || key === "pendingTab"
     || key.startsWith("provider_")
+    || key.startsWith("rewards_summaries_v2::")
+    || key.startsWith("offerUrlCache::")
+    || key.startsWith("detectedOfferUrlCache::")
+    || key.startsWith("pendingOfferSyncs::")
+    || key.startsWith("pendingDetectedOfferSyncs::")
   ));
   if (accountScopedKeys.length > 0) {
     await chrome.storage.local.remove(accountScopedKeys);

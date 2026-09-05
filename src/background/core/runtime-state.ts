@@ -4,10 +4,13 @@ import type {
   ProviderId,
   ProviderSyncState,
 } from "../../lib/types";
+import { getHouseholdProviderStorageKey } from "../../lib/household-context";
+import type { HouseholdSyncTarget } from "../../lib/household-context";
 
 export interface RuntimeState extends ProviderSyncState {
   loginState: LoginState;
   tabId: number | null;
+  syncTarget: HouseholdSyncTarget | null;
 }
 
 function defaultState(): RuntimeState {
@@ -23,6 +26,7 @@ function defaultState(): RuntimeState {
     pendingBackendPush: false,
     lastBackendPushAttemptAt: null,
     tabId: null,
+    syncTarget: null,
   };
 }
 
@@ -31,6 +35,12 @@ function getRunKey(providerId: ProviderId, attemptId: string) {
 }
 
 export function createRuntimeStateStore() {
+  let householdScope: {
+    accountScopeId: string;
+    memberId: string;
+    memberLifecycleVersion: number;
+    isPrimary: boolean;
+  } | null = null;
   const states: Record<ProviderId, RuntimeState> = {
     marriott: defaultState(),
     atmos: defaultState(),
@@ -53,12 +63,72 @@ export function createRuntimeStateStore() {
   const runRegistry = createSyncRunRegistry();
   const runCancelListeners = new Map<string, Set<() => void>>();
 
+  function getProviderStorageKey(providerId: ProviderId) {
+    return householdScope
+      ? getHouseholdProviderStorageKey(
+          householdScope.accountScopeId,
+          householdScope.memberId,
+          householdScope.memberLifecycleVersion,
+          providerId,
+        )
+      : `provider_${providerId}`;
+  }
+
+  function getPersistedSyncTarget(
+    value: unknown,
+    providerId: ProviderId,
+  ): HouseholdSyncTarget | null {
+    if (!value || typeof value !== "object") return null;
+    const target = Object.fromEntries(Object.entries(value));
+    if (
+      target.provider !== providerId
+      || typeof target.accountScopeId !== "string"
+      || typeof target.memberId !== "string"
+      || typeof target.memberDisplayName !== "string"
+      || typeof target.memberLifecycleVersion !== "number"
+      || typeof target.contextRevision !== "string"
+      || typeof target.operationId !== "string"
+    ) {
+      return null;
+    }
+    return {
+      provider: providerId,
+      accountScopeId: target.accountScopeId,
+      memberId: target.memberId,
+      memberDisplayName: target.memberDisplayName,
+      memberLifecycleVersion: target.memberLifecycleVersion,
+      contextRevision: target.contextRevision,
+      operationId: target.operationId,
+    };
+  }
+
   async function hydratePersistedState() {
+    resetAllStates();
     await Promise.all(
       (Object.keys(states) as ProviderId[]).map(async (providerId) => {
-        const result = await chrome.storage.local.get(`provider_${providerId}`);
-        const savedState = result[`provider_${providerId}`];
-        if (!savedState?.lastSyncedAt && !savedState?.pendingBackendPush) return;
+        const storageKey = getProviderStorageKey(providerId);
+        const keys = householdScope?.isPrimary
+          ? [storageKey, `provider_${providerId}`]
+          : [storageKey];
+        const result = await chrome.storage.local.get(keys);
+        const namespacedState = result[storageKey];
+        const legacyState = householdScope?.isPrimary
+          ? result[`provider_${providerId}`]
+          : null;
+        const savedState = namespacedState ?? legacyState;
+        const syncTarget = getPersistedSyncTarget(
+          savedState?.syncTarget,
+          providerId,
+        );
+        if (
+          !savedState?.lastSyncedAt
+          && !savedState?.pendingBackendPush
+          && !syncTarget
+        ) return;
+
+        if (!namespacedState && legacyState && householdScope?.isPrimary) {
+          await chrome.storage.local.set({ [storageKey]: legacyState });
+        }
 
         states[providerId].lastSyncedAt = savedState.lastSyncedAt;
         states[providerId].data = savedState.data ?? null;
@@ -69,11 +139,16 @@ export function createRuntimeStateStore() {
           typeof savedState.lastBackendPushAttemptAt === "string"
             ? savedState.lastBackendPushAttemptAt
             : null;
-        states[providerId].status = savedState.pendingBackendPush
-          ? savedState.status === "done"
-            ? "done"
-            : "error"
-          : "done";
+        states[providerId].syncTarget = syncTarget;
+        states[providerId].status = savedState.status === "awaiting_confirmation"
+          ? "awaiting_confirmation"
+          : savedState.pendingBackendPush
+            ? savedState.status === "done"
+              ? "done"
+              : "error"
+            : savedState.lastSyncedAt
+              ? "done"
+              : "idle";
         states[providerId].error = savedState.pendingBackendPush
           ? savedState.backendSyncError ?? savedState.error ?? null
           : savedState.error ?? null;
@@ -105,9 +180,10 @@ export function createRuntimeStateStore() {
       backendSyncError,
       pendingBackendPush,
       lastBackendPushAttemptAt,
+      syncTarget,
     } = states[providerId];
-    chrome.storage.local.set({
-      [`provider_${providerId}`]: {
+    return chrome.storage.local.set({
+      [getProviderStorageKey(providerId)]: {
         status,
         data,
         error,
@@ -116,6 +192,7 @@ export function createRuntimeStateStore() {
         backendSyncError,
         pendingBackendPush,
         lastBackendPushAttemptAt,
+        syncTarget,
       },
     });
   }
@@ -200,6 +277,7 @@ export function createRuntimeStateStore() {
   }
 
   function finishSyncRun(providerId: ProviderId, attemptId: string) {
+    if (runRegistry.getRun(providerId)?.attemptId !== attemptId) return;
     states[providerId].tabId = null;
     states[providerId].progressMessage = null;
     runRegistry.clearRun(providerId, attemptId);
@@ -283,6 +361,24 @@ export function createRuntimeStateStore() {
     }
   }
 
+  async function setHouseholdScope(scope: {
+    accountScopeId: string;
+    memberId: string;
+    memberLifecycleVersion: number;
+    isPrimary: boolean;
+  } | null) {
+    if (
+      householdScope?.accountScopeId === scope?.accountScopeId
+      && householdScope?.memberId === scope?.memberId
+      && householdScope?.memberLifecycleVersion === scope?.memberLifecycleVersion
+      && householdScope?.isPrimary === scope?.isPrimary
+    ) {
+      return;
+    }
+    householdScope = scope;
+    await hydratePersistedState();
+  }
+
   return {
     states,
     hydratePersistedState,
@@ -304,5 +400,6 @@ export function createRuntimeStateStore() {
     getRun,
     markRunCancelled,
     resetAllStates,
+    setHouseholdScope,
   };
 }

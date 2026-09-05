@@ -1,4 +1,5 @@
 import type { ProviderId, ProviderSyncState, SyncStatus } from "../../lib/types";
+import { getDisplayedHouseholdScope } from "../state";
 
 const confirmModal = document.getElementById("confirmModal") as HTMLDivElement;
 const confirmModalTitle = document.getElementById("confirmModalTitle") as HTMLDivElement;
@@ -15,6 +16,7 @@ export const STATUS_LABELS: Record<SyncStatus, string> = {
   detecting_login: "Opening...",
   waiting_for_login: "Waiting for sign in",
   extracting: "Syncing your account...",
+  awaiting_confirmation: "Ready to confirm",
   done: "Sync complete",
   cancelled: "Sync cancelled",
   error: "Something went wrong",
@@ -26,6 +28,7 @@ export const STATUS_SUBTITLES: Record<SyncStatus, string> = {
   waiting_for_login: "",
   extracting:
     "Sit tight — we're navigating your account pages. Please don't close or switch the tab.",
+  awaiting_confirmation: "Review the account owner above before saving.",
   done: "",
   cancelled: "",
   error: "",
@@ -36,6 +39,7 @@ export const STATUS_DOT_CLASS: Record<SyncStatus, string> = {
   detecting_login: "waiting",
   waiting_for_login: "waiting",
   extracting: "extracting",
+  awaiting_confirmation: "confirmation",
   done: "done",
   cancelled: "idle",
   error: "error",
@@ -54,9 +58,26 @@ export function getProviderStatusLabel(state: ProviderSyncState) {
 }
 
 // Shared modal wiring keeps every detail renderer using the same delete confirmation flow.
-export function showConfirmDelete(providerName: string) {
+export async function confirmDeleteProvider(providerName: string, provider: ProviderId) {
+  const expectedScope = getDisplayedHouseholdScope();
+  if (expectedScope === undefined) return;
+  const confirmed = await showConfirmDelete(providerName, expectedScope?.memberDisplayName);
+  if (!confirmed) return;
+  const result = await chrome.runtime.sendMessage({ type: "CLEAR_DATA", provider, expectedScope });
+  if (result?.ok === false) {
+    confirmModalTitle.textContent = "Data was not deleted. Refresh and reselect the profile, then try again.";
+    confirmModal.classList.add("visible");
+    confirmModalConfirm.hidden = true;
+    confirmModalCancel.addEventListener("click", () => {
+      confirmModal.classList.remove("visible");
+      confirmModalConfirm.hidden = false;
+    }, { once: true });
+  }
+}
+
+function showConfirmDelete(providerName: string, memberName?: string) {
   return new Promise<boolean>((resolve) => {
-    confirmModalTitle.textContent = `Delete ${providerName} data?`;
+    confirmModalTitle.textContent = `Delete ${providerName} data${memberName ? ` for ${memberName}` : ""}?`;
     confirmModal.classList.add("visible");
 
     function cleanup() {
@@ -341,9 +362,7 @@ export function wireAirlineEvents(
   });
 
   els.clearBtn.addEventListener("click", async () => {
-    if (await showConfirmDelete(providerName)) {
-      chrome.runtime.sendMessage({ type: "CLEAR_DATA", provider: providerId });
-    }
+    await confirmDeleteProvider(providerName, providerId);
   });
 
   els.rawToggle.addEventListener("click", () => {

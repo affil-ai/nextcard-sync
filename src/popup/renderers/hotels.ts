@@ -13,7 +13,7 @@ import {
   getProviderStatusLabel,
   renderIssueReportHtml,
   renderValue,
-  showConfirmDelete,
+  confirmDeleteProvider,
   STATUS_SUBTITLES,
 } from "./shared";
 
@@ -274,9 +274,7 @@ export function createHotelRenderers(
     chrome.runtime.sendMessage({ type: "CANCEL_SYNC", provider: "marriott" });
   });
   marriottEls.clearBtn.addEventListener("click", async () => {
-    if (await showConfirmDelete("Marriott Bonvoy")) {
-      chrome.runtime.sendMessage({ type: "CLEAR_DATA", provider: "marriott" });
-    }
+    await confirmDeleteProvider("Marriott Bonvoy", "marriott");
   });
   marriottEls.rawToggle.addEventListener("click", () => {
     marriottEls.rawData.classList.toggle("visible");
@@ -395,9 +393,7 @@ export function createHotelRenderers(
     chrome.runtime.sendMessage({ type: "CANCEL_SYNC", provider: "ihg" });
   });
   ihgEls.clearBtn.addEventListener("click", async () => {
-    if (await showConfirmDelete("IHG One Rewards")) {
-      chrome.runtime.sendMessage({ type: "CLEAR_DATA", provider: "ihg" });
-    }
+    await confirmDeleteProvider("IHG One Rewards", "ihg");
   });
   ihgEls.rawToggle.addEventListener("click", () => {
     ihgEls.rawData.classList.toggle("visible");
@@ -533,9 +529,7 @@ export function createHotelRenderers(
     chrome.runtime.sendMessage({ type: "CANCEL_SYNC", provider: "hyatt" });
   });
   hyattEls.clearBtn.addEventListener("click", async () => {
-    if (await showConfirmDelete("World of Hyatt")) {
-      chrome.runtime.sendMessage({ type: "CLEAR_DATA", provider: "hyatt" });
-    }
+    await confirmDeleteProvider("World of Hyatt", "hyatt");
   });
   hyattEls.rawToggle.addEventListener("click", () => {
     hyattEls.rawData.classList.toggle("visible");
@@ -684,9 +678,7 @@ export function createHotelRenderers(
     chrome.runtime.sendMessage({ type: "CANCEL_SYNC", provider: "hilton" });
   });
   hiltonEls.clearBtn.addEventListener("click", async () => {
-    if (await showConfirmDelete("Hilton Honors")) {
-      chrome.runtime.sendMessage({ type: "CLEAR_DATA", provider: "hilton" });
-    }
+    await confirmDeleteProvider("Hilton Honors", "hilton");
   });
   hiltonEls.rawToggle.addEventListener("click", () => {
     hiltonEls.rawData.classList.toggle("visible");

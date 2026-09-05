@@ -1,4 +1,8 @@
-import type { CapitalOneLoyaltyData, ProviderId } from "../../lib/types";
+import type {
+  CapitalOneLoyaltyData,
+  ProviderId,
+  PushToNextCardResult,
+} from "../../lib/types";
 import type { ProviderDefinition } from "../../providers/provider-registry";
 import type { createRuntimeStateStore } from "../core/runtime-state";
 import {
@@ -39,7 +43,7 @@ interface CapitalOneSyncDeps {
   pushToNextCard: (
     providerId: "capitalone",
     data: unknown,
-  ) => Promise<{ ok: boolean; error?: string }>;
+  ) => Promise<PushToNextCardResult>;
 }
 
 type CapitalOneBenefit = CapitalOneLoyaltyData["benefits"][number];
@@ -364,7 +368,7 @@ export function createCapitalOneSync(options: CapitalOneSyncDeps) {
 
     options.stateStore.assertRunActive("capitalone", attemptId);
     const pushResult = await options.pushToNextCard("capitalone", multiCardData);
-    if (!pushResult.ok) {
+    if (!pushResult.ok && !pushResult.awaitingConfirmation) {
       console.warn("[NextCard SW] CapitalOne push failed:", pushResult.error);
     }
     options.stateStore.finishSyncRun("capitalone", attemptId);

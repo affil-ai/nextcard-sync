@@ -3,6 +3,14 @@
 
 # nextcard sync
 
+## Release build
+
+Run `pnpm typecheck`, `pnpm test`, `pnpm build`, then `pnpm verify:artifact`.
+Package the contents of `dist` as `nextcard-sync-0.8.2.zip`, with `manifest.json` at the ZIP root.
+Load `dist` or the extracted release ZIP in Chrome and check that the version is **0.8.2**.
+Do not upload the source directory or `dist-dev` to the Chrome Web Store.
+A GitHub release does not publish a Chrome Web Store release.
+
 nextcard sync helps you find and add eligible card offers, get reminders while you shop, and connect loyalty accounts to your [nextcard](https://nextcard.com) wallet.
 
 ## Card offers
