@@ -19,8 +19,21 @@ const runControl = createContentScriptRunControl("bilt");
 
 // ── Login detection ──────────────────────────────────────────
 
+function hasAuthenticatedWalletContent(bodyText: string) {
+  const lines = bodyText.split("\n").map((line) => line.trim());
+  // Support the card-management frontend without the legacy heading or pill.
+  // A Wallet heading alone does not prove sign-in, so require private
+  // account controls together, not promotional copy or a welcome greeting.
+  return bodyText.includes("Your Wallet")
+    || (
+      lines.includes("Current balance")
+      && lines.includes("Pay card")
+      && (lines.includes("Manage card") || lines.includes("Lock card"))
+    );
+}
+
 function detectLoginState(): LoginState {
-  const url = window.location.href.toLowerCase();
+  const pathname = new URL(window.location.href).pathname.toLowerCase();
   const bodyText = document.body?.innerText ?? "";
   const pointsPill = document.querySelector('[data-testid="user-info-points-pill"]');
   const hasPasswordInput = Array.from(
@@ -29,22 +42,20 @@ function detectLoginState(): LoginState {
     ),
   ).some((input) => input.offsetParent !== null);
 
-  // Wallet is the most reliable authenticated surface for cardholders.
-  if (pointsPill || (url.includes("/wallet") && bodyText.includes("Your Wallet"))) {
-    return "logged_in";
-  }
-
-  if (
-    hasPasswordInput
-    || /\b(sign in|log in)\b/i.test(bodyText)
-    || url.includes("login")
-    || url.includes("signin")
-    || url.includes("sign-in")
-  ) {
+  // An expired-session form can be shown over stale authenticated content.
+  if (hasPasswordInput || /login|signin|sign-in/.test(pathname)) {
     return "logged_out";
   }
 
-  if (url.includes("bilt.com/account") && !/sign in|log in/i.test(bodyText)) {
+  if (pointsPill || (pathname === "/wallet" && hasAuthenticatedWalletContent(bodyText))) {
+    return "logged_in";
+  }
+
+  if (/\b(sign in|log in)\b/i.test(bodyText)) {
+    return "logged_out";
+  }
+
+  if (pathname.startsWith("/account") && !/sign in|log in/i.test(bodyText)) {
     return "logged_in";
   }
 
@@ -96,6 +107,7 @@ function waitForWalletReady(maxWaitMs = 20000): Promise<boolean> {
     const isReady = () => {
       const bodyText = document.body?.innerText ?? "";
       return Boolean(document.querySelector('[data-testid="user-info-points-pill"]'))
+        || hasAuthenticatedWalletContent(bodyText)
         || /Your Wallet|Bilt Cash|\b[\d,.]+\s*[km]?\s*pts?\.?\b/i.test(bodyText);
     };
 
@@ -370,12 +382,12 @@ function extractBiltCashEarning(lines: string[], bodyText: string) {
     earningRate: earningRate ? cleanBiltCashEarningRate(earningRate) : null,
     housingOnlyRewardsEnabled: earningMethod === "Housing Only Rewards"
       ? true
-      : hasHousingOnlyRewards
+      : hasHousingOnlyRewards || !earningMethod
         ? null
         : false,
     flexibleBiltCashEnabled: earningMethod === "Flexible Bilt Cash"
       ? true
-      : hasFlexibleBiltCash
+      : hasFlexibleBiltCash || !earningMethod
         ? null
         : false,
   };
@@ -579,13 +591,25 @@ function scrapeStatusTracker(): BiltProgress {
 
 // ── Orchestration ────────────────────────────────────────────
 
+async function reportReadError(attemptId: string) {
+  updateOverlay("error", "bilt");
+  await runControl.sendMessage(attemptId, {
+    type: "STATUS_UPDATE",
+    status: "error",
+    data: null,
+    error: "Could not read Bilt rewards from this page. Refresh Bilt and try syncing again. If this continues, contact nextcard support.",
+  });
+}
+
 async function runExtraction(attemptId: string) {
   let loginState = detectLoginState();
   const url = window.location.href.toLowerCase();
   if (loginState === "unknown" && url.includes("/wallet")) {
     loginState = await waitForResolvedLoginState(attemptId);
     if (loginState === "unknown") {
-      loginState = "logged_out";
+      // A loading or changed frontend is not evidence of a signed-out session.
+      await reportReadError(attemptId);
+      return;
     }
   }
 
@@ -628,12 +652,7 @@ async function runExtraction(attemptId: string) {
     data.memberName != null ||
     data.memberNumber != null;
   if (!hasMeaningfulData) {
-    await runControl.sendMessage(attemptId, {
-      type: "STATUS_UPDATE",
-      status: "waiting_for_login",
-      data: null,
-      error: null,
-    });
+    await reportReadError(attemptId);
     return;
   }
   await runControl.sendMessage(attemptId, { type: "EXTRACTION_DONE", data });
