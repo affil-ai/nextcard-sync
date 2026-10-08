@@ -85,6 +85,7 @@ export function createTravelSyncCoordinator(
   let hydrated = false;
   let hydrationPromise: Promise<void> | null = null;
   let runPromise: Promise<void> | null = null;
+  let runGeneration = 0;
 
   function publicState(): TravelSyncState {
     return {
@@ -178,7 +179,7 @@ export function createTravelSyncCoordinator(
     await persist();
   }
 
-  async function run() {
+  async function run(generation: number) {
     for (let index = state.processedCount; index < state.providerIds.length; index += 1) {
       if (state.cancelRequested) {
         await finishCancelled();
@@ -192,6 +193,7 @@ export function createTravelSyncCoordinator(
         updatedAt: new Date(options.now?.() ?? Date.now()).toISOString(),
       };
       await persist();
+      if (generation !== runGeneration) return;
       if (state.cancelRequested) {
         await finishCancelled();
         return;
@@ -200,13 +202,16 @@ export function createTravelSyncCoordinator(
       let succeeded = false;
       try {
         const prepared = await options.prepareProvider?.(providerId, state.scope);
+        if (generation !== runGeneration) return;
         if (prepared === false) {
           await finishCancelled();
           return;
         }
         const started = await options.startProvider(providerId);
+        if (generation !== runGeneration) return;
         if (state.cancelRequested) {
           if (started) await options.cancelProvider(providerId);
+          if (generation !== runGeneration) return;
           await finishCancelled();
           return;
         }
@@ -217,6 +222,7 @@ export function createTravelSyncCoordinator(
         succeeded = false;
       }
 
+      if (generation !== runGeneration) return;
       state = {
         ...state,
         processedCount: index + 1,
@@ -224,6 +230,7 @@ export function createTravelSyncCoordinator(
         updatedAt: new Date(options.now?.() ?? Date.now()).toISOString(),
       };
       await persist();
+      if (generation !== runGeneration) return;
 
       if (state.cancelRequested) {
         await finishCancelled();
@@ -242,14 +249,17 @@ export function createTravelSyncCoordinator(
 
   function ensureRunning() {
     if (state.status !== "running" || runPromise) return;
-    runPromise = run().finally(() => {
-      runPromise = null;
+    const generation = runGeneration;
+    runPromise = run(generation).finally(() => {
+      if (generation === runGeneration) runPromise = null;
     });
   }
 
   async function ensureScopeStillCurrent() {
     if (state.status !== "running" || !options.getCurrentScope) return true;
+    const generation = runGeneration;
     const currentScope = await options.getCurrentScope();
+    if (generation !== runGeneration) return false;
     if (scopesMatch(state.scope, currentScope)) return true;
     if (runPromise) {
       await cancel();
@@ -262,15 +272,18 @@ export function createTravelSyncCoordinator(
   async function cancel() {
     await hydrate();
     if (state.status !== "running") return publicState();
+    const generation = runGeneration;
     state = {
       ...state,
       cancelRequested: true,
       updatedAt: new Date(options.now?.() ?? Date.now()).toISOString(),
     };
     await persist();
+    if (generation !== runGeneration) return publicState();
     if (state.currentProviderId) {
       await options.cancelProvider(state.currentProviderId);
     }
+    if (generation !== runGeneration) return publicState();
     const activeRun = runPromise;
     if (activeRun) {
       await activeRun;
@@ -298,7 +311,9 @@ export function createTravelSyncCoordinator(
       if (state.status === "running") return publicState();
       const uniqueProviderIds = [...new Set(providerIds)];
       if (uniqueProviderIds.length === 0) return publicState();
+      const generation = runGeneration;
       const scope = await options.getCurrentScope?.() ?? null;
+      if (generation !== runGeneration) return publicState();
       const now = new Date(options.now?.() ?? Date.now()).toISOString();
       state = {
         status: "running",
@@ -320,8 +335,14 @@ export function createTravelSyncCoordinator(
 
     async clear() {
       await hydrate();
-      if (state.status === "running") await cancel();
+      const providerId = state.status === "running" ? state.currentProviderId : null;
+      // Old asynchronous work must not update a new account or block clearing it.
+      runGeneration += 1;
+      runPromise = null;
       state = idleState();
+      if (providerId) {
+        void options.cancelProvider(providerId).catch(() => undefined);
+      }
       await options.storage.remove(TRAVEL_SYNC_STORAGE_KEY);
       return publicState();
     },

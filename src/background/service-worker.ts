@@ -125,21 +125,26 @@ const persistedStateHydrated = (async () => {
 void offerCoordinator.resume();
 
 async function getCachedAuth() {
+  await accountTransition;
+  const generation = getAuthGeneration();
   const now = Date.now();
-  if (now - lastVerifyAt < VERIFY_INTERVAL_MS) {
-    return lastVerifyResult;
-  }
+  if (now - lastVerifyAt < VERIFY_INTERVAL_MS) return lastVerifyResult;
 
   const valid = await verifyAuth();
-  lastVerifyAt = now;
   if (!valid) {
-    await offerCoordinator.clearAccountState();
-    lastVerifyResult = null;
-    return null;
+    const verifiedGeneration = getAuthGeneration();
+    await transitionAccount(async () => {
+      // Verification can finish after a new login. Only clean up a still signed-out account.
+      if (verifiedGeneration === getAuthGeneration() && !(await getAuth())) {
+        await onSignOut();
+      }
+    });
   }
-
-  lastVerifyResult = await getAuth();
-  return lastVerifyResult;
+  const auth = await getAuth();
+  if (generation !== getAuthGeneration()) return auth;
+  lastVerifyAt = now;
+  lastVerifyResult = auth;
+  return auth;
 }
 
 function resetAuthCache() {
@@ -187,7 +192,7 @@ async function cancelRun(providerId: ProviderId, error: string | null = null) {
   }
 
   if (run.ownedTabId != null) {
-    await chrome.tabs.remove(run.ownedTabId).catch(() => {
+    void chrome.tabs.remove(run.ownedTabId).catch(() => {
       // Users can close the sync tab themselves before the worker gets here.
     });
   }
@@ -700,16 +705,31 @@ async function recordConsent(message: Record<string, unknown>) {
   }
 }
 
+let accountTransition: Promise<void> = Promise.resolve();
+function transitionAccount(action: () => Promise<void>): Promise<void> {
+  const next = accountTransition.then(action);
+  accountTransition = next.catch(() => undefined);
+  return next;
+}
+
 async function onSignOut() {
   resetAuthCache();
-  await clearInjectedOfferAlerts();
+  void clearInjectedOfferAlerts().catch(() => undefined);
+  for (const providerKey of Object.keys(stateStore.states)) {
+    if (stateStore.isProviderId(providerKey) && stateStore.getRun(providerKey)) {
+      await cancelRun(providerKey, "nextcard account changed.");
+    }
+  }
   stateStore.resetAllStates();
   activeHouseholdTargets.clear();
-  await Promise.all([
+  const cleanup = await Promise.allSettled([
     setStoredExtensionProfile(null),
     offerCoordinator.clearAccountState(),
     travelSyncCoordinator.clear(),
   ]);
+  // Keep account transitions serialized even when one storage operation fails.
+  const failed = cleanup.find((result) => result.status === "rejected");
+  if (failed?.status === "rejected") throw failed.reason;
 }
 
 function householdSyncTargetsMatch(
@@ -1179,9 +1199,11 @@ chrome.runtime.onMessage.addListener(
     syncHandlers,
     cancelRun,
     startSignIn,
-    clearAuth,
+    signOut: () => transitionAccount(async () => {
+      await clearAuth();
+      await onSignOut();
+    }),
     getCachedAuth,
-    onSignOut,
     recordConsent,
     pushToNextCard: pushScrapedData,
     deleteFromNextCard: deleteProviderFromNextCard,
@@ -1324,23 +1346,12 @@ chrome.runtime.onMessage.addListener(
 chrome.runtime.onMessageExternal.addListener(
   createExternalMessageRouter({
     nextCardOrigin: new URL(__NEXTCARD_URL__).origin,
-    setAuth: async (auth) => {
-      await clearInjectedOfferAlerts();
-      await travelSyncCoordinator.clear();
-      await offerCoordinator.clearAccountState();
-      for (const providerKey of Object.keys(stateStore.states)) {
-        if (!stateStore.isProviderId(providerKey)) continue;
-        if (stateStore.getRun(providerKey)) {
-          await cancelRun(providerKey, "nextcard account changed.");
-        }
-      }
-      activeHouseholdTargets.clear();
-      stateStore.resetAllStates();
+    setAuth: (auth) => transitionAccount(async () => {
+      // Invalidate old credentials and runs before accepting another account.
       await clearAuth();
+      await onSignOut();
       await setAuth(auth);
-      await clearInjectedOfferAlerts();
-      await retryPendingOfferActivationCompletions();
-    },
+    }),
     resetAuthCache,
     hydrateFromNextCard: async () => {
       await persistedStateHydrated;

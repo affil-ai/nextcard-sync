@@ -353,7 +353,7 @@ export function createOfferOperationStore() {
     hydrated = true;
     await chrome.storage.local.remove(OFFER_OPERATION_STORAGE_KEY);
     if (ownedTabId != null) {
-      await chrome.tabs.remove(ownedTabId).catch(() => {});
+      void chrome.tabs.remove(ownedTabId).catch(() => {});
     }
   }
 

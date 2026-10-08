@@ -448,10 +448,10 @@ export function createOfferOperationCoordinator(
     if (active?.phase === "adding" && active.ownedTabId != null) {
       const stopMessage = ISSUER_CONFIG[active.issuer].stopMessage;
       if (stopMessage) {
-        await sendTabMessage(active.ownedTabId, {
+        void sendTabMessage(active.ownedTabId, {
           type: stopMessage,
           runId: active.runId,
-        });
+        }).catch(() => undefined);
       }
     }
     await store.clearAccountState();

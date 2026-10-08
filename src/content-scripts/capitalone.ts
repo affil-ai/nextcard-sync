@@ -17,6 +17,8 @@ import { createLoginStateMonitor } from "../lib/login-state-monitor";
 import {
   isLikelyCapitalOneCardTile,
   parseCapitalOneRewardsSummary,
+  parseCapitalOneRewardsTileText,
+  resolveCapitalOneRewardsSummary,
   selectCapitalOneCardName,
 } from "./capitalone-parsing";
 
@@ -84,6 +86,42 @@ function textOf(el: Element | null): string {
   return el?.textContent?.trim() ?? "";
 }
 
+function visibleTextOf(el: Element | null): string {
+  if (!el) return "";
+  // innerText joins adjacent inline nodes (including superscript cents and
+  // labels) without a separator: "$10<sup>83</sup>" becomes "$1083".
+  // Keep visible text-node boundaries so the fallback can read those units.
+  const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+  const parts: string[] = [];
+  let node: Node | null;
+  while ((node = walker.nextNode())) {
+    const parent = node.parentElement;
+    if (!parent || parent.getClientRects().length === 0) continue;
+    const visibility = getComputedStyle(parent).visibility;
+    if (visibility === "hidden" || visibility === "collapse") continue;
+    const text = node.textContent?.trim();
+    if (text) parts.push(text);
+  }
+  return parts.join(" ");
+}
+
+function findRewardsTileFallback() {
+  // Find a small, explicitly identified rewards container even when Capital
+  // One changes its CSS classes. Never parse the page or account-card grid.
+  for (const link of document.querySelectorAll("a, button, [role='button']")) {
+    if (!/^view rewards$/i.test(visibleTextOf(link).trim())) continue;
+    let container = link.parentElement;
+    for (let depth = 0; container && depth < 5; depth++, container = container.parentElement) {
+      if (container === document.body || container === document.documentElement) break;
+      const text = visibleTextOf(container);
+      if (text.length > 600 || /current balance|available balance|view account/i.test(text)) break;
+      const result = parseCapitalOneRewardsTileText(text);
+      if (result.amount != null) return result;
+    }
+  }
+  return { amount: null, rewardsLabel: null };
+}
+
 // ── Scrape account summary page ──────────────────────────────
 
 interface CardInfo {
@@ -147,7 +185,7 @@ function scrapeAccountSummary() {
   // split dollars/cents across separate nodes.
   const loyaltyTile = document.querySelector("c1-ease-rewards-tile-container, .loyalty-tile");
   if (loyaltyTile) {
-    const rewardsSummary = parseCapitalOneRewardsSummary({
+    const rewardsSummary = resolveCapitalOneRewardsSummary(parseCapitalOneRewardsSummary({
       balanceText: textOf(loyaltyTile.querySelector(".primary-detail__balance")),
       dollarText: textOf(loyaltyTile.querySelector(".primary-detail__balance-dollar")),
       centText: Array.from(loyaltyTile.querySelectorAll(".primary-detail__balance-superscript"))
@@ -155,10 +193,16 @@ function scrapeAccountSummary() {
         .filter((text) => /\d/.test(text))
         .at(-1) ?? "",
       labelText: textOf(loyaltyTile.querySelector(".labels__balance")),
-    });
+    }), visibleTextOf(loyaltyTile));
 
     data.totalRewards = rewardsSummary.amount;
     data.rewardsLabel = rewardsSummary.rewardsLabel;
+  }
+
+  if (data.totalRewards == null) {
+    const fallback = findRewardsTileFallback();
+    data.totalRewards = fallback.amount;
+    data.rewardsLabel = fallback.rewardsLabel ?? data.rewardsLabel;
   }
 
   return data;

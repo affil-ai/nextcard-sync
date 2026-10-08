@@ -36,9 +36,11 @@ export async function setAuth(auth: NextCardAuth): Promise<void> {
   await chrome.storage.local.set({ [STORAGE_KEY]: auth });
 }
 
-export async function clearAuth(): Promise<void> {
-  authGeneration += 1;
+export async function clearAuth(expectedGeneration?: number): Promise<void> {
   const stored = await chrome.storage.local.get(null);
+  // A verification of an old token must never clear a subsequent sign-in.
+  if (expectedGeneration !== undefined && expectedGeneration !== authGeneration) return;
+  authGeneration += 1;
   const accountScopedKeys = Object.keys(stored).filter((key) => (
     key === STORAGE_KEY
     || key === "nextcard_extension_profile"
@@ -86,6 +88,7 @@ export async function startSignIn(): Promise<void> {
  * Returns false (and clears local auth) if the token was revoked or deleted.
  */
 export async function verifyAuth(): Promise<boolean> {
+  const generation = authGeneration;
   const auth = await getAuth();
   if (!auth) return false;
 
@@ -93,10 +96,11 @@ export async function verifyAuth(): Promise<boolean> {
     const res = await fetch(`${__CONVEX_SITE_URL__}/extension/verify`, {
       method: "POST",
       headers: { Authorization: `Bearer ${auth.token}` },
+      signal: AbortSignal.timeout(10_000),
     });
     const data = await res.json();
     if (!data.valid) {
-      await clearAuth();
+      await clearAuth(generation);
       return false;
     }
     return true;

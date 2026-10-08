@@ -42,3 +42,38 @@ describe("clearAuth", () => {
     expect(removed).not.toContain("unrelatedPreference");
   });
 });
+
+it("does not erase a new login when verification of an old token fails late", async () => {
+  const { setAuth, verifyAuth } = await import("./auth");
+  let current: unknown = { token: "old-token" };
+  let finish!: (response: unknown) => void;
+  vi.stubGlobal("fetch", vi.fn(() => new Promise((resolve) => { finish = resolve; })));
+  vi.mocked(chrome.storage.local.get).mockImplementation(async () => ({ nextcard_auth: current }));
+  chrome.storage.local.set = vi.fn(async (values) => { current = values.nextcard_auth; });
+  const verification = verifyAuth();
+  await vi.waitFor(() => expect(fetch).toHaveBeenCalled());
+  await setAuth({ token: "new-token", name: null, email: null, signedInAt: "now" });
+  finish({ json: async () => ({ valid: false }) });
+  await verification;
+  expect(storageRemove).not.toHaveBeenCalled();
+  expect(current).toMatchObject({ token: "new-token" });
+});
+
+it("preserves credentials when bounded verification times out", async () => {
+  const { verifyAuth } = await import("./auth");
+  const controller = new AbortController();
+  const timeout = vi.spyOn(AbortSignal, "timeout").mockReturnValue(controller.signal);
+  vi.stubGlobal("fetch", vi.fn((_url, init: RequestInit) => new Promise((_resolve, reject) => {
+    init.signal?.addEventListener("abort", () => reject(new Error("timeout")));
+  })));
+  try {
+    const verification = verifyAuth();
+    await vi.waitFor(() => expect(fetch).toHaveBeenCalled());
+    expect(timeout).toHaveBeenCalledWith(10_000);
+    controller.abort();
+    expect(await verification).toBe(true);
+    expect(storageRemove).not.toHaveBeenCalled();
+  } finally {
+    timeout.mockRestore();
+  }
+});

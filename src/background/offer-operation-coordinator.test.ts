@@ -355,3 +355,14 @@ describe("offer operation coordinator", () => {
     }
   });
 });
+
+it("clears an old account even when its issuer tab never responds or closes", async () => {
+  const { store, runId } = await readyChase();
+  await store.patch(runId, { phase: "adding" });
+  sendMessage.mockImplementation(() => {});
+  removeTab.mockImplementation(() => new Promise(() => {}));
+  const coordinator = createOfferOperationCoordinator(store);
+  await coordinator.clearAccountState();
+  expect((await store.getSnapshot()).active).toBeNull();
+  expect(storage.has("nextcard_offer_operation_snapshot_v1")).toBe(false);
+});

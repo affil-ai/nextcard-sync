@@ -249,9 +249,8 @@ export function createMessageRouter(options: {
   syncHandlers: SyncHandlers;
   cancelRun: (providerId: ProviderId, error?: string | null) => Promise<void>;
   startSignIn: () => Promise<void>;
-  clearAuth: () => Promise<void>;
+  signOut: () => Promise<void>;
   getCachedAuth: () => Promise<NextCardAuth | null>;
-  onSignOut: () => Promise<void>;
   recordConsent: (message: Record<string, unknown>) => Promise<void>;
   pushToNextCard: (providerId: ProviderId, data: unknown) => Promise<unknown>;
   deleteFromNextCard: (providerId: ProviderId, expectedScope?: HouseholdOperationScope) => Promise<{ ok: boolean; error?: string }>;
@@ -865,7 +864,7 @@ export function createMessageRouter(options: {
         return true;
 
       case "SIGN_OUT_NEXTCARD":
-        void options.clearAuth().then(options.onSignOut).then(
+        void options.signOut().then(
           () => sendResponse({ ok: true }),
           () => sendResponse({ ok: false, error: "sign_out_failed" }),
         );
@@ -1898,10 +1897,9 @@ export function createExternalMessageRouter(options: {
         signedInAt: new Date().toISOString(),
       };
 
-      sendResponse({ ok: true });
-
       void options.setAuth(auth).then(async () => {
         options.resetAuthCache();
+        sendResponse({ ok: true });
 
         if (sender.tab?.id) {
           const authTabId = sender.tab.id;
@@ -1927,8 +1925,13 @@ export function createExternalMessageRouter(options: {
         } catch (error) {
           console.warn("[NextCard SW] Offer cache pull after login failed:", error);
         }
+      }, () => {
+        sendResponse({ ok: false, error: "sign_in_failed" });
+      }).catch(() => {
+        console.warn("[NextCard SW] Post-login setup failed");
       });
-      return;
+      // Keep the response channel alive until credentials are persisted.
+      return true;
     }
 
     sendResponse({ ok: false });

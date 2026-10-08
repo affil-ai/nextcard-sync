@@ -122,6 +122,13 @@ export function createBiltSync(options: BiltSyncDeps) {
       });
 
       let accountResult: Record<string, unknown>;
+      if (firstMessage.type === "STATUS_UPDATE" && firstMessage.status === "error") {
+        throw new Error(
+          typeof firstMessage.error === "string"
+            ? firstMessage.error
+            : "Could not read Bilt rewards",
+        );
+      }
       if (
         firstMessage.type === "STATUS_UPDATE"
         && firstMessage.status === "waiting_for_login"

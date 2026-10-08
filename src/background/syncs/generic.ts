@@ -681,6 +681,20 @@ export function createGenericSyncHandlers(options: GenericSyncDeps) {
           sender: chrome.runtime.MessageSender,
           sendResponse: (response?: unknown) => void,
         ) {
+          if (
+            message.type === "STATUS_UPDATE"
+            && message.status === "error"
+            && options.isProviderAttemptMessage(message, providerId, attemptId, "STATUS_UPDATE")
+          ) {
+            cleanup();
+            sendResponse({ ok: true });
+            reject(new Error(
+              typeof message.error === "string"
+                ? message.error
+                : `Could not read ${definition.name} rewards`,
+            ));
+            return true;
+          }
           if (message.type === "EXTRACTION_DONE" && message.provider === providerId) {
             if (
               !options.isProviderAttemptMessage(

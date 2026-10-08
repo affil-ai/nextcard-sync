@@ -19,8 +19,21 @@ const runControl = createContentScriptRunControl("bilt");
 
 // ── Login detection ──────────────────────────────────────────
 
+function hasAuthenticatedWalletContent(bodyText: string) {
+  const lines = bodyText.split("\n").map((line) => line.trim());
+  // Support the card-management frontend without the legacy heading or pill.
+  // A Wallet heading alone does not prove sign-in, so require private
+  // account controls together, not promotional copy or a welcome greeting.
+  return bodyText.includes("Your Wallet")
+    || (
+      lines.includes("Current balance")
+      && lines.includes("Pay card")
+      && (lines.includes("Manage card") || lines.includes("Lock card"))
+    );
+}
+
 function detectLoginState(): LoginState {
-  const url = window.location.href.toLowerCase();
+  const pathname = new URL(window.location.href).pathname.toLowerCase();
   const bodyText = document.body?.innerText ?? "";
   const pointsPill = document.querySelector('[data-testid="user-info-points-pill"]');
   const hasPasswordInput = Array.from(
@@ -29,22 +42,20 @@ function detectLoginState(): LoginState {
     ),
   ).some((input) => input.offsetParent !== null);
 
-  // Wallet is the most reliable authenticated surface for cardholders.
-  if (pointsPill || (url.includes("/wallet") && bodyText.includes("Your Wallet"))) {
-    return "logged_in";
-  }
-
-  if (
-    hasPasswordInput
-    || /\b(sign in|log in)\b/i.test(bodyText)
-    || url.includes("login")
-    || url.includes("signin")
-    || url.includes("sign-in")
-  ) {
+  // An expired-session form can be shown over stale authenticated content.
+  if (hasPasswordInput || /login|signin|sign-in/.test(pathname)) {
     return "logged_out";
   }
 
-  if (url.includes("bilt.com/account") && !/sign in|log in/i.test(bodyText)) {
+  if (pointsPill || (pathname === "/wallet" && hasAuthenticatedWalletContent(bodyText))) {
+    return "logged_in";
+  }
+
+  if (/\b(sign in|log in)\b/i.test(bodyText)) {
+    return "logged_out";
+  }
+
+  if (pathname.startsWith("/account") && !/sign in|log in/i.test(bodyText)) {
     return "logged_in";
   }
 
@@ -96,6 +107,7 @@ function waitForWalletReady(maxWaitMs = 20000): Promise<boolean> {
     const isReady = () => {
       const bodyText = document.body?.innerText ?? "";
       return Boolean(document.querySelector('[data-testid="user-info-points-pill"]'))
+        || hasAuthenticatedWalletContent(bodyText)
         || /Your Wallet|Bilt Cash|\b[\d,.]+\s*[km]?\s*pts?\.?\b/i.test(bodyText);
     };
 
@@ -253,13 +265,22 @@ function parseWalletCredits(lines: string[]) {
   };
 }
 
-async function expandWalletUserMenu() {
-  const pill = document.querySelector('[data-testid="user-info-points-pill"]');
-  if (!(pill instanceof HTMLElement)) return;
+async function expandWalletUserMenu(attemptId: string) {
+  if (extractExactPointsFromMenu() != null) return;
 
-  // The exact balance only appears inside the user menu opened from the points pill.
-  pill.click();
-  await new Promise((resolve) => setTimeout(resolve, 600));
+  const trigger = document.querySelector('[data-testid="user-info-points-pill"]')
+    ?? document.querySelector('[data-testid="user-info-profile-avatar"]')
+      ?.closest('[role="button"]');
+  if (!(trigger instanceof HTMLElement)) return;
+
+  // The redesigned wallet moved the exact balance into the profile menu.
+  // Do not toggle it closed if the user already opened it.
+  runControl.throwIfCancelled(attemptId);
+  if (trigger.getAttribute("aria-expanded") !== "true") trigger.click();
+  for (let elapsed = 0; elapsed < 3000; elapsed += 100) {
+    if (extractExactPointsFromMenu() != null) return;
+    await runControl.sleep(100, attemptId);
+  }
 }
 
 function extractExactPointsFromMenu() {
@@ -370,12 +391,12 @@ function extractBiltCashEarning(lines: string[], bodyText: string) {
     earningRate: earningRate ? cleanBiltCashEarningRate(earningRate) : null,
     housingOnlyRewardsEnabled: earningMethod === "Housing Only Rewards"
       ? true
-      : hasHousingOnlyRewards
+      : hasHousingOnlyRewards || !earningMethod
         ? null
         : false,
     flexibleBiltCashEnabled: earningMethod === "Flexible Bilt Cash"
       ? true
-      : hasFlexibleBiltCash
+      : hasFlexibleBiltCash || !earningMethod
         ? null
         : false,
   };
@@ -413,7 +434,7 @@ function parseWalletLinkedCards(lines: string[]) {
   return dedupeLinkedCards(cards);
 }
 
-async function scrapeWalletPage() {
+async function scrapeWalletPage(attemptId: string) {
   const lines = getBodyLines();
   const bodyText = document.body?.innerText ?? "";
   const pointsPill = document.querySelector('[data-testid="user-info-points-pill"]');
@@ -423,7 +444,7 @@ async function scrapeWalletPage() {
   const biltCash = extractBiltCash(lines, bodyText);
   const biltCashEarning = extractBiltCashEarning(lines, bodyText);
 
-  await expandWalletUserMenu();
+  await expandWalletUserMenu(attemptId);
   const exactPointsBalance = extractExactPointsFromMenu();
   const visiblePointsBalance = extractVisiblePointsBalance(getBodyLines());
 
@@ -548,7 +569,8 @@ function scrapeStatusTracker(): BiltProgress {
 
   const bodyText = document.body?.innerText ?? "";
 
-  const statusMatch = bodyText.match(/Elite Status\s*\n\s*(Blue|Silver|Gold|Platinum)\b/i);
+  const statusMatch = bodyText.match(/Elite Status\s*\n\s*(Blue|Silver|Gold|Platinum)\b/i)
+    ?? bodyText.match(/(?:^|\n)\s*(Blue|Silver|Gold|Platinum)\s*\n\s*Good through\b/i);
   if (statusMatch) {
     progress.eliteStatus = statusMatch[1];
   }
@@ -579,13 +601,25 @@ function scrapeStatusTracker(): BiltProgress {
 
 // ── Orchestration ────────────────────────────────────────────
 
+async function reportReadError(attemptId: string) {
+  updateOverlay("error", "bilt");
+  await runControl.sendMessage(attemptId, {
+    type: "STATUS_UPDATE",
+    status: "error",
+    data: null,
+    error: "Could not read Bilt rewards from this page. Refresh Bilt and try syncing again. If this continues, contact nextcard support.",
+  });
+}
+
 async function runExtraction(attemptId: string) {
   let loginState = detectLoginState();
   const url = window.location.href.toLowerCase();
   if (loginState === "unknown" && url.includes("/wallet")) {
     loginState = await waitForResolvedLoginState(attemptId);
     if (loginState === "unknown") {
-      loginState = "logged_out";
+      // A loading or changed frontend is not evidence of a signed-out session.
+      await reportReadError(attemptId);
+      return;
     }
   }
 
@@ -613,7 +647,7 @@ async function runExtraction(attemptId: string) {
 
   runControl.throwIfCancelled(attemptId);
   const data = url.includes("/wallet")
-    ? await scrapeWalletPage()
+    ? await scrapeWalletPage(attemptId)
     : scrapeNeighborhoodAccountPage();
 
   // Wallet accounts do not expose full profile info, so require a real balance or wallet payload.
@@ -628,19 +662,17 @@ async function runExtraction(attemptId: string) {
     data.memberName != null ||
     data.memberNumber != null;
   if (!hasMeaningfulData) {
-    await runControl.sendMessage(attemptId, {
-      type: "STATUS_UPDATE",
-      status: "waiting_for_login",
-      data: null,
-      error: null,
-    });
+    await reportReadError(attemptId);
     return;
   }
   await runControl.sendMessage(attemptId, { type: "EXTRACTION_DONE", data });
 }
 
 async function runProgressScrape(attemptId: string) {
-  await waitForSelector('[data-testid="user-info-points-pill"]', 10000);
+  await waitForSelector(
+    '[data-testid="user-info-points-pill"], [data-testid="user-info-profile-avatar"]',
+    10000,
+  );
   await runControl.sleep(3000, attemptId);
 
   runControl.throwIfCancelled(attemptId);

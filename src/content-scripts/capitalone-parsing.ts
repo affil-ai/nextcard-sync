@@ -165,3 +165,48 @@ export function parseCapitalOneRewardsSummary(input: {
     : parseCurrencyAmount(rawBalanceText || rawDollarText) ?? wholeDollars;
   return { amount, rewardsLabel: label };
 }
+
+// Only pass text from a rewards tile, never the entire account summary. Some
+// layouts put both values before both labels; others group each value/label.
+export function parseCapitalOneRewardsTileText(text: string) {
+  const value = compactWhitespace(text);
+  const empty = { amount: null, rewardsLabel: null };
+  if (/current balance|available balance|credit limit|minimum (?:payment )?due|\bearn\b|\bper dollar\b/i.test(value)) {
+    return empty;
+  }
+  const integer = "(?:\\d{1,3}(?:,\\d{3})+|\\d+)";
+  const cash = "\\$\\s*" + integer + "(?:\\.\\d{2}|\\s+\\d{2})?";
+  // Anchor the complete value, so a currency or decimal suffix cannot become miles.
+  const milesPattern = new RegExp(
+    "(?<![\\d$.,])(?<!\\$\\s)(" + integer + ")\\s*(?:&\\s*" + cash + "\\s*)?miles\\b", "gi",
+  );
+  const miles = Array.from(value.matchAll(milesPattern));
+  if (miles.length === 1) {
+    return { amount: Number(miles[0][1].replace(/,/g, "")), rewardsLabel: "Miles" };
+  }
+  // An unreadable miles balance must not silently turn into a cash-only sync.
+  if (/\bmiles\b/i.test(value)) return empty;
+  const cashPattern = new RegExp(
+    "\\$\\s*(" + integer + ")(?:\\.(\\d{2})|\\s+(\\d{2}))?\\s*(?:rewards cash|cash back|cashback)\\b", "gi",
+  );
+  const matches = Array.from(value.matchAll(cashPattern));
+  if (matches.length !== 1) return empty;
+  const match = matches[0];
+  return {
+    amount: Number(match[1].replace(/,/g, "")) + Number(match[2] ?? match[3] ?? 0) / 100,
+    rewardsLabel: "Cash Back",
+  };
+}
+
+export function resolveCapitalOneRewardsSummary(
+  primary: ReturnType<typeof parseCapitalOneRewardsSummary>,
+  tileText: string,
+) {
+  const mixed = /\bmiles\b/i.test(tileText) && /rewards cash|cash\s*back/i.test(tileText);
+  const valid = primary.amount != null && Number.isFinite(primary.amount)
+    && ["Miles", "Points", "Cash Back"].includes(primary.rewardsLabel ?? "")
+    && (primary.rewardsLabel === "Cash Back" || Number.isInteger(primary.amount));
+  if (valid && !mixed) return primary;
+  const fallback = parseCapitalOneRewardsTileText(tileText);
+  return fallback.amount != null ? fallback : { amount: null, rewardsLabel: primary.rewardsLabel };
+}

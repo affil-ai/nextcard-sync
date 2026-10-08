@@ -361,3 +361,70 @@ describe("travel sync coordinator", () => {
     expect(storage.remove).toHaveBeenCalledWith(TRAVEL_SYNC_STORAGE_KEY);
   });
 });
+
+it("clears a hung scan and ignores its late result after another scan starts", async () => {
+  const storage = createStorage();
+  let finishOld!: (result: { succeeded: boolean }) => void;
+  const oldResult = new Promise<{ succeeded: boolean }>((resolve) => { finishOld = resolve; });
+  const waitForCompletion = vi.fn((provider: ProviderId) => provider === "aa"
+    ? oldResult : Promise.resolve({ succeeded: true }));
+  const startProvider = vi.fn(async () => true);
+  const coordinator = createTravelSyncCoordinator({
+    storage, isProviderId, startProvider, waitForCompletion,
+    cancelProvider: () => new Promise(() => {}),
+  });
+  await coordinator.start(["aa", "hilton"]);
+  await vi.waitFor(() => expect(waitForCompletion).toHaveBeenCalledWith("aa"));
+  await coordinator.clear();
+  expect(storage.values[TRAVEL_SYNC_STORAGE_KEY]).toBeUndefined();
+  await coordinator.start(["marriott"]);
+  const completed = await waitForStatus(coordinator, "complete");
+  finishOld({ succeeded: false });
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  expect(await coordinator.getStatus()).toEqual(completed);
+  expect(startProvider.mock.calls).toHaveLength(2);
+});
+
+it("does not start a provider whose preparation finishes after account cleanup", async () => {
+  const storage = createStorage();
+  let finishPreparation!: () => void;
+  const prepareProvider = vi.fn(() => new Promise<void>((resolve) => { finishPreparation = resolve; }));
+  const startProvider = vi.fn(async () => true);
+  const coordinator = createTravelSyncCoordinator({
+    storage, isProviderId, prepareProvider, startProvider,
+    waitForCompletion: async () => ({ succeeded: true }),
+    cancelProvider: async () => {},
+  });
+  await coordinator.start(["aa"]);
+  await vi.waitFor(() => expect(prepareProvider).toHaveBeenCalled());
+  await coordinator.clear();
+  finishPreparation();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  expect(startProvider).not.toHaveBeenCalled();
+  expect((await coordinator.getStatus()).status).toBe("idle");
+  expect(storage.values[TRAVEL_SYNC_STORAGE_KEY]).toBeUndefined();
+});
+
+it("ignores a cancellation that finishes after a new account's scan", async () => {
+  const storage = createStorage();
+  let finishCancel!: () => void;
+  const pendingCancel = new Promise<void>((resolve) => { finishCancel = resolve; });
+  const cancelProvider = vi.fn(() => pendingCancel);
+  const waitForCompletion = vi.fn((provider: ProviderId) => provider === "aa"
+    ? new Promise<{ succeeded: boolean }>(() => {})
+    : Promise.resolve({ succeeded: true }));
+  const coordinator = createTravelSyncCoordinator({
+    storage, isProviderId, cancelProvider, waitForCompletion,
+    startProvider: async () => true,
+  });
+  await coordinator.start(["aa"]);
+  await vi.waitFor(() => expect(waitForCompletion).toHaveBeenCalled());
+  const cancellation = coordinator.cancel();
+  await vi.waitFor(() => expect(cancelProvider).toHaveBeenCalled());
+  await coordinator.clear();
+  await coordinator.start(["marriott"]);
+  const completed = await waitForStatus(coordinator, "complete");
+  finishCancel();
+  await cancellation;
+  expect(await coordinator.getStatus()).toEqual(completed);
+});
