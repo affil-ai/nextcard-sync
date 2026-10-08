@@ -265,13 +265,22 @@ function parseWalletCredits(lines: string[]) {
   };
 }
 
-async function expandWalletUserMenu() {
-  const pill = document.querySelector('[data-testid="user-info-points-pill"]');
-  if (!(pill instanceof HTMLElement)) return;
+async function expandWalletUserMenu(attemptId: string) {
+  if (extractExactPointsFromMenu() != null) return;
 
-  // The exact balance only appears inside the user menu opened from the points pill.
-  pill.click();
-  await new Promise((resolve) => setTimeout(resolve, 600));
+  const trigger = document.querySelector('[data-testid="user-info-points-pill"]')
+    ?? document.querySelector('[data-testid="user-info-profile-avatar"]')
+      ?.closest('[role="button"]');
+  if (!(trigger instanceof HTMLElement)) return;
+
+  // The redesigned wallet moved the exact balance into the profile menu.
+  // Do not toggle it closed if the user already opened it.
+  runControl.throwIfCancelled(attemptId);
+  if (trigger.getAttribute("aria-expanded") !== "true") trigger.click();
+  for (let elapsed = 0; elapsed < 3000; elapsed += 100) {
+    if (extractExactPointsFromMenu() != null) return;
+    await runControl.sleep(100, attemptId);
+  }
 }
 
 function extractExactPointsFromMenu() {
@@ -425,7 +434,7 @@ function parseWalletLinkedCards(lines: string[]) {
   return dedupeLinkedCards(cards);
 }
 
-async function scrapeWalletPage() {
+async function scrapeWalletPage(attemptId: string) {
   const lines = getBodyLines();
   const bodyText = document.body?.innerText ?? "";
   const pointsPill = document.querySelector('[data-testid="user-info-points-pill"]');
@@ -435,7 +444,7 @@ async function scrapeWalletPage() {
   const biltCash = extractBiltCash(lines, bodyText);
   const biltCashEarning = extractBiltCashEarning(lines, bodyText);
 
-  await expandWalletUserMenu();
+  await expandWalletUserMenu(attemptId);
   const exactPointsBalance = extractExactPointsFromMenu();
   const visiblePointsBalance = extractVisiblePointsBalance(getBodyLines());
 
@@ -560,7 +569,8 @@ function scrapeStatusTracker(): BiltProgress {
 
   const bodyText = document.body?.innerText ?? "";
 
-  const statusMatch = bodyText.match(/Elite Status\s*\n\s*(Blue|Silver|Gold|Platinum)\b/i);
+  const statusMatch = bodyText.match(/Elite Status\s*\n\s*(Blue|Silver|Gold|Platinum)\b/i)
+    ?? bodyText.match(/(?:^|\n)\s*(Blue|Silver|Gold|Platinum)\s*\n\s*Good through\b/i);
   if (statusMatch) {
     progress.eliteStatus = statusMatch[1];
   }
@@ -637,7 +647,7 @@ async function runExtraction(attemptId: string) {
 
   runControl.throwIfCancelled(attemptId);
   const data = url.includes("/wallet")
-    ? await scrapeWalletPage()
+    ? await scrapeWalletPage(attemptId)
     : scrapeNeighborhoodAccountPage();
 
   // Wallet accounts do not expose full profile info, so require a real balance or wallet payload.
@@ -659,7 +669,10 @@ async function runExtraction(attemptId: string) {
 }
 
 async function runProgressScrape(attemptId: string) {
-  await waitForSelector('[data-testid="user-info-points-pill"]', 10000);
+  await waitForSelector(
+    '[data-testid="user-info-points-pill"], [data-testid="user-info-profile-avatar"]',
+    10000,
+  );
   await runControl.sleep(3000, attemptId);
 
   runControl.throwIfCancelled(attemptId);

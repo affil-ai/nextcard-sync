@@ -35,6 +35,19 @@ const sendMessage = vi.fn(async (_message: Record<string, unknown>) => ({}));
 let bodyText = "";
 let passwordVisible = false;
 let pointsPill: { textContent: string } | null = null;
+let profileVisible = false;
+let menuExpanded = false;
+let menuDelay = 0;
+const menuClick = vi.fn(() => {
+  menuExpanded = true;
+  setTimeout(() => { bodyText += "\nYour Status\nGold\nYour Points\n123,456"; }, menuDelay);
+});
+class ProfileTrigger {
+  getAttribute(name: string) {
+    return name === "aria-expanded" ? String(menuExpanded) : null;
+  }
+  click() { menuClick(); }
+}
 
 beforeEach(() => {
   vi.resetModules();
@@ -44,6 +57,10 @@ beforeEach(() => {
   bodyText = "";
   passwordVisible = false;
   pointsPill = null;
+  profileVisible = false;
+  menuExpanded = false;
+  menuDelay = 0;
+  menuClick.mockClear();
   vi.stubGlobal("chrome", {
     runtime: {
       sendMessage,
@@ -55,15 +72,21 @@ beforeEach(() => {
     addEventListener: vi.fn(),
     removeEventListener: vi.fn(),
   });
-  vi.stubGlobal("HTMLElement", class {});
+  vi.stubGlobal("HTMLElement", ProfileTrigger);
   vi.stubGlobal("MutationObserver", class {
     observe() {}
     disconnect() {}
   });
   vi.stubGlobal("document", {
     body: { get innerText() { return bodyText; } },
-    querySelector: (selector: string) =>
-      selector === '[data-testid="user-info-points-pill"]' ? pointsPill : null,
+    querySelector: (selector: string) => {
+      if (selector === '[data-testid="user-info-points-pill"]') return pointsPill;
+      if (selector === '[data-testid="user-info-profile-avatar"]' && profileVisible) {
+        return { closest: () => new ProfileTrigger() };
+      }
+      if (selector.includes('user-info-profile-avatar') && profileVisible) return {};
+      return null;
+    },
     querySelectorAll: (selector: string) =>
       selector.includes('input[type="password"]') && passwordVisible
         ? [{ offsetParent: {} }]
@@ -94,6 +117,51 @@ function expectStatus(status: string) {
 }
 
 describe("Bilt wallet extraction", () => {
+  it("opens the redesigned profile menu and waits for the exact points balance", async () => {
+    bodyText = cardWallet;
+    profileVisible = true;
+    menuDelay = 1200;
+    await import("./bilt");
+    await extract();
+    expect(menuClick).toHaveBeenCalledOnce();
+    expect(sendMessage).toHaveBeenCalledWith(expect.objectContaining({
+      type: "EXTRACTION_DONE", data: expect.objectContaining({ pointsBalance: 123456 }),
+    }));
+  });
+
+  it("keeps an already-open profile menu open while its balance loads", async () => {
+    bodyText = cardWallet;
+    profileVisible = true;
+    menuExpanded = true;
+    setTimeout(() => { bodyText += "\nYour Points\n123,456"; }, 4000);
+    await import("./bilt");
+    await extract();
+    expect(menuClick).not.toHaveBeenCalled();
+    expect(sendMessage).toHaveBeenCalledWith(expect.objectContaining({
+      type: "EXTRACTION_DONE", data: expect.objectContaining({ pointsBalance: 123456 }),
+    }));
+  });
+
+  it("reads the current tier and progress without confusing the next tier with current status", async () => {
+    // Sanitized structure observed on the live redesigned status tracker.
+    bodyText = ["Gold", "Good through Jan 16, 2028", "Progress to Platinum",
+      "110,000", "Points", "200,000", "OR", "FAST TRACK", "$29,000", "Spend", "$50,000",
+    ].join("\n");
+    profileVisible = true;
+    await import("./bilt");
+    for (const listener of listeners) {
+      listener({ type: "SCRAPE_PROGRESS", attemptId: "test-attempt" }, { id: "test" }, () => {});
+    }
+    await vi.advanceTimersByTimeAsync(14000);
+    expect(sendMessage).toHaveBeenCalledWith(expect.objectContaining({
+      type: "BILT_PROGRESS_DONE", progress: {
+        eliteStatus: "Gold", statusValidThrough: "Jan 16, 2028",
+        pointsProgress: 110000, pointsTarget: 200000,
+        spendProgress: "$29,000", spendTarget: "$50,000",
+      },
+    }));
+  });
+
   it("extracts the redesigned signed-in wallet without treating promotional points as a balance", async () => {
     bodyText = cardWallet;
     await import("./bilt");
