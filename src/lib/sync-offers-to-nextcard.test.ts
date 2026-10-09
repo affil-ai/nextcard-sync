@@ -8,6 +8,7 @@ import {
   retryPendingDetectedOfferSyncs,
   retryPendingOfferSyncs,
   pullOfferUrlCache,
+  getCachedAmexOfferIds,
   syncDetectedOffersToNextCard,
   syncOffersToNextCard,
   type DetectedOfferSyncPayload,
@@ -804,5 +805,24 @@ describe("retryPendingDetectedOfferSyncs", () => {
       failedRunIds: [],
     });
     expect(storageSet).toHaveBeenCalledWith({ [detectedStorageKey]: [] });
+  });
+});
+
+
+describe("shared Amex terms lookup", () => {
+  const offers = [{ issuerOfferId: "one", merchantName: "Example", offerValue: "$10 back", expirationDate: "2026-12-31" }];
+  it("distinguishes a cache miss from an unavailable lookup", async () => {
+    const fetchMock = vi.fn().mockResolvedValueOnce({ ok: true, json: async () => ({ cachedOfferIds: ["one"] }) })
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ cachedOfferIds: [] }) })
+      .mockResolvedValueOnce({ ok: false })
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ cachedOfferIds: [false] }) });
+    vi.stubGlobal("fetch", fetchMock);
+    expect(await getCachedAmexOfferIds(offers)).toEqual(["one"]);
+    expect(await getCachedAmexOfferIds(offers)).toEqual([]);
+    expect(await getCachedAmexOfferIds(offers)).toBeNull();
+    expect(await getCachedAmexOfferIds(offers)).toBeNull();
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({ offers });
+    expect(await getCachedAmexOfferIds([{ issuerOfferId: 1 }])).toBeNull();
+    expect(fetchMock).toHaveBeenCalledTimes(4);
   });
 });

@@ -8,6 +8,7 @@
  * retry on next extension startup.
  */
 
+import { z } from "zod";
 import { getAuth, getAuthGeneration } from "./auth";
 import {
   getCurrentHouseholdOperationScope,
@@ -902,8 +903,6 @@ export async function pullOfferUrlCache(
       merchantName: string;
       merchantUrl: string | null;
       offerValue: string | null;
-    detailsText?: string;
-    termsText?: string;
       issuer: string;
       cardName: string;
       cardLastDigits: string | null;
@@ -958,5 +957,35 @@ export async function pullOfferUrlCache(
     }
   } catch (e) {
     console.error("[NextCard Offers] pullOfferUrlCache error:", e);
+  }
+}
+
+const offerTermsLookupSchema = z.array(z.object({
+  issuerOfferId: z.string().min(1).max(500),
+  merchantName: z.string().max(1000),
+  offerValue: z.string().max(10000).nullable(),
+  expirationDate: z.string().max(100).nullable(),
+})).max(100);
+
+/** Query shared saved-copy availability, without downloading full text. */
+export async function getCachedAmexOfferIds(input: unknown): Promise<string[] | null> {
+  const parsed = offerTermsLookupSchema.safeParse(input);
+  if (!parsed.success) return null;
+  if (parsed.data.length === 0) return [];
+  const generation = getAuthGeneration();
+  const auth = await getAuth();
+  if (!auth) return null;
+  try {
+    const response = await fetch(`${__CONVEX_SITE_URL__}/extension/amex-offer-terms-cache`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${auth.token}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ offers: parsed.data }),
+      signal: AbortSignal.timeout(10000),
+    });
+    if (!response.ok || generation !== getAuthGeneration()) return null;
+    const result = z.object({ cachedOfferIds: z.array(z.string()) }).safeParse(await response.json());
+    return result.success && generation === getAuthGeneration() ? result.data.cachedOfferIds : null;
+  } catch {
+    return null;
   }
 }

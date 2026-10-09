@@ -1,3 +1,4 @@
+import { createAmexOfferContentLoader } from "./amex-offer-content";
 import { readOfferContent } from "../lib/offer-content";
 
 /**
@@ -28,7 +29,7 @@ interface AmexCard {
   accountKey: string | null;
 }
 
-interface AmexOffer {
+export interface AmexOffer {
   offerId: string;
   name: string;
   status: string;
@@ -692,18 +693,23 @@ async function readOfferDetails(cardId: string, offerId: string, locale: string)
   }
 }
 
-// Detail requests are bounded and cannot overwrite listing/enrollment status.
+const loadOfferContent = createAmexOfferContentLoader();
 async function enrichOfferContent(cardId: string, offers: AmexOffer[], locale: string, runId: string | null) {
-  let next = 0;
-  await Promise.all(Array.from({ length: 3 }, async () => {
-    while (next < offers.length && activeOfferRunId === runId && !cancelled) {
-      const offer = offers[next++];
-      if (offer.termsText) continue;
-      const details = await readOfferDetails(cardId, offer.offerId, locale);
-      if (details?.detailsText) offer.detailsText = details.detailsText;
-      if (details?.termsText) offer.termsText = details.termsText;
-    }
-  }));
+  await loadOfferContent(offers, {
+    isActive: () => activeOfferRunId === runId && !cancelled,
+    readDetails: (offer) => readOfferDetails(cardId, offer.offerId, locale),
+    getCachedOfferIds: async (batch) => {
+      const response: unknown = await chrome.runtime.sendMessage({
+        type: "AMEX_OFFERS_CACHED_TERMS",
+        offers: batch.map(offer => ({
+          issuerOfferId: offer.offerId, merchantName: offer.name,
+          offerValue: offer.shortDescription, expirationDate: offer.expirationText,
+        })),
+      });
+      if (!Array.isArray(response) || !response.every(id => typeof id === "string")) return null;
+      return response;
+    },
+  });
 }
 
 // ── Enrollment ─────────────────────────────────────────────

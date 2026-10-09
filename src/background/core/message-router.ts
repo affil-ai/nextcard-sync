@@ -1,3 +1,4 @@
+import { getCachedAmexOfferIds } from "../../lib/sync-offers-to-nextcard";
 import type {
   ExtensionProfile,
   NextCardAuth,
@@ -987,6 +988,11 @@ export function createMessageRouter(options: {
             sendResponse({ products: null, error: String(e) });
           }
         })();
+        return true;
+      }
+
+      case "AMEX_OFFERS_CACHED_TERMS": {
+        void getCachedAmexOfferIds(message.offers).then(sendResponse).catch(() => sendResponse(null));
         return true;
       }
 
