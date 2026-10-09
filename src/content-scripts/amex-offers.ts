@@ -1266,6 +1266,23 @@ async function runEnrollment(
   }).catch(() => {});
 }
 
+function syncDetectedSnapshot(card: AmexCard, offers: AmexOffer[], runId: string | null, capturedAt?: string) {
+  return chrome.runtime.sendMessage({
+    type: "AMEX_OFFERS_DETECTED",
+    runId,
+    cardId: card.id,
+    cardName: card.name,
+    cardLastDigits: card.lastDigits,
+    snapshotComplete: capturedAt !== undefined,
+    snapshotCapturedAt: capturedAt,
+    observedIssuerOfferIds: capturedAt ? offers.map((offer) => offer.offerId).filter(Boolean) : undefined,
+    detectedOffers: offers.map((offer) => ({
+      ...toEnrolledOfferSyncMessage(offer),
+      status: isUnenrolledOffer(offer) ? "detected" : "enrolled",
+    })),
+  }).catch(() => {});
+}
+
 // ── Message listener ───────────────────────────────────────
 
 let selectedCardName = "";
@@ -1284,12 +1301,24 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       }
       // Probe all cards in parallel — validates session and gets per-card unenrolled counts
       const probes = await Promise.all(cards.map((c) => listAllOffers(c.id).catch(() => null)));
+      if (activeOfferRunId !== discoveryRunId || cancelled) {
+        sendResponse({ type: "AMEX_OFFERS_READY", cards: [], offerCounts: {}, error: "cancelled" });
+        return;
+      }
       const offerCounts: Record<string, number> = {};
       for (let i = 0; i < cards.length; i++) {
         const snapshot = probes[i];
         if (snapshot) offerCounts[cards[i].id] = snapshot.eligibleCount ?? snapshot.offers.filter(isUnenrolledOffer).length;
       }
       const snapshotCapturedAt = new Date().toISOString();
+      // Save the initial listing immediately, even if the issuer tab closes before
+      // optional detail reads finish. Later enrichment cannot reconcile availability.
+      for (let i = 0; i < cards.length; i++) {
+        const snapshot = probes[i];
+        if (snapshot && (snapshot.offers.length > 0 || snapshot.complete)) {
+          void syncDetectedSnapshot(cards[i], snapshot.offers, discoveryRunId, snapshot.complete ? snapshotCapturedAt : undefined);
+        }
+      }
       // Show the card picker immediately. Full terms are a read-only enrichment
       // of this snapshot, with bounded concurrency and the same run/scope guards.
       const snapshots = new Map<string, SharedOfferSnapshot>();
@@ -1317,49 +1346,8 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         if (activeOfferRunId !== discoveryRunId || cancelled) {
           return;
         }
-        const eligible = offers.filter(isUnenrolledOffer);
-        if (offerList) offerCounts[cards[i].id] = offerList.eligibleCount ?? eligible.length;
-        console.info("[NextCard Amex Offers] card discovery summary:", {
-          cardName: cards[i].name,
-          lastDigits: cards[i].lastDigits,
-          observed: offers.length,
-          availableToActivate: offerCounts[cards[i].id] ?? 0,
-          alreadyActivated: offers.length - eligible.length,
-          probeFailed: offerList === null,
-          snapshotComplete: offerList?.complete ?? false,
-        });
-
-        if (offerList && (offers.length > 0 || offerList.complete)) {
-          chrome.runtime.sendMessage({
-            type: "AMEX_OFFERS_DETECTED",
-            runId: activeOfferRunId,
-            cardId: cards[i].id,
-            cardName: cards[i].name,
-            cardLastDigits: cards[i].lastDigits,
-            snapshotComplete: offerList.complete,
-            snapshotCapturedAt: offerList.complete ? snapshotCapturedAt : undefined,
-            observedIssuerOfferIds: offerList.complete
-              ? offers.map((offer) => offer.offerId).filter(Boolean)
-              : undefined,
-            detectedOffers: offers.map((o) => ({
-              issuerOfferId: o.offerId,
-              merchantName: o.name,
-              offerValue: o.shortDescription,
-              detailsText: o.detailsText,
-              termsText: o.termsText,
-              category: o.category,
-              expirationDate: o.expirationText,
-              rewardType: null as "percentage" | "flat_cash" | "points" | null,
-              rewardAmount: null as number | null,
-              rewardCurrency: null as string | null,
-              maxReward: null as number | null,
-              minSpend: null as number | null,
-              merchantUrl: o.merchantUrl,
-              merchantLogoUrl: o.merchantLogoUrl,
-              redemptionChannel: o.redemptionChannel,
-              status: isUnenrolledOffer(o) ? "detected" : "enrolled",
-            })),
-          }).catch(() => {});
+        if (offers.some((offer) => offer.termsText || offer.detailsText)) {
+          await syncDetectedSnapshot(cards[i], offers, discoveryRunId);
         }
       }
     })();
