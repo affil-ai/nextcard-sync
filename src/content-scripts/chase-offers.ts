@@ -1,3 +1,5 @@
+import { readOfferContent } from "../lib/offer-content";
+
 /**
  * Chase Offers — discover cards and enroll all eligible merchant offers.
  *
@@ -34,6 +36,8 @@ interface ChaseOffer {
   category: string | null;
   offerEndTimestamp: string | null;
   shortMessageText: string | null;
+  detailsText?: string;
+  termsText?: string;
   merchantUrl: string | null;
   merchantLogoUrl: string | null;
   redemptionChannel: "online" | "in_store" | "both" | null;
@@ -173,6 +177,8 @@ async function listOffers(cardIds: string[], primaryCardId: string): Promise<Cha
           category: (categories?.[0]?.offerCategoryName ?? null) as string | null,
           offerEndTimestamp: (details?.offerEndTimestamp ?? null) as string | null,
           shortMessageText: (display?.shortMessageText ?? null) as string | null,
+          detailsText: readOfferContent(display?.rewardDescriptionText) ?? readOfferContent(display?.shortMessageText),
+          termsText: readOfferContent(display?.termsAndConditionsText) ?? readOfferContent(display?.rewardDescriptionText),
           merchantUrl: ((display?.links as Record<string, Record<string, unknown>> | undefined)?.displayLink?.linkText ?? null) as string | null,
           merchantLogoUrl: ((display?.images as Record<string, Record<string, unknown>> | undefined)?.logo?.imageLinkUrlText ?? null) as string | null,
           redemptionChannel: (() => {
@@ -345,6 +351,8 @@ async function runEnrollment(
         issuerOfferId: offer.offerId,
         merchantName: offer.name,
         offerValue: offer.offerHeaderText,
+        detailsText: offer.detailsText,
+        termsText: offer.termsText,
         category: offer.category,
         expirationDate: offer.offerEndTimestamp,
         rewardType: offer.offerRewardTypeCode === "PERCENTAGE" ? "percentage" : offer.offerRewardTypeCode === "FLAT_AMOUNT" ? "flat_cash" : null,
@@ -397,6 +405,8 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
               issuerOfferId: o.offerId,
               merchantName: o.name,
               offerValue: o.offerHeaderText,
+              detailsText: o.detailsText,
+              termsText: o.termsText,
               category: o.category,
               expirationDate: o.offerEndTimestamp,
               rewardType: o.offerRewardTypeCode === "PERCENTAGE" ? "percentage" : o.offerRewardTypeCode === "FLAT_AMOUNT" ? "flat_cash" : null,

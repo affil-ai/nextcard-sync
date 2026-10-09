@@ -67,6 +67,8 @@ export interface OfferSyncPayload {
     issuerOfferId: string;
     merchantName: string;
     offerValue: string | null;
+    detailsText?: string;
+    termsText?: string;
     category: string | null;
     expirationDate: string | null;
     rewardType: "percentage" | "flat_cash" | "points" | null;
@@ -120,6 +122,8 @@ export interface DetectedOfferSyncPayload {
     issuerOfferId: string;
     merchantName: string;
     offerValue: string | null;
+    detailsText?: string;
+    termsText?: string;
     category: string | null;
     expirationDate: string | null;
     rewardType: "percentage" | "flat_cash" | "points" | null;
@@ -448,6 +452,8 @@ function normalizeOffers(payload: OfferSyncPayload): OfferSyncPayload {
       issuerOfferId: o.issuerOfferId,
       merchantName: o.merchantName,
       offerValue: o.offerValue ?? null,
+      detailsText: o.detailsText,
+      termsText: o.termsText,
       category: o.category ?? null,
       expirationDate: o.expirationDate ?? null,
       rewardType: o.rewardType ?? null,
@@ -896,6 +902,8 @@ export async function pullOfferUrlCache(
       merchantName: string;
       merchantUrl: string | null;
       offerValue: string | null;
+    detailsText?: string;
+    termsText?: string;
       issuer: string;
       cardName: string;
       cardLastDigits: string | null;

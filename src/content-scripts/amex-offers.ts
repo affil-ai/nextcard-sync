@@ -1,3 +1,5 @@
+import { readOfferContent } from "../lib/offer-content";
+
 /**
  * Amex Offers — discover cards and enroll all eligible merchant offers.
  *
@@ -31,6 +33,8 @@ interface AmexOffer {
   name: string;
   status: string;
   shortDescription: string | null;
+  detailsText?: string;
+  termsText?: string;
   category: string | null;
   expirationText: string | null;
   merchantUrl: string | null;
@@ -425,6 +429,8 @@ function parseModernOffer(o: Record<string, unknown>): AmexOffer {
     name: (o.name ?? "Unknown") as string,
     status: (o.status ?? "ELIGIBLE") as string,
     shortDescription: (o.short_description ?? null) as string | null,
+    detailsText: readOfferContent(o.long_description),
+    termsText: readOfferContent(o.terms),
     category: (o.category ?? null) as string | null,
     expirationText: (o.expiry_date ?? null) as string | null,
     merchantUrl: ((o.cta as Record<string, unknown> | undefined)?.url ?? null) as string | null,
@@ -447,6 +453,7 @@ function parseLegacyOffer(o: Record<string, unknown>): AmexOffer {
     name: (o.title ?? o.merchantName ?? "Unknown") as string,
     status: ((o.enrollmentDetails as Record<string, unknown> | undefined)?.status ?? "NOT_ENROLLED") as string,
     shortDescription: (o.shortDescription ?? null) as string | null,
+    detailsText: readOfferContent(o.longDescription),
     category: ((o.applicableCategories as Array<{ text: string }> | undefined)?.[0]?.text ?? null) as string | null,
     expirationText: ((o.expiration as { text: string } | undefined)?.text ?? null) as string | null,
     merchantUrl: ((o.longDescription as string | undefined)?.match(/(?:at|website)\s+(?:[\w.-]+\.(?:com|net|org|co|io|shop|store)\b)/i)?.[0]?.replace(/^(?:at|website)\s+/i, "") ?? null) as string | null,
@@ -685,6 +692,20 @@ async function readOfferDetails(cardId: string, offerId: string, locale: string)
   }
 }
 
+// Detail requests are bounded and cannot overwrite listing/enrollment status.
+async function enrichOfferContent(cardId: string, offers: AmexOffer[], locale: string, runId: string | null) {
+  let next = 0;
+  await Promise.all(Array.from({ length: 3 }, async () => {
+    while (next < offers.length && activeOfferRunId === runId && !cancelled) {
+      const offer = offers[next++];
+      if (offer.termsText) continue;
+      const details = await readOfferDetails(cardId, offer.offerId, locale);
+      if (details?.detailsText) offer.detailsText = details.detailsText;
+      if (details?.termsText) offer.termsText = details.termsText;
+    }
+  }));
+}
+
 // ── Enrollment ─────────────────────────────────────────────
 
 let cancelled = false;
@@ -793,21 +814,7 @@ async function verifyEnrollment(cardId: string, offerId: string, locale: string)
   return observedEligible ? "eligible" : "unknown";
 }
 
-type EnrolledOfferSyncMessage = {
-  issuerOfferId: string;
-  merchantName: string;
-  offerValue: string | null;
-  category: string | null;
-  expirationDate: string | null;
-  rewardType: "percentage" | "flat_cash" | "points" | null;
-  rewardAmount: number | null;
-  rewardCurrency: string | null;
-  maxReward: number | null;
-  minSpend: number | null;
-  merchantUrl: string | null;
-  merchantLogoUrl: string | null;
-  redemptionChannel: "online" | "in_store" | "both" | null;
-};
+type EnrolledOfferSyncMessage = Omit<import("../lib/sync-offers-to-nextcard").OfferSyncPayload["offers"][number], "enrolledAt">;
 
 function toEnrolledOfferSyncMessage(offer: AmexOffer): EnrolledOfferSyncMessage {
   const description = offer.shortDescription ?? "";
@@ -838,6 +845,8 @@ function toEnrolledOfferSyncMessage(offer: AmexOffer): EnrolledOfferSyncMessage 
     issuerOfferId: offer.offerId,
     merchantName: offer.name,
     offerValue: offer.shortDescription,
+    detailsText: offer.detailsText,
+    termsText: offer.termsText,
     category: offer.category,
     expirationDate: offer.expirationText,
     rewardType,
@@ -1240,6 +1249,8 @@ async function runEnrollment(
         issuerOfferId: o.offerId,
         merchantName: o.name,
         offerValue: o.shortDescription,
+        detailsText: o.detailsText,
+        termsText: o.termsText,
         category: o.category,
         expirationDate: o.expirationText,
         rewardType,
@@ -1263,6 +1274,8 @@ let selectedCardLastDigits: string | null = null;
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (message.type === "AMEX_OFFERS_DISCOVER") {
     activeOfferRunId = typeof message.runId === "string" ? message.runId : activeOfferRunId;
+    const discoveryRunId = activeOfferRunId;
+    cancelled = false;
     (async () => {
       const cards = await discoverCards();
       if (cards.length === 0) {
@@ -1273,8 +1286,37 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       const probes = await Promise.all(cards.map((c) => listAllOffers(c.id).catch(() => null)));
       const offerCounts: Record<string, number> = {};
       for (let i = 0; i < cards.length; i++) {
+        const snapshot = probes[i];
+        if (snapshot) offerCounts[cards[i].id] = snapshot.eligibleCount ?? snapshot.offers.filter(isUnenrolledOffer).length;
+      }
+      const snapshotCapturedAt = new Date().toISOString();
+      // Show the card picker immediately. Full terms are a read-only enrichment
+      // of this snapshot, with bounded concurrency and the same run/scope guards.
+      const snapshots = new Map<string, SharedOfferSnapshot>();
+      for (let index = 0; index < cards.length; index += 1) {
+        const snapshot = probes[index];
+        if (snapshot) snapshots.set(cards[index].id, snapshot);
+      }
+      const sharedOfferPreview = cards.map((card) => ({
+        cardId: card.id,
+        sharedOfferCount: buildSharedOfferGroups(card.id, cards, snapshots).length,
+      }));
+      sendResponse({
+        type: "AMEX_OFFERS_READY",
+        cards: cards.map((c) => ({ id: c.id, name: c.name, lastDigits: c.lastDigits, accountKey: c.accountKey, locale: "en-US" })),
+        offerCounts,
+        sharedOfferPreview,
+        offerProbeError: probes.every((probe) => probe === null) ? "offer_probe_failed" : undefined,
+        error: undefined,
+      });
+
+      for (let i = 0; i < cards.length; i++) {
         const offerList = probes[i];
         const offers = offerList?.offers ?? [];
+        await enrichOfferContent(cards[i].id, offers, "en-US", discoveryRunId);
+        if (activeOfferRunId !== discoveryRunId || cancelled) {
+          return;
+        }
         const eligible = offers.filter(isUnenrolledOffer);
         if (offerList) offerCounts[cards[i].id] = offerList.eligibleCount ?? eligible.length;
         console.info("[NextCard Amex Offers] card discovery summary:", {
@@ -1295,7 +1337,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
             cardName: cards[i].name,
             cardLastDigits: cards[i].lastDigits,
             snapshotComplete: offerList.complete,
-            snapshotCapturedAt: offerList.complete ? new Date().toISOString() : undefined,
+            snapshotCapturedAt: offerList.complete ? snapshotCapturedAt : undefined,
             observedIssuerOfferIds: offerList.complete
               ? offers.map((offer) => offer.offerId).filter(Boolean)
               : undefined,
@@ -1303,6 +1345,8 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
               issuerOfferId: o.offerId,
               merchantName: o.name,
               offerValue: o.shortDescription,
+              detailsText: o.detailsText,
+              termsText: o.termsText,
               category: o.category,
               expirationDate: o.expirationText,
               rewardType: null as "percentage" | "flat_cash" | "points" | null,
@@ -1318,23 +1362,6 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
           }).catch(() => {});
         }
       }
-      const snapshots = new Map<string, SharedOfferSnapshot>();
-      for (let index = 0; index < cards.length; index += 1) {
-        const snapshot = probes[index];
-        if (snapshot) snapshots.set(cards[index].id, snapshot);
-      }
-      const sharedOfferPreview = cards.map((card) => ({
-        cardId: card.id,
-        sharedOfferCount: buildSharedOfferGroups(card.id, cards, snapshots).length,
-      }));
-      sendResponse({
-        type: "AMEX_OFFERS_READY",
-        cards: cards.map((c) => ({ id: c.id, name: c.name, lastDigits: c.lastDigits, accountKey: c.accountKey, locale: "en-US" })),
-        offerCounts,
-        sharedOfferPreview,
-        offerProbeError: probes.every((probe) => probe === null) ? "offer_probe_failed" : undefined,
-        error: undefined,
-      });
     })();
     return true;
   }

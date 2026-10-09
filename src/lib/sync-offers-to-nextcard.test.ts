@@ -130,7 +130,7 @@ describe("syncOffersToNextCard", () => {
     }));
     vi.stubGlobal("fetch", fetchMock);
 
-    await expect(syncOffersToNextCard({ ...payload, scope: null })).resolves.toEqual({
+    await expect(syncOffersToNextCard({ ...payload, scope: null, offers: payload.offers.map((offer) => ({ ...offer, detailsText: "Spend $50 online.", termsText: "Excludes gift cards." })) })).resolves.toEqual({
       status: "saved",
       error: null,
     });
@@ -143,6 +143,9 @@ describe("syncOffersToNextCard", () => {
         }),
       }),
     );
+    const request = fetchMock.mock.calls[0];
+    expect(JSON.stringify(request)).toContain("Excludes gift cards.");
+    expect(JSON.stringify(request)).toContain("Spend $50 online.");
     expect(storageSet).toHaveBeenCalledWith({
       offerUrlCache: {
         "example.com": [expect.objectContaining({ merchantName: "Example" })],
