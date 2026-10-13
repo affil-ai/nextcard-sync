@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
   OFFER_RESULT_FRESHNESS_MS,
-  OFFER_SAVE_FAILURE_GRACE_MS,
   OFFER_TERMINAL_HISTORY_FRESHNESS_MS,
   applyOfferOperationPatch,
   canTransitionOfferOperation,
@@ -129,7 +128,7 @@ describe("offer operation state", () => {
     expect(getOfferOperationStatusText(state)).toBe("Stopped · 6 added, 12 not attempted");
   });
 
-  it("does not flash a terminal save failure while recovery is still settling", () => {
+  it("shows a failed save immediately instead of claiming it is still saving", () => {
     const updatedAt = "2026-07-28T22:37:41.000Z";
     const state = {
       ...createOfferOperation("chase", "run-save", updatedAt),
@@ -138,16 +137,7 @@ describe("offer operation state", () => {
       saveStatus: "failed" as const,
       saveError: "Couldn’t queue the nextcard save for retry.",
     };
-    const updatedAtMs = new Date(updatedAt).getTime();
-    expect(getOfferSaveStatusText(state, updatedAtMs + 1_000)).toBe(
-      "finishing save to nextcard",
-    );
-    expect(
-      getOfferSaveStatusText(
-        state,
-        updatedAtMs + OFFER_SAVE_FAILURE_GRACE_MS,
-      ),
-    ).toBe("Couldn’t queue the nextcard save for retry.");
+    expect(getOfferSaveStatusText(state)).toBe("Couldn’t queue the nextcard save for retry.");
   });
 
   it("recognizes the automatic save-and-refresh handoff", () => {

@@ -366,3 +366,24 @@ it("clears an old account even when its issuer tab never responds or closes", as
   expect((await store.getSnapshot()).active).toBeNull();
   expect(storage.has("nextcard_offer_operation_snapshot_v1")).toBe(false);
 });
+
+describe("explicit offer selection", () => {
+  it("validates offer ownership and passes the chosen IDs to the issuer", async () => {
+    const { store, runId } = await readyChase();
+    const snapshot = await store.getSnapshot();
+    await store.markReady(runId, snapshot.active?.cards.map((card) => ({ ...card,
+      offers: [{ id: `${card.key}-offer`, name: "Merchant", value: "10%", details: null, terms: null }],
+    })) ?? []);
+    const coordinator = createOfferOperationCoordinator(store);
+    expect(await coordinator.startEnrollment(runId, ["card-id-1"], 1, {
+      selectedOfferIdsByCard: { "card-id-1": ["card-id-2-offer"] },
+    })).toMatchObject({ ok: false, error: "invalid_offer_selection" });
+    expect(sendMessage).not.toHaveBeenCalled();
+    expect(await coordinator.startEnrollment(runId, ["card-id-1"], 1, {
+      selectedOfferIdsByCard: { "card-id-1": ["card-id-1-offer"] },
+    })).toMatchObject({ ok: true });
+    expect(sendMessage).toHaveBeenCalledWith(42, expect.objectContaining({
+      selectedCardKeys: ["card-id-1"], selectedOfferIdsByCard: { "card-id-1": ["card-id-1-offer"] },
+    }), expect.any(Function));
+  });
+});

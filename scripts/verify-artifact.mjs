@@ -12,6 +12,9 @@ if (pkg.version !== source.version || built.version !== source.version) {
 if (!existsSync(resolve("dist", built.background.service_worker))) {
   throw new Error("The built service worker is missing.");
 }
+if (!existsSync(resolve("dist/src/welcome/index.html"))) {
+  throw new Error("The installation welcome page is missing from the release artifact.");
+}
 console.log(JSON.stringify({
   directory: resolve("dist"),
   version: built.version,

@@ -1,3 +1,4 @@
+import { readOfferSelection } from "../../lib/offer-selection";
 import { getCachedAmexOfferIds } from "../../lib/sync-offers-to-nextcard";
 import type {
   ExtensionProfile,
@@ -265,6 +266,7 @@ export function createMessageRouter(options: {
   refreshExtensionProfile?: () => Promise<ExtensionProfile | null>;
   openUpgrade?: () => Promise<void>;
   canWriteOffers?: () => Promise<boolean>;
+  retryOfferSaves?: () => Promise<void>;
   offerOperations: OfferOperationStore;
   offerCoordinator: OfferOperationCoordinator;
   startLegacyOfferOperation?: (
@@ -640,6 +642,9 @@ export function createMessageRouter(options: {
         const selectedCardKeys = Array.isArray(message.selectedCardKeys)
           ? message.selectedCardKeys.filter((key): key is string => typeof key === "string")
           : [];
+        if (message.selectedOfferIdsByCard != null && !readOfferSelection(message.selectedOfferIdsByCard)) {
+          sendResponse({ ok: false, error: "invalid_offer_selection" }); return true;
+        }
         const total = typeof message.total === "number" && message.total >= 0
           ? message.total
           : null;
@@ -685,6 +690,7 @@ export function createMessageRouter(options: {
             {
               addMatchingOffersAcrossCards,
               maxOffers: reservation.granted,
+              selectedOfferIdsByCard: readOfferSelection(message.selectedOfferIdsByCard),
             },
           );
           if (!result.ok) {
@@ -698,6 +704,17 @@ export function createMessageRouter(options: {
         })();
         return true;
       }
+
+      case "RETRY_OFFER_SAVES":
+        void options.retryOfferSaves?.().then(() => sendResponse({ ok: true }))
+          .catch(() => sendResponse({ ok: false }));
+        if (!options.retryOfferSaves) sendResponse({ ok: false });
+        return true;
+
+      case "FINISH_OFFER_REVIEW":
+        void options.offerOperations.finishReview(typeof message.runId === "string" ? message.runId : "")
+          .then((ok) => sendResponse({ ok }));
+        return true;
 
       case "CANCEL_OFFER_OPERATION":
         void options.offerCoordinator.cancel(
@@ -1329,10 +1346,12 @@ export function createMessageRouter(options: {
               ))
             : Array.isArray(message.enrolledOffers) && message.enrolledOffers.length > 0;
           await options.offerOperations.patchActiveRun("amex", runId, {
-            phase: message.cancelled === true ? "cancelled" : "completed",
+            phase: message.sessionExpired === true || (typeof message.lastError === "string" && message.added === 0)
+              ? "failed" : message.cancelled === true ? "cancelled" : "completed",
             added: typeof message.added === "number" ? Math.max(0, message.added) : 0,
             failed: typeof message.failed === "number" ? Math.max(0, message.failed) : 0,
             cancelled: message.cancelled === true,
+            unverified: typeof message.unverified === "number" ? message.unverified : 0,
             error:
               message.sessionExpired === true
                 ? "Sign in to Amex again to continue."
@@ -1433,7 +1452,8 @@ export function createMessageRouter(options: {
           await recordOfferActivations(
             auth?.email,
             runId,
-            typeof message.added === "number" ? message.added : 0,
+            (typeof message.added === "number" ? message.added : 0)
+              + (typeof message.unverified === "number" ? message.unverified : 0),
           ).catch(() => {});
           const enrolledByCard = Array.isArray(message.enrolledByCard)
             ? message.enrolledByCard
@@ -1448,7 +1468,10 @@ export function createMessageRouter(options: {
             : Array.isArray(message.enrolledOffers) && message.enrolledOffers.length > 0;
           if (runId) {
             await options.offerOperations.patchActiveRun("chase", runId, {
-              phase: message.cancelled === true ? "cancelled" : "completed",
+              phase: typeof message.error === "string" ? "failed" : message.cancelled === true ? "cancelled" : "completed",
+              error: typeof message.error === "string" ? message.error
+                : typeof message.verificationError === "string" ? message.verificationError : null,
+              unverified: typeof message.unverified === "number" ? message.unverified : 0,
               added: typeof message.added === "number" ? Math.max(0, message.added) : 0,
               failed: typeof message.failed === "number" ? Math.max(0, message.failed) : 0,
               cancelled: message.cancelled === true,
@@ -1459,7 +1482,8 @@ export function createMessageRouter(options: {
                       0,
                       message.total
                         - (typeof message.added === "number" ? message.added : 0)
-                        - (typeof message.failed === "number" ? message.failed : 0),
+                        - (typeof message.failed === "number" ? message.failed : 0)
+                        - (typeof message.unverified === "number" ? message.unverified : 0),
                     )
                   : null,
             });
@@ -1609,7 +1633,8 @@ export function createMessageRouter(options: {
             : Array.isArray(message.enrolledOffers) && message.enrolledOffers.length > 0;
           if (runId) {
             await options.offerOperations.patchActiveRun("citi", runId, {
-              phase: message.cancelled === true ? "cancelled" : "completed",
+              phase: typeof message.error === "string" ? "failed" : message.cancelled === true ? "cancelled" : "completed",
+              error: typeof message.error === "string" ? message.error : null,
               added: typeof message.added === "number" ? Math.max(0, message.added) : 0,
               failed: typeof message.failed === "number" ? Math.max(0, message.failed) : 0,
               cancelled: message.cancelled === true,

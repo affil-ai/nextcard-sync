@@ -1,3 +1,4 @@
+import { readOfferSelection, selectEligibleOffers } from "../lib/offer-selection";
 import { createAmexOfferContentLoader } from "./amex-offer-content";
 import { readOfferContent } from "../lib/offer-content";
 
@@ -1056,6 +1057,7 @@ async function runEnrollment(
   locale: string,
   runId: string,
   maxOffers: number | null,
+  selectedIds?: string[],
 ) {
   cancelled = false;
   enrollRequestsSincePause = 0;
@@ -1084,17 +1086,22 @@ async function runEnrollment(
     round++;
     sendProgress({ runId, status: "fetching", round, added: totalAdded });
 
-    const offerList = await listOffers(cardId, locale);
-    if (!offerList) break;
+    const offerList = selectedIds ? await listAllOffers(cardId, locale) : await listOffers(cardId, locale);
+    if (!offerList) { lastError = "Could not check Amex offers. Check again."; break; }
+    if (selectedIds && round === 1) {
+      try { selectEligibleOffers(offerList.offers.filter(isUnenrolledOffer), selectedIds); }
+      catch { lastError = "A selected offer is no longer available. Check offers again."; break; }
+    }
 
     const eligible = offerList.offers.filter((o) => (
       o.offerId
+      && (!selectedIds || selectedIds.includes(o.offerId))
       && isUnenrolledOffer(o)
       && !enrolledOfferIds.has(o.offerId)
       && !failedOfferIds.has(o.offerId)
     ));
 
-    totalEligible = Math.max(
+    totalEligible = selectedIds ? selectedIds.length : Math.max(
       totalEligible,
       offerList.eligibleCount ?? 0,
       enrolledOfferIds.size + failedOfferIds.size + eligible.length,
@@ -1194,6 +1201,7 @@ async function runEnrollment(
     emptyBatchPolls = 0;
     staleBatchPolls = 0;
 
+    if (selectedIds) break;
     if (round < MAX_ROUNDS && isRunActive(runId)) {
       sendProgress({ runId, status: "checking_new", round, added: totalAdded });
       await delay(OFFER_BATCH_REFETCH_DELAY_MS + enrollJitter());
@@ -1341,6 +1349,11 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         cards: cards.map((c) => ({ id: c.id, name: c.name, lastDigits: c.lastDigits, accountKey: c.accountKey, locale: "en-US" })),
         offerCounts,
         sharedOfferPreview,
+        offersByCard: Object.fromEntries(cards.map((card, index) => [card.id,
+          probes[index]?.complete ? probes[index].offers.filter(isUnenrolledOffer).map((offer) => ({
+            id: offer.offerId, name: offer.name, value: offer.shortDescription,
+            details: offer.detailsText ?? null, terms: offer.termsText ?? null,
+          })) : null])),
         offerProbeError: probes.every((probe) => probe === null) ? "offer_probe_failed" : undefined,
         error: undefined,
       });
@@ -1419,7 +1432,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         maxOffers,
       );
     } else {
-      void runEnrollment(cardId, locale, runId, maxOffers);
+      void runEnrollment(cardId, locale, runId, maxOffers, readOfferSelection(message.selectedOfferIdsByCard)?.[cardId]);
     }
     sendResponse({ ok: true });
     return true;

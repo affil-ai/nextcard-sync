@@ -1,3 +1,4 @@
+import { readReviewOffers, type ReviewOffer } from "../lib/offer-selection";
 import {
   type OfferIssuer,
   type OfferOperationCard,
@@ -117,6 +118,10 @@ function normalizeDiscoveryCards(
   const counts = response.offerCounts && typeof response.offerCounts === "object"
     ? response.offerCounts as Record<string, unknown>
     : {};
+  const reviewOffers = new Map<string, ReviewOffer[] | null>();
+  if (response.offersByCard && typeof response.offersByCard === "object") {
+    for (const [key, value] of Object.entries(response.offersByCard)) reviewOffers.set(key, readReviewOffers(value));
+  }
   const sharedCounts = new Map<string, number>();
   if (issuer === "amex" && Array.isArray(response.sharedOfferPreview)) {
     for (const value of response.sharedOfferPreview) {
@@ -154,6 +159,7 @@ function normalizeDiscoveryCards(
           : null,
       countStatus: typeof count === "number" ? "complete" : "unknown",
       sharedOfferCount: sharedCounts.get(rawKey) ?? null,
+      offers: reviewOffers.get(rawKey) ?? null,
     }];
   });
 }
@@ -211,6 +217,12 @@ export function createOfferOperationCoordinator(
         await waitForTabComplete(tabId);
         await delay(1_500);
         continue;
+      }
+      if (response?.error === "request_failed" || response?.error === "invalid_response") {
+        await store.patch(runId, { phase: "failed", error: response.error === "request_failed"
+          ? "Chase could not return your offers. Try checking again."
+          : "Chase returned an unexpected response. Try checking again." });
+        return;
       }
       const cards = response ? normalizeDiscoveryCards(issuer, response) : [];
       if (cards.length > 0) {
@@ -299,6 +311,7 @@ export function createOfferOperationCoordinator(
     options: {
       addMatchingOffersAcrossCards?: boolean;
       maxOffers?: number | null;
+      selectedOfferIdsByCard?: Record<string, string[]> | null;
     } = {},
   ) {
     const snapshot = await store.getSnapshot();
@@ -326,6 +339,18 @@ export function createOfferOperationCoordinator(
       && options.addMatchingOffersAcrossCards !== true
     ) {
       return { ok: false as const, error: "multi_card_enrollment_not_supported" };
+    }
+    const selection = options.selectedOfferIdsByCard;
+    if (selection) {
+      const keys = Object.keys(selection);
+      const valid = keys.length === selectedCardKeys.length && keys.every((key) => selectedCardKeys.includes(key))
+        && keys.every((key) => {
+          const card = active.cards.find((candidate) => candidate.key === key);
+          return card?.offers != null && selection[key].length > 0
+            && selection[key].every((id) => card.offers?.some((offer) => offer.id === id));
+        });
+      const selectedCount = Object.values(selection).reduce((sum, ids) => sum + ids.length, 0);
+      if (!valid || total == null || total <= 0 || total > selectedCount || options.addMatchingOffersAcrossCards) return { ok: false as const, error: "invalid_offer_selection" };
     }
     let sharedPreflightId: string | null = null;
     const addMatchingOffersAcrossCards =
@@ -370,6 +395,7 @@ export function createOfferOperationCoordinator(
       cardId: selectedKey,
       accountId: selectedKey,
       selectedCardKeys,
+      selectedOfferIdsByCard: selection,
       allCardIds: active.cards.map((card) => card.key),
       expectedTotal: total,
       locale: "en-US",

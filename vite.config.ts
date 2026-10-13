@@ -48,6 +48,7 @@ export default defineConfig(({ mode }) => {
       outDir: mode === "development" ? "dist-dev" : "dist",
       emptyOutDir: true,
       rollupOptions: {
+        input: { welcome: "src/welcome/index.html" },
         output: {
           // Unpacked extensions keep the current manifest in memory until the user
           // reloads them. Stable JS paths let already-registered content scripts

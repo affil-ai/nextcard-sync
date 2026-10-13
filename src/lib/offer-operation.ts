@@ -1,3 +1,4 @@
+import { readReviewOffers, type ReviewOffer } from "./offer-selection";
 import {
   householdOperationScopesMatch,
   type HouseholdOperationScope,
@@ -32,6 +33,7 @@ export interface OfferOperationCard {
   availableCount: number | null;
   countStatus: OfferCountStatus;
   sharedOfferCount?: number | null;
+  offers?: ReviewOffer[] | null;
 }
 
 export interface OfferOperationState {
@@ -48,6 +50,7 @@ export interface OfferOperationState {
   total: number | null;
   added: number;
   failed: number;
+  unverified?: number;
   remaining: number | null;
   cancelled: boolean;
   error: string | null;
@@ -63,7 +66,6 @@ export interface OfferOperationSnapshot {
 export const OFFER_OPERATION_STORAGE_KEY = "nextcard_offer_operation_snapshot_v1";
 export const OFFER_RESULT_FRESHNESS_MS = 15 * 60 * 1000;
 export const OFFER_TERMINAL_HISTORY_FRESHNESS_MS = 60 * 60 * 1000;
-export const OFFER_SAVE_FAILURE_GRACE_MS = 5_000;
 
 const ALLOWED_PHASE_TRANSITIONS: Record<OfferOperationPhase, OfferOperationPhase[]> = {
   opening: ["waiting_for_login", "checking", "cancelled", "interrupted", "failed"],
@@ -123,6 +125,7 @@ export function isOfferCompletionContinuing(state: OfferOperationState) {
   return (
     state.phase === "completed"
     && state.added > 0
+    && (state.unverified ?? 0) === 0
     && state.cards.length > 0
     && state.selectedCardKeys.length > 0
     && (state.saveStatus === "saving" || state.saveStatus === "saved")
@@ -241,6 +244,7 @@ function normalizeCard(value: unknown): OfferOperationCard | null {
         ? value.availableCount
         : null,
     countStatus,
+    offers: readReviewOffers(value.offers),
     sharedOfferCount:
       typeof value.sharedOfferCount === "number" && value.sharedOfferCount >= 0
         ? Math.floor(value.sharedOfferCount)
@@ -304,6 +308,7 @@ export function normalizeOfferOperation(value: unknown): OfferOperationState | n
       : [],
     total: typeof value.total === "number" && value.total >= 0 ? value.total : null,
     added: typeof value.added === "number" && value.added >= 0 ? value.added : 0,
+    unverified: typeof value.unverified === "number" && value.unverified >= 0 ? value.unverified : 0,
     failed: typeof value.failed === "number" && value.failed >= 0 ? value.failed : 0,
     remaining:
       typeof value.remaining === "number" && value.remaining >= 0 ? value.remaining : null,
@@ -373,6 +378,8 @@ export function getOfferOperationStatusText(
         ? `Adding ${issuerName} offers…`
         : `Adding offers — ${state.added} of ${state.total}`;
     case "completed":
+      if ((state.unverified ?? 0) > 0) return `${state.added} activated · ${state.unverified} unverified, check again`;
+      if (state.added === 0 && state.failed > 0) return `${state.failed} offers couldn’t be activated. Check again to retry.`;
       if (state.added > 0 && state.failed > 0) {
         return `${state.added} added · ${state.failed} couldn’t be added`;
       }
@@ -394,7 +401,7 @@ export function getOfferPostEnrollmentNextStep(state: OfferOperationState) {
   const hasRemainingOffers = state.cards.some(
     (card) => card.availableCount != null && card.availableCount > 0,
   );
-  if (hasRemainingOffers) return "Choose another card to keep going.";
+  if (hasRemainingOffers) return "Choose more offers, view your offers, or select Done.";
 
   const hasCompleteCounts = state.cards.length > 0 && state.cards.every(
     (card) => card.countStatus === "complete" && card.availableCount === 0,
@@ -406,22 +413,15 @@ export function getOfferPostEnrollmentNextStep(state: OfferOperationState) {
 
 export function getOfferSaveStatusText(
   state: OfferOperationState,
-  now = Date.now(),
 ) {
   switch (state.saveStatus) {
     case "saving":
+      return "saving to nextcard";
     case "queued_for_retry":
-      return "finishing save to nextcard";
+      return "activated at issuer; save to nextcard pending, retry saving";
     case "saved":
       return "saved to nextcard";
     case "failed": {
-      const updatedAt = new Date(state.updatedAt).getTime();
-      if (
-        Number.isFinite(updatedAt)
-        && now - updatedAt < OFFER_SAVE_FAILURE_GRACE_MS
-      ) {
-        return "finishing save to nextcard";
-      }
       return state.saveError ?? "couldn’t save to nextcard";
     }
     case "not_started":

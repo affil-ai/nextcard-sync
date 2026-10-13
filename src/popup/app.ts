@@ -1,3 +1,6 @@
+import { OfferReview } from "./offer-review";
+const offerReview = new OfferReview();
+import { WELCOME_PAGE_PATH } from "../lib/welcome";
 import type {
   ExtensionRewardsSummary,
   ExtensionProfile,
@@ -475,6 +478,9 @@ function renderOfferCardChoices(options: {
     container.className = "offer-card-choices";
     options.selectWrap.insertAdjacentElement("beforebegin", container);
   }
+  const fingerprint = JSON.stringify([options.cards, options.counts]);
+  if (container.dataset.cardsFingerprint === fingerprint) return;
+  container.dataset.cardsFingerprint = fingerprint;
   container.innerHTML = "";
   options.selectWrap.style.display = "none";
 
@@ -488,11 +494,11 @@ function renderOfferCardChoices(options: {
       candidate.setAttribute("aria-pressed", String(candidate === button));
     });
     const count = options.counts[cardId];
-    if (options.runButton) {
+    if (options.runButton && !offersFirstUiEnabled) {
       options.runButton.textContent =
         typeof count === "number" && count > 0
           ? `Add ${count} to this card`
-          : "Add offers to this card";
+          : "Choose offers to activate";
       options.runButton.disabled = count === 0;
     }
   };
@@ -686,13 +692,13 @@ async function startTrackedEnrollment(
   issuer: OfferIssuer,
   selectedCardKeys: string[],
   total: number | null,
-  options: { addMatchingOffersAcrossCards?: boolean } = {},
+  options: { addMatchingOffersAcrossCards?: boolean; selectedOfferIdsByCard?: Record<string, string[]>; runId?: string } = {},
 ): Promise<"started" | "limit_reached" | "writes_disabled" | "failed"> {
   if (!householdOfferWritesEnabled) {
     renderOfferWritesUnavailable();
     return "writes_disabled";
   }
-  const runId = activeOfferRunIds.get(issuer);
+  const runId = options.runId ?? activeOfferRunIds.get(issuer);
   if (!runId) return "failed";
   const response = await chrome.runtime.sendMessage({
     type: "START_OFFER_ENROLLMENT",
@@ -700,6 +706,7 @@ async function startTrackedEnrollment(
     selectedCardKeys,
     total,
     addMatchingOffersAcrossCards: options.addMatchingOffersAcrossCards === true,
+    selectedOfferIdsByCard: options.selectedOfferIdsByCard,
   }).catch(() => null) as {
     ok?: boolean;
     error?: string;
@@ -935,6 +942,15 @@ function confirmOfferEnrollment(button: HTMLButtonElement) {
   const count = button.dataset.enrollmentCount ?? null;
   const cardCount = button.dataset.cardCount ?? null;
   const limitCapped = button.dataset.limitCapped === "true";
+  const issuer: OfferIssuer = button.id.startsWith("chase") ? "chase" : button.id.startsWith("amex") ? "amex" : "citi";
+  const state = latestOfferSnapshot.active;
+  const selectedCards = state?.issuer === issuer ? state.cards.filter((card) => config.bulk
+    ? (card.availableCount ?? 0) > 0 : card.key === select?.value) : [];
+  const ids = Object.fromEntries(selectedCards.map((card) => [card.key, config.bulk
+    ? card.offers?.map((offer) => offer.id) ?? [] : offerReview.selected(state?.runId ?? "", card)]));
+  const frozenRequest = state && state.issuer === issuer ? {
+    issuer, runId: state.runId, keys: selectedCards.map((card) => card.key), ids, total: Number(count),
+  } : null;
   const amexShared =
     button.id === "amexOffersRunBtn"
     && (document.getElementById("amexOffersSharedCheckbox") as HTMLInputElement | null)?.checked;
@@ -963,12 +979,31 @@ function confirmOfferEnrollment(button: HTMLButtonElement) {
       ? limitCapped ? `Add up to ${count} offers` : `Add all ${count} offers`
       : `Add ${count} offers`
     : "Add offers";
+  if (offersFirstUiEnabled) {
+    body.textContent = config.bulk
+      ? `Activate up to ${count} offers across: ${selectedCards.map(formatCardDisplayName).join(", ")}. This includes every available offer on those cards. Issuer activations cannot be undone.`
+      : `Activate only the ${count} selected offers on ${selectedLabel}. Other offers and cards will stay untouched. Issuer activations cannot be undone.`;
+    title.textContent = config.bulk ? `Activate across ${selectedCards.length} cards?` : `Activate ${count} selected offers?`;
+    continueButton.textContent = `Activate ${count} offers`;
+  }
   offerConfirmationTrigger = button;
   modal.classList.add("visible");
   continueButton.focus();
 
   continueButton.onclick = () => {
     closeOfferConfirmation({ restoreFocus: false });
+    if (offersFirstUiEnabled) {
+      if (!frozenRequest) return;
+      void startTrackedEnrollment(frozenRequest.issuer, frozenRequest.keys, frozenRequest.total, {
+        runId: frozenRequest.runId, selectedOfferIdsByCard: frozenRequest.ids,
+      }).then((result) => {
+        if (result === "failed") renderOfferActivityMessage(
+          "Check again before adding offers", "The issuer session or selected card is no longer available.",
+        );
+        if (result !== "writes_disabled") void refreshOfferOperationUi();
+      });
+      return;
+    }
     button.dataset.confirmed = "true";
     button.click();
     delete button.dataset.confirmed;
@@ -981,51 +1016,6 @@ document.addEventListener("click", (event) => {
   ) as HTMLButtonElement | null;
   if (!button) return;
   if (button.dataset.confirmed === "true") {
-    if (offersFirstUiEnabled) {
-      event.preventDefault();
-      event.stopImmediatePropagation();
-      const issuer = button.id.startsWith("chase")
-        ? "chase"
-        : button.id.startsWith("amex")
-          ? "amex"
-          : "citi";
-      const select = document.getElementById(`${issuer}OffersCardSelect`) as HTMLSelectElement | null;
-      const state = latestOfferSnapshot.active?.issuer === issuer
-        ? latestOfferSnapshot.active
-        : latestOfferSnapshot.history[issuer];
-      const selectedKey = select?.value ?? "";
-      const selected = state?.cards.find((card) => card.key === selectedKey);
-      const bulk = button.id.endsWith("RunAllBtn");
-      const selectedCardKeys = bulk
-        ? state?.cards
-            .filter((card) => (card.availableCount ?? 0) > 0)
-            .map((card) => card.key) ?? []
-        : selectedKey ? [selectedKey] : [];
-      const enrollmentCount = Number(button.dataset.enrollmentCount);
-      void startTrackedEnrollment(
-        issuer,
-        selectedCardKeys,
-        Number.isFinite(enrollmentCount)
-          ? enrollmentCount
-          : selected?.availableCount ?? null,
-        {
-          addMatchingOffersAcrossCards:
-            issuer === "amex"
-            && (document.getElementById("amexOffersSharedCheckbox") as HTMLInputElement | null)
-              ?.checked === true,
-        },
-      ).then((result) => {
-        if (result === "failed") {
-          renderOfferActivityMessage(
-            "Check again before adding offers",
-            "The issuer session or selected card is no longer available.",
-          );
-        }
-        if (result !== "writes_disabled") {
-          void refreshOfferOperationUi();
-        }
-      });
-    }
     return;
   }
   event.preventDefault();
@@ -2892,7 +2882,8 @@ function renderBackgroundOwnedIssuerState(snapshot: OfferOperationSnapshot) {
       state.phase === "checking"
       && state.added > 0
       && state.saveStatus === "saved";
-    const targetPanel =
+    const reviewFinished = state.phase === "ready_to_add" && snapshot.active?.runId !== state.runId;
+    const targetPanel = reviewFinished ? "Done" :
       state.phase === "ready_to_add" || refreshingAfterCompletion
         ? "Ready"
         : state.phase === "adding"
@@ -2952,7 +2943,10 @@ function renderBackgroundOwnedIssuerState(snapshot: OfferOperationSnapshot) {
       const refreshButton = document.getElementById(
         `${issuer}OffersRefreshBtn`,
       ) as HTMLButtonElement | null;
-      const fresh = isOfferResultFresh(state);
+      const fresh = isOfferResultFresh(state) && latestOfferSnapshot.active?.runId === state.runId;
+      const reviewHost = document.getElementById(`${issuer}OffersReview`);
+      if (reviewHost && selected) offerReview.render(reviewHost, state.runId, selected, updateSelection);
+      const chosenCount = selected ? offerReview.selected(state.runId, selected).length : 0;
       const availableCount = selected?.availableCount ?? null;
       const isFree = offerActivationUsage?.accountLevel !== "pro";
       const remaining = isFree ? offerActivationUsage?.remaining ?? 0 : null;
@@ -2960,11 +2954,11 @@ function renderBackgroundOwnedIssuerState(snapshot: OfferOperationSnapshot) {
         availableCount == null
           ? null
           : remaining == null
-            ? availableCount
-            : Math.min(availableCount, remaining);
+            ? chosenCount
+            : Math.min(chosenCount, remaining);
       const bulkCards = state.cards.filter((card) => (card.availableCount ?? 0) > 0);
       const bulkCountsComplete = state.cards.every(
-        (card) => card.availableCount != null,
+        (card) => card.availableCount != null && card.offers != null,
       );
       const bulkAvailableCount = bulkCountsComplete
         ? bulkCards.reduce((sum, card) => sum + (card.availableCount ?? 0), 0)
@@ -2991,7 +2985,7 @@ function renderBackgroundOwnedIssuerState(snapshot: OfferOperationSnapshot) {
         ) as HTMLInputElement | null;
         const sharedScope = document.getElementById("amexOffersSharedScope");
         const sharedCount = selected?.sharedOfferCount ?? 0;
-        const canTryMultipleCards = state.cards.length > 1 && sharedCount > 0;
+        const canTryMultipleCards = selected?.offers == null && state.cards.length > 1 && sharedCount > 0;
         if (sharedOption) sharedOption.style.display = canTryMultipleCards ? "" : "none";
         if (sharedScope) {
           sharedScope.style.display = canTryMultipleCards ? "" : "none";
@@ -3004,7 +2998,7 @@ function renderBackgroundOwnedIssuerState(snapshot: OfferOperationSnapshot) {
       if (countElement) {
         countElement.textContent =
           refreshingAfterCompletion
-            ? "Refreshing availability across your Amex cards…"
+            ? `Refreshing availability across your ${offerIssuerNames[issuer]} cards…`
             : availableCount == null
             ? "Offer count unavailable for this card. Check again."
             : availableCount > 0
@@ -3046,10 +3040,10 @@ function renderBackgroundOwnedIssuerState(snapshot: OfferOperationSnapshot) {
       if (runButton) {
         runButton.textContent =
           enrollmentCount != null && enrollmentCount > 0
-            ? `Add ${enrollmentCount} to this card`
+            ? `Activate ${enrollmentCount} on ${selected ? formatCardDisplayName(selected) : "this card"}`
             : availableCount != null && availableCount > 0 && remaining === 0
               ? "Monthly limit reached"
-            : "Add offers to this card";
+            : "Choose offers to activate";
         if (enrollmentCount != null) {
           runButton.dataset.enrollmentCount = String(enrollmentCount);
         } else {
@@ -3057,6 +3051,7 @@ function renderBackgroundOwnedIssuerState(snapshot: OfferOperationSnapshot) {
         }
         runButton.disabled =
           !fresh
+          || selected?.offers == null
           || availableCount == null
           || availableCount === 0
           || enrollmentCount === 0;
@@ -3066,8 +3061,8 @@ function renderBackgroundOwnedIssuerState(snapshot: OfferOperationSnapshot) {
         runAllButton.textContent =
           bulkEnrollmentCount != null && bulkEnrollmentCount > 0
             ? bulkAvailableCount != null && bulkEnrollmentCount < bulkAvailableCount
-              ? `Add up to ${bulkEnrollmentCount} offers`
-              : `Add all ${bulkEnrollmentCount} offers`
+              ? `Activate up to ${bulkEnrollmentCount} across all cards`
+              : `Activate all ${bulkEnrollmentCount} across ${bulkCards.length} cards`
             : bulkAvailableCount != null && bulkAvailableCount > 0 && remaining === 0
               ? "Monthly limit reached"
               : "Add all offers";
@@ -3093,7 +3088,11 @@ function renderBackgroundOwnedIssuerState(snapshot: OfferOperationSnapshot) {
     updateSelection();
 
     const errorElement = document.getElementById(`${issuer}OffersErrorMsg`);
-    if (errorElement && state.error) errorElement.textContent = state.error;
+    if (errorElement && state.error) {
+      const outcome = state.added > 0 || state.failed > 0 || (state.unverified ?? 0) > 0
+        ? `${state.added} activated · ${state.failed} failed · ${state.unverified ?? 0} unverified. ${state.added > 0 ? getOfferSaveStatusText(state) + ". " : ""}` : "";
+      errorElement.textContent = `${outcome}${state.error}`;
+    }
     const progress = document.getElementById(`${issuer}OffersProgressDetail`);
     if (progress && state.phase === "adding") {
       progress.textContent = state.total == null
@@ -3109,12 +3108,12 @@ function renderBackgroundOwnedIssuerState(snapshot: OfferOperationSnapshot) {
       if (!recentResult.hidden) {
         const saveOutcome = getOfferSaveStatusText(state);
         const nextStep = getOfferPostEnrollmentNextStep(state);
-        recentResult.textContent = `${state.added} ${state.added === 1 ? "offer" : "offers"} added${saveOutcome ? ` · ${saveOutcome}` : ""}. ${nextStep}`;
+        recentResult.textContent = `${state.added} ${state.added === 1 ? "offer" : "offers"} activated${state.failed > 0 ? ` · ${state.failed} failed` : ""}${saveOutcome ? ` · ${saveOutcome}` : ""}. ${nextStep}`;
       }
     }
     const summary = document.getElementById(`${issuer}OffersSummary`);
-    if (summary && (state.phase === "completed" || state.phase === "cancelled")) {
-      const outcome = state.phase === "cancelled"
+    if (summary && (reviewFinished || state.phase === "completed" || state.phase === "cancelled")) {
+      const outcome = reviewFinished ? (state.added > 0 ? `${state.added} activated${state.failed > 0 ? ` · ${state.failed} failed` : ""}` : "Offers checked. No offers activated.") : state.phase === "cancelled"
         ? `Stopped · ${state.added} added, ${state.remaining ?? 0} not attempted`
         : state.failed > 0
           ? `${state.added} added · ${state.failed} couldn’t be added`
@@ -3123,12 +3122,28 @@ function renderBackgroundOwnedIssuerState(snapshot: OfferOperationSnapshot) {
         completionContinuing && state.saveStatus === "saved"
           ? "refreshing your cards…"
           : getOfferSaveStatusText(state);
-      const saveOutcome = saveStatusText ? ` · ${saveStatusText}` : "";
-      summary.textContent = `${outcome}${saveOutcome}`;
+      const saveOutcome = state.added > 0 && saveStatusText ? ` · ${saveStatusText}` : "";
+      summary.textContent = `${outcome}${(state.unverified ?? 0) > 0 ? ` · ${state.unverified} unverified, check offers before retrying` : ""}${state.saveStatus === "failed" ? " · Check your nextcard sign-in and household profile, then check offers to sync them again. Do not repeat issuer activation." : ""}${state.error ? ` · ${state.error}` : ""}${saveOutcome}`;
     }
+    let retrySave = document.getElementById(`${issuer}OffersRetrySave`);
+    if (state.saveStatus === "queued_for_retry") {
+      if (!retrySave) {
+        const button = document.createElement("button"); button.type = "button";
+        button.id = `${issuer}OffersRetrySave`; button.className = "tool-link-btn";
+        button.textContent = "Retry saving to nextcard";
+        button.onclick = async () => {
+          button.disabled = true;
+          await chrome.runtime.sendMessage({ type: "RETRY_OFFER_SAVES" }).catch(() => null);
+          button.disabled = false; await refreshOfferOperationUi();
+        };
+        retrySave = button;
+      }
+      const outcomeElement = targetPanel === "Error" ? errorElement : summary;
+      outcomeElement?.insertAdjacentElement("afterend", retrySave);
+    } else retrySave?.remove();
     const donePanel = document.getElementById(`${issuer}OffersDone`);
     const doneActions = donePanel?.querySelector<HTMLElement>(".offer-done-actions");
-    if (doneActions) doneActions.hidden = completionContinuing;
+    if (doneActions) doneActions.hidden = false;
     if (donePanel) {
       if (completionContinuing) {
         donePanel.setAttribute("aria-busy", "true");
@@ -3355,6 +3370,7 @@ async function refreshOfferOperationUi() {
         ? active.cancelled
           ? "We’ll stop safely after the current offer finishes."
           : "Already-submitted offers can’t be undone. Stop to switch providers."
+        : active.phase === "ready_to_add" ? "Choose offers, view your saved offers, or check another issuer."
         : "Cancel this check to choose another provider.";
   } else if (activity?.dataset.operationActive === "true") {
     activity.hidden = true;
@@ -3363,7 +3379,7 @@ async function refreshOfferOperationUi() {
   if (cancelButton) {
     cancelButton.hidden = !active || active.cancelled;
     cancelButton.disabled = false;
-    cancelButton.textContent = active?.phase === "adding" ? "Stop" : "Cancel";
+    cancelButton.textContent = active?.phase === "ready_to_add" ? "Done" : active?.phase === "adding" ? "Stop" : "Cancel";
   }
 
   const setup = getOffersSetupState(snapshot, firstSyncCompleted, guidedOfferIssuer);
@@ -3376,17 +3392,17 @@ async function refreshOfferOperationUi() {
 
   renderOffersSetupHierarchy(snapshot);
   document.querySelectorAll<HTMLButtonElement>("[data-offer-issuer]").forEach((button) => {
-    button.disabled = Boolean(active);
+    button.disabled = Boolean(active && active.phase !== "ready_to_add");
   });
   for (const issuer of ["chase", "amex", "citi", "capitalone"] as OfferIssuer[]) {
     const card = document.getElementById(`${issuer}OffersCard`);
-    const shouldLockCard = Boolean(active && active.issuer !== issuer);
+    const shouldLockCard = Boolean(active && active.phase !== "ready_to_add" && active.issuer !== issuer);
     card?.classList.toggle("offer-operation-locked", shouldLockCard);
     const action = document.getElementById(`${issuer}OffersDiscoverBtn`) as HTMLButtonElement | null;
     if (action) {
-      action.disabled = Boolean(active);
+      action.disabled = Boolean(active && active.phase !== "ready_to_add");
       action.textContent =
-        active?.issuer === issuer
+        active?.phase === "ready_to_add" ? "Check" : active?.issuer === issuer
           ? "Working"
           : active
             ? "Busy"
@@ -3398,6 +3414,7 @@ async function refreshOfferOperationUi() {
 function cancelActiveOfferOperation() {
   const active = latestOfferSnapshot.active;
   if (!active) return;
+  if (active.phase === "ready_to_add") { void finishOfferReview(active.issuer); return; }
   const cancelButton = document.getElementById("offerActivityCancel") as HTMLButtonElement | null;
   if (cancelButton) {
     cancelButton.disabled = true;
@@ -3650,6 +3667,12 @@ const onboardingController = createOnboardingController({
     }
   },
 });
+
+for (const id of ["installationSetupGuideBtn", "authSetupGuideBtn"]) {
+  document.getElementById(id)?.addEventListener("click", () => {
+    void chrome.tabs.create({ url: chrome.runtime.getURL(WELCOME_PAGE_PATH), active: true });
+  });
+}
 
 const replayGuideButton = document.getElementById("onboardingReplayBtn");
 const replayGuideClose = document.getElementById("onboardingReplayClose");
@@ -4261,3 +4284,22 @@ async function initializePopup() {
 }
 
 void initializePopup();
+
+async function finishOfferReview(issuer: string, viewOffers = false) {
+  const active = latestOfferSnapshot.active;
+  if (active?.issuer === issuer && active.phase === "ready_to_add") {
+    const result = await chrome.runtime.sendMessage({ type: "FINISH_OFFER_REVIEW", runId: active.runId });
+    if (!result?.ok) return;
+    activeOfferRunIds.delete(active.issuer);
+  }
+  if (viewOffers) await chrome.tabs.create({ url: "https://www.nextcard.com/dashboard/offers" });
+  await refreshOfferOperationUi();
+}
+
+document.addEventListener("click", (event) => {
+  if (!(event.target instanceof Element)) return;
+  const done = event.target.closest("[data-finish-offers], [data-view-offers]");
+  if (!(done instanceof HTMLElement)) return;
+  const issuer = done.dataset.finishOffers ?? done.dataset.viewOffers;
+  if (issuer) void finishOfferReview(issuer, Boolean(done.dataset.viewOffers));
+});

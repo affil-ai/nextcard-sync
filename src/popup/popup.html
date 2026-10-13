@@ -33,6 +33,7 @@
         <button class="auth-sign-in-btn" id="authSignInBtn">
           Sign in to nextcard
         </button>
+        <button class="user-replay-guide" id="authSetupGuideBtn" type="button">Setup guide</button>
       </div>
     </div>
 
@@ -165,6 +166,7 @@
           <div class="user-email" id="userEmail"></div>
         </div>
         <div class="user-actions">
+          <button class="user-replay-guide" id="installationSetupGuideBtn" type="button">Setup guide</button>
           <button class="user-replay-guide" id="onboardingReplayBtn" type="button">Replay guide</button>
           <button class="user-sign-out" id="userSignOutBtn">Sign out</button>
         </div>
@@ -296,9 +298,14 @@
             <div class="offer-recent-result" id="chaseOffersRecentResult" hidden></div>
             <div id="chaseOffersCardSelectWrap" style="display:none;"><select id="chaseOffersCardSelect" class="tool-select"></select></div>
             <div style="display:flex;justify-content:space-between;align-items:center;"><div class="tool-status" style="font-weight:600;color:#342019;" id="chaseOffersOfferCount"></div><button class="tool-link-btn" id="chaseOffersRefreshBtn">Refresh</button></div>
+            <div class="offer-review" id="chaseOffersReview"></div>
             <div class="offer-enrollment-actions">
-              <button class="sync-btn" id="chaseOffersRunAllBtn" type="button" hidden>Add all offers</button>
-              <button class="sync-btn sync-btn--secondary" id="chaseOffersRunBtn" type="button">Add offers to this card</button>
+              <button class="sync-btn" id="chaseOffersRunBtn" type="button">Activate selected offers</button>
+              <button class="sync-btn sync-btn--secondary" id="chaseOffersRunAllBtn" type="button" hidden>Activate across all cards</button>
+            </div>
+            <div class="offer-done-actions">
+              <button class="tool-link-btn" type="button" data-finish-offers="chase">Done</button>
+              <button class="tool-link-btn" type="button" data-view-offers="chase">View offers →</button>
             </div>
           </div>
           <div id="chaseOffersRunning" class="tool-expand" style="display:none;">
@@ -340,7 +347,12 @@
               <span>Try matching offers on other eligible Amex cards</span>
             </label>
             <div id="amexOffersSharedScope" class="tool-check-note" style="display:none;"></div>
+            <div class="offer-review" id="amexOffersReview"></div>
             <button class="sync-btn" id="amexOffersRunBtn" style="margin:0;">Add offers</button>
+            <div class="offer-done-actions">
+              <button class="tool-link-btn" type="button" data-finish-offers="amex">Done</button>
+              <button class="tool-link-btn" type="button" data-view-offers="amex">View offers →</button>
+            </div>
           </div>
           <div id="amexOffersRunning" class="tool-expand" style="display:none;">
             <div class="tool-status" style="font-weight:600;color:#342019;" id="amexOffersProgressText">Adding offers...</div>
@@ -376,9 +388,14 @@
             <div class="offer-recent-result" id="citiOffersRecentResult" hidden></div>
             <div id="citiOffersCardSelectWrap" style="display:none;"><select id="citiOffersCardSelect" class="tool-select"></select></div>
             <div style="display:flex;justify-content:space-between;align-items:center;"><div class="tool-status" style="font-weight:600;color:#342019;" id="citiOffersOfferCount"></div><button class="tool-link-btn" id="citiOffersRefreshBtn">Refresh</button></div>
+            <div class="offer-review" id="citiOffersReview"></div>
             <div class="offer-enrollment-actions">
-              <button class="sync-btn" id="citiOffersRunAllBtn" type="button" hidden>Add all offers</button>
-              <button class="sync-btn sync-btn--secondary" id="citiOffersRunBtn" type="button">Add offers to this card</button>
+              <button class="sync-btn" id="citiOffersRunBtn" type="button">Activate selected offers</button>
+              <button class="sync-btn sync-btn--secondary" id="citiOffersRunAllBtn" type="button" hidden>Activate across all cards</button>
+            </div>
+            <div class="offer-done-actions">
+              <button class="tool-link-btn" type="button" data-finish-offers="citi">Done</button>
+              <button class="tool-link-btn" type="button" data-view-offers="citi">View offers →</button>
             </div>
           </div>
           <div id="citiOffersRunning" class="tool-expand" style="display:none;">
@@ -497,6 +514,15 @@
       </div>
       <div class="version-footer" id="versionFooter"></div>
       <div class="changelog" id="changelog">
+        <h4>v0.8.5</h4>
+        <ul>
+          <li>New install welcome page with clear setup steps, also available from Setup guide</li>
+          <li>Choose which Chase, Amex, or Citi offers to activate on your selected card</li>
+          <li>Separate confirmation before activating offers across all cards</li>
+          <li>Done and View offers exits, clearer results, and retries for pending saves</li>
+          <li>Sync available Chase and Amex offer details and terms &amp; conditions</li>
+          <li>Clearer Chase sign-in and offer-check errors</li>
+        </ul>
         <h4>v0.8.4</h4>
         <ul>
           <li>Updated Bilt syncing for its redesigned wallet, points menu, and status tracker</li>

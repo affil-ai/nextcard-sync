@@ -122,6 +122,7 @@ export function createOfferOperationStore() {
       .then(async () => {
         try {
           await reconcile();
+          if (snapshot.active?.phase === "ready_to_add") await finishReview(snapshot.active.runId);
           const active = snapshot.active;
           if (active && isOfferOperationActive(active.phase)) {
             resolveResult({ ok: false, busy: active.issuer, state: active });
@@ -257,6 +258,7 @@ export function createOfferOperationStore() {
       total,
       added: 0,
       failed: 0,
+      unverified: 0,
       remaining: total,
       cancelled: false,
       error: null,
@@ -275,8 +277,9 @@ export function createOfferOperationStore() {
     if (
       !completed
       || completed.phase !== "completed"
-      || completed.saveStatus === "not_started"
-      || completed.saveStatus === "saving"
+      || completed.added === 0
+      || completed.saveStatus !== "saved"
+      || (completed.unverified ?? 0) > 0
       || completed.cards.length === 0
       || completed.selectedCardKeys.length === 0
     ) {
@@ -284,24 +287,10 @@ export function createOfferOperationStore() {
     }
     if (snapshot.active && snapshot.active.runId !== runId) return null;
 
-    const selectedKeys = new Set(completed.selectedCardKeys);
-    const refreshAllCounts =
-      completed.issuer === "amex" || completed.selectedCardKeys.length > 1;
-    const cards = completed.cards.map((card) => {
-      if (refreshAllCounts) {
-        return {
-          ...card,
-          availableCount: null,
-          countStatus: "unknown" as const,
-          sharedOfferCount: null,
-        };
-      }
-      if (!selectedKeys.has(card.key) || card.availableCount == null) return card;
-      return {
-        ...card,
-        availableCount: Math.max(0, card.availableCount - completed.added),
-      };
-    });
+    // Re-read availability after any activation. Old offer IDs must never stay actionable.
+    const cards = completed.cards.map((card): OfferOperationCard => ({
+      ...card, availableCount: null, countStatus: "unknown", sharedOfferCount: null, offers: null,
+    }));
     const now = new Date().toISOString();
     const next: OfferOperationState = {
       ...createOfferOperation(
@@ -310,7 +299,7 @@ export function createOfferOperationStore() {
         now,
         completed.scope,
       ),
-      phase: refreshAllCounts ? "checking" : "ready_to_add",
+      phase: "checking",
       ownedTabId: completed.ownedTabId,
       checkedAt: completed.checkedAt ?? now,
       cards,
@@ -346,6 +335,14 @@ export function createOfferOperationStore() {
     return state;
   }
 
+  async function finishReview(runId: string) {
+    await hydrate();
+    if (snapshot.active?.runId !== runId || snapshot.active.phase !== "ready_to_add") return false;
+    snapshot = { ...snapshot, active: null };
+    await persist();
+    return true;
+  }
+
   async function clearAccountState() {
     await hydrate();
     const ownedTabId = snapshot.active?.ownedTabId ?? null;
@@ -370,6 +367,7 @@ export function createOfferOperationStore() {
     continueAfterEnrollmentCompletion,
     markReady,
     cancel,
+    finishReview,
     clearAccountState,
     async getSnapshot() {
       await reconcile();

@@ -1,3 +1,4 @@
+import { registerInstallWelcome } from "../lib/welcome";
 import type { NextCardAuth, ProviderId, PushToNextCardResult } from "../lib/types";
 import {
   clearAuth,
@@ -1178,6 +1179,8 @@ async function canCurrentMemberWriteOffers() {
     || context.capabilities.memberOfferWrites;
 }
 
+registerInstallWelcome();
+
 chrome.action.onClicked.addListener((tab) => {
   if (tab.windowId) {
     chrome.sidePanel.open({ windowId: tab.windowId });
@@ -1220,6 +1223,7 @@ chrome.runtime.onMessage.addListener(
     canWriteOffers: canCurrentMemberWriteOffers,
     offerOperations,
     offerCoordinator,
+    retryOfferSaves: retryQueuedOfferSyncs,
     startLegacyOfferOperation: async (issuer) => {
       const scope = await getCurrentHouseholdOperationScope();
       if (scope || await isLegacyHouseholdOperationMode()) {

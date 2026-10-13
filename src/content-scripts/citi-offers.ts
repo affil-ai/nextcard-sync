@@ -1,3 +1,4 @@
+import { readOfferSelection, selectEligibleOffers } from "../lib/offer-selection";
 /**
  * Citi Offers — discover cards and enroll all eligible merchant offers.
  *
@@ -153,6 +154,7 @@ async function runEnrollment(
   selectedAccountIds: string[],
   cards: CitiCard[],
   maxOffers: number | null,
+  selection: Record<string, string[]> | null,
 ) {
   cancelled = false;
   useFallbackUrl = false;
@@ -164,7 +166,7 @@ async function runEnrollment(
     const card = cards.find((candidate) => candidate.accountId === accountId);
     if (!card || offersRemaining === 0) continue;
     const offers = await listOffers(accountId);
-    const availableOffers = offers.filter((offer) => !offer.enrolled);
+    const availableOffers = selectEligibleOffers(offers.filter((offer) => !offer.enrolled), selection?.[accountId]);
     const selectedOffers = offersRemaining == null
       ? availableOffers
       : availableOffers.slice(0, offersRemaining);
@@ -292,6 +294,10 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         type: "CITI_OFFERS_READY",
         cards: cards.map((c) => ({ id: c.accountId, name: c.name, lastDigits: c.lastDigits })),
         offerCounts,
+        offersByCard: Object.fromEntries(cards.map((card, index) => [card.accountId,
+          probes[index].filter((offer) => !offer.enrolled).map((offer) => ({
+            id: offer.offerId, name: offer.name, value: offer.offerTitle, details: null, terms: null,
+          }))])),
         error: undefined,
       });
     })();
@@ -339,7 +345,11 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       typeof message.maxOffers === "number"
         ? Math.max(0, Math.floor(message.maxOffers))
         : null,
-    );
+      readOfferSelection(message.selectedOfferIdsByCard),
+    ).catch((error: unknown) => chrome.runtime.sendMessage({
+      type: "CITI_OFFERS_COMPLETE", runId: activeOfferRunId, added: 0, failed: 0,
+      error: error instanceof Error ? error.message : "Could not check selected offers. Check again.", enrolledByCard: [],
+    }).catch(() => {}));
     sendResponse({ ok: true });
     return true;
   }

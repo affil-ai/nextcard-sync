@@ -1,3 +1,4 @@
+import { readOfferSelection, selectEligibleOffers } from "../lib/offer-selection";
 import { readOfferContent } from "../lib/offer-content";
 
 /**
@@ -53,7 +54,8 @@ function getEnterprisePartyId(): string | null {
   const cookies = document.cookie;
   const pc = cookies.split(";").find((c) => c.trim().startsWith("PC_1_0="));
   if (!pc) return null;
-  const decoded = decodeURIComponent(pc.split("=").slice(1).join("="));
+  let decoded: string;
+  try { decoded = decodeURIComponent(pc.split("=").slice(1).join("=")); } catch { return null; }
   const match = decoded.match(/ECI=([^|]+)/);
   return match ? match[1] : null;
 }
@@ -68,6 +70,22 @@ function isChaseActivatedOffer(offer: ChaseOffer): boolean {
 
 function isChaseActivatableOffer(offer: ChaseOffer): boolean {
   return !isChaseActivatedOffer(offer);
+}
+
+class ChaseReadError extends Error {
+  constructor(readonly code: "session_expired" | "request_failed" | "invalid_response") {
+    super(code === "session_expired" ? "Sign in to Chase again, then check offers."
+      : code === "invalid_response" ? "Chase returned an unexpected response. Check again."
+      : "Chase could not return your offers. Check again.");
+  }
+}
+
+async function readChaseResponse(response: Response): Promise<Record<string, unknown>> {
+  if (response.status === 401 || response.status === 403) throw new ChaseReadError("session_expired");
+  if (!response.ok) throw new ChaseReadError("request_failed");
+  const data: unknown = await response.json().catch(() => { throw new ChaseReadError("invalid_response"); });
+  if (!data || typeof data !== "object" || Array.isArray(data)) throw new ChaseReadError("invalid_response");
+  return Object.fromEntries(Object.entries(data));
 }
 
 // ── Card Discovery ─────────────────────────────────────────
@@ -87,8 +105,8 @@ async function discoverCards(): Promise<ChaseCard[]> {
       body: "refresh=false",
     });
 
-    if (!resp.ok) return [];
-    const data = await resp.json();
+    const data = await readChaseResponse(resp);
+    if (!Array.isArray(data.accounts)) throw new ChaseReadError("invalid_response");
 
     const accounts = (data.accounts ?? []) as Record<string, unknown>[];
     return accounts
@@ -103,8 +121,7 @@ async function discoverCards(): Promise<ChaseCard[]> {
         lastDigits: (a.mask ?? null) as string | null,
       }));
   } catch (e) {
-    console.error("[NextCard Chase Offers] discoverCards error:", e);
-    return [];
+    throw e instanceof ChaseReadError ? e : new ChaseReadError("request_failed");
   }
 }
 
@@ -114,8 +131,7 @@ async function listOffers(cardIds: string[], primaryCardId: string): Promise<Cha
   const host = getHostname();
   const epi = getEnterprisePartyId();
   if (!epi) {
-    console.error("[NextCard Chase Offers] No enterprise party ID found");
-    return [];
+    throw new ChaseReadError("session_expired");
   }
 
   const url = `https://${host}.chase.com/svc/wr/profile/secure/gateway/ccb/marketing/offer-management/digital-customer-targeted-offers/v3/customer-offers?offer-count=&offerStatusNameList=NEW,ACTIVATED,SERVED&source-application-system-name=CHASE_WEB&source-request-component-name=OFFERS_HUB_CAROUSELS&is-include-summary=true`;
@@ -140,8 +156,8 @@ async function listOffers(cardIds: string[], primaryCardId: string): Promise<Cha
       credentials: "include",
     });
 
-    if (!resp.ok) return [];
-    const data = await resp.json();
+    const data = await readChaseResponse(resp);
+    if (!Array.isArray(data.customerOffers)) throw new ChaseReadError("invalid_response");
 
     const customerOffers = data.customerOffers as Record<string, unknown>[] | undefined;
     if (!customerOffers?.length) return [];
@@ -150,6 +166,7 @@ async function listOffers(cardIds: string[], primaryCardId: string): Promise<Cha
     const offerSessionTokenIdentifier = typeof customerOffer.customerOfferSessionTokenIdentifier === "string"
       ? customerOffer.customerOfferSessionTokenIdentifier
       : "";
+    if (!Array.isArray(customerOffer.offers)) throw new ChaseReadError("invalid_response");
     const offers = (customerOffer.offers ?? []) as Record<string, unknown>[];
 
     return offers
@@ -192,8 +209,7 @@ async function listOffers(cardIds: string[], primaryCardId: string): Promise<Cha
         };
       });
   } catch (e) {
-    console.error("[NextCard Chase Offers] listOffers error:", e);
-    return [];
+    throw e instanceof ChaseReadError ? e : new ChaseReadError("request_failed");
   }
 }
 
@@ -272,6 +288,7 @@ async function runEnrollment(
   allCardIds: string[],
   cards: ChaseCard[],
   maxOffers: number | null,
+  selection: Record<string, string[]> | null,
 ) {
   cancelled = false;
 
@@ -280,9 +297,10 @@ async function runEnrollment(
   const offersByCard: Array<{ card: ChaseCard; offers: ChaseOffer[] }> = [];
   for (const cardId of selectedCardIds) {
     const card = cards.find((candidate) => candidate.id === cardId);
+    if (cancelled) break;
     if (!card || offersRemaining === 0) continue;
     const observedOffers = await listOffers(allCardIds, cardId);
-    const availableOffers = observedOffers.filter(isChaseActivatableOffer);
+    const availableOffers = selectEligibleOffers(observedOffers.filter(isChaseActivatableOffer), selection?.[cardId]);
     const offers = offersRemaining == null
       ? availableOffers
       : availableOffers.slice(0, offersRemaining);
@@ -304,14 +322,7 @@ async function runEnrollment(
   }
 
   const epi = getEnterprisePartyId();
-  if (!epi) {
-    chrome.runtime.sendMessage({
-      type: "CHASE_OFFERS_COMPLETE",
-      runId: activeOfferRunId,
-      added: 0,
-    }).catch(() => {});
-    return;
-  }
+  if (!epi) throw new ChaseReadError("session_expired");
 
   let added = 0;
   let failed = 0;
@@ -320,27 +331,41 @@ async function runEnrollment(
     const enrolledOffers: ChaseOffer[] = [];
     for (const offer of entry.offers) {
       if (cancelled) break;
-      try {
-        if (await enrollOffer(offer, epi)) {
-          added++;
-          enrolledOffers.push(offer);
-        } else {
-          failed++;
-        }
-      } catch {
-        failed++;
-      }
+      // Verify every attempted offer, including requests whose response was lost.
+      enrolledOffers.push(offer);
+      await enrollOffer(offer, epi).catch(() => false);
       sendProgress({ added, failed, total });
     }
     enrolledByCard.push({ card: entry.card, offers: enrolledOffers });
     if (cancelled) break;
   }
 
+  // A successful enrollment HTTP response is not proof that Chase activated it.
+  let unverified = 0;
+  let verificationError: string | null = null;
+  for (const entry of enrolledByCard) {
+    const submitted = entry.offers;
+    try {
+      const observed = await listOffers(allCardIds, entry.card.id);
+      const confirmed = submitted.filter((offer) => observed.some((current) => current.offerId === offer.offerId && isChaseActivatedOffer(current)));
+      const stillEligible = submitted.filter((offer) => observed.some((current) => current.offerId === offer.offerId && isChaseActivatableOffer(current)));
+      failed += stillEligible.length;
+      unverified += submitted.length - confirmed.length - stillEligible.length;
+      entry.offers = confirmed;
+    } catch {
+      unverified += submitted.length; entry.offers = [];
+      verificationError = "Chase activation could not be verified. Check offers again before retrying activation.";
+    }
+  }
+  added = enrolledByCard.reduce((sum, entry) => sum + entry.offers.length, 0);
+
   chrome.runtime.sendMessage({
     type: "CHASE_OFFERS_COMPLETE",
     runId: activeOfferRunId,
     added,
     failed,
+    unverified,
+    verificationError,
     total,
     cancelled,
     enrolledByCard: enrolledByCard.map(({ card, offers }) => ({
@@ -426,9 +451,15 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         type: "CHASE_OFFERS_READY",
         cards: cards.map((c) => ({ id: c.id, name: c.name, lastDigits: c.lastDigits })),
         offerCounts,
+        offersByCard: Object.fromEntries(cards.map((card, index) => [card.id,
+          probes[index].filter(isChaseActivatableOffer).map((offer) => ({
+            id: offer.offerId, name: offer.name, value: offer.offerHeaderText,
+            details: offer.detailsText ?? null, terms: offer.termsText ?? null,
+          }))])),
         error: undefined,
       });
-    })();
+    })().catch((error: unknown) => sendResponse({ cards: [],
+      error: error instanceof ChaseReadError ? error.code : "request_failed" }));
     return true;
   }
 
@@ -460,7 +491,12 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       typeof message.maxOffers === "number"
         ? Math.max(0, Math.floor(message.maxOffers))
         : null,
-    );
+      readOfferSelection(message.selectedOfferIdsByCard),
+    ).catch((error: unknown) => chrome.runtime.sendMessage({
+      type: "CHASE_OFFERS_COMPLETE", runId: activeOfferRunId, added: 0, failed: 0,
+      error: error instanceof Error ? error.message : "Chase could not return your offers. Check again.",
+      enrolledByCard: [],
+    }).catch(() => {}));
     sendResponse({ ok: true });
     return true;
   }
