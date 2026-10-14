@@ -57,7 +57,10 @@ export async function bofaPortalRequest(
         data: null,
         hasLocationContext: locationContext !== undefined,
       };
-    const proximity = locationContext;
+    const proximity = locationContext ? {
+      latitude: locationContext.latitude,
+      longitude: locationContext.longitude,
+    } : undefined;
     if (!proximity && kind !== "activate")
       throw new Error("The BofA offer location changed. Check offers again.");
     let path: string;

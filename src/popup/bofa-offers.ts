@@ -4,9 +4,9 @@ import {
   type PortalOffer,
 } from "../providers/bofa-offers";
 
-const responseSchema = z.discriminatedUnion("ok",[
-  z.object({ok:z.literal(true),state:bofaPortalStateSchema.nullable()}),
-  z.object({ok:z.literal(false),error:z.string().optional()}),
+const responseSchema = z.discriminatedUnion("ok", [
+  z.object({ ok: z.literal(true), state: bofaPortalStateSchema.nullable() }),
+  z.object({ ok: z.literal(false), error: z.string().optional() }),
 ]);
 const labels: Record<PortalOffer["action"], string> = {
   ready: "Ready to use",
@@ -78,7 +78,10 @@ export function mountBofaOffers() {
   async function send(message: object) {
     const raw: unknown = await chrome.runtime.sendMessage(message);
     const response = responseSchema.safeParse(raw);
-    if (!response.success) throw new Error("BofA did not return its status. Reload nextcard sync and check again.");
+    if (!response.success)
+      throw new Error(
+        "BofA did not return its status. Reload nextcard sync and check again.",
+      );
     return response.data;
   }
   function renderOffers() {
@@ -175,7 +178,7 @@ export function mountBofaOffers() {
           `${state?.offers.filter((o) => o.action === action).length ?? 0} ${label.toLowerCase()}`,
       )
       .join(" · ");
-    status.textContent = `${actionError ? `${actionError} ` : ""}${state.error ? `${state.error} ` : ""}${state.phase === "checking" ? (state.total ? `Reading ${state.checked} of ${state.total} offers. ` : "Checking the complete BofA inventory. ") : `${state.offers.length} offers. `}${counts}. ${state.saveStatus === "queued_for_retry" ? "Some offers are waiting to save. Check again to retry." : state.saveStatus === "saved" ? "Saved to nextcard." : "Saving to nextcard."}`;
+    status.textContent = `${actionError ? `${actionError} ` : ""}${state.error ? `${state.error} ` : ""}${state.phase === "checking" ? (state.checked ? `Reading ${state.checked} of ${state.total} offers. ` : state.discovered ? `Finding offers: ${state.discovered} found. ` : "Checking the complete BofA inventory. ") : `${state.offers.length} offers. `}${counts}. ${state.saveStatus === "queued_for_retry" ? "Some offers are waiting to save. Check again to retry." : state.saveStatus === "saved" ? "Saved to nextcard." : state.phase === "failed" || state.phase === "cancelled" ? "Scan stopped." : "Saving to nextcard."}`;
     const fingerprint = JSON.stringify([
       state.runId,
       state.phase,

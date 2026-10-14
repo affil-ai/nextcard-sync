@@ -287,6 +287,7 @@ describe("BofA portal operation boundaries", () => {
         body: { apply_filter: {}, page_offset: 24, page_size: 24 },
       },
     ]);
+    expect(requests[0]?.body).toEqual({apply_filter:{},proximity_target:{latitude:1,longitude:2},sort_by:"merchant_name_asc",page_size:24,page_offset:24});
     expect(JSON.stringify(result)).not.toContain(token);
     expect(JSON.stringify(result)).not.toContain("synthetic-user");
   });

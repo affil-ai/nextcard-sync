@@ -93,6 +93,22 @@ describe("BofA redemption and discovery", () => {
     expect(offsets).toHaveLength(59);
     expect(ids.at(-1)).toBe("1408");
   });
+  it("finishes when the issuer updates its total between pages", async () => {
+    const pages: number[] = [];
+    const found = await collectBofaOfferIds(
+      async (offset) => ({
+        total: offset === 0 ? 49 : 48,
+        offers: Array.from({ length: 24 }, (_, i) => ({
+          offer_id: String(offset + i + 1),
+        })),
+      }),
+      async (count, total) => {
+        pages.push(count, total);
+      },
+    );
+    expect(found).toHaveLength(48);
+    expect(pages).toEqual([24, 49, 48, 48]);
+  });
   it("does not call a repeated or interrupted inventory complete", async () => {
     await expect(
       collectBofaOfferIds(async (offset) => ({

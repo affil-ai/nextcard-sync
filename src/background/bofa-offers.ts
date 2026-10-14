@@ -261,8 +261,13 @@ export function registerBofaOffers() {
         await chrome.storage.local.set({
           [getHouseholdScopedStorageKey(PENDING_KEY, op.scope)]: remaining,
         });
-      const ids = await collectBofaOfferIds((offset) =>
-        request(op, "search", offset),
+      const ids = await collectBofaOfferIds(
+        (offset) => request(op, "search", offset),
+        async (discovered, total) => {
+          op.state.discovered = discovered;
+          op.state.total = total;
+          await persist(op);
+        },
       );
       op.state.total = ids.length;
       await persist(op);
@@ -424,6 +429,7 @@ export function registerBofaOffers() {
           phase: "checking",
           total: 0,
           checked: 0,
+          discovered: 0,
           added: 0,
           failed: 0,
           offers: [],

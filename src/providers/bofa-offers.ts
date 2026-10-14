@@ -101,7 +101,12 @@ export function normalizeBofaOffer(offer: BofaOffer): PortalOffer {
         : offer.reward_value) ?? null)
     : null;
   const categoryMap: Record<string, string> = {
-    AUTOMOTIVE: "transportation", HEALTH_AND_BEAUTY: "health", FOOD: "food", HOME: "home", TRAVEL: "travel", ENTERTAINMENT: "entertainment",
+    AUTOMOTIVE: "transportation",
+    HEALTH_AND_BEAUTY: "health",
+    FOOD: "food",
+    HOME: "home",
+    TRAVEL: "travel",
+    ENTERTAINMENT: "entertainment",
   };
   const action = getBofaOfferAction(offer);
   const value =
@@ -122,7 +127,9 @@ export function normalizeBofaOffer(offer: BofaOffer): PortalOffer {
       .filter(Boolean)
       .join("\n\n"),
     termsText: offer.terms_and_conditions,
-    category: offer.category ? categoryMap[offer.category] ?? "general" : null,
+    category: offer.category
+      ? (categoryMap[offer.category] ?? "general")
+      : null,
     expirationDate: offer.expiration_date ?? null,
     rewardType:
       amount !== null && amount > 0
@@ -149,6 +156,7 @@ export function normalizeBofaOffer(offer: BofaOffer): PortalOffer {
 
 export async function collectBofaOfferIds(
   fetchPage: (offset: number) => Promise<unknown>,
+  onPage?: (discovered: number, total: number) => Promise<void>,
 ) {
   const schema = z.object({
     offers: z.array(z.object({ offer_id: z.string().regex(/^\d+$/) })),
@@ -156,17 +164,20 @@ export async function collectBofaOfferIds(
   });
   const ids = new Set<string>();
   let total: number | undefined;
+  let inventoryChanged = false;
   for (let offset = 0; offset < 10000; offset += 24) {
     const page = schema.parse(await fetchPage(offset));
-    if (total !== undefined && total !== page.total)
-      throw new Error("BofA's offer inventory changed. Check again.");
+    if (total !== undefined && total !== page.total) inventoryChanged = true;
     total = page.total;
     if (page.offers.length > 24 || (!page.offers.length && offset < total))
       throw new Error("BofA returned an incomplete offer page.");
     const before = ids.size;
     page.offers.forEach((o) => ids.add(o.offer_id));
+    if (offset > 0 && page.offers.length && ids.size === before)
+      throw new Error("BofA repeated offers between pages. Check again.");
+    await onPage?.(ids.size, total);
     if (offset + page.offers.length >= total) {
-      if (ids.size !== total)
+      if (!inventoryChanged && ids.size !== total)
         throw new Error("BofA repeated offers between pages. Check again.");
       return [...ids];
     }
@@ -188,6 +199,7 @@ export const bofaPortalStateSchema = z.object({
   ]),
   total: z.number(),
   checked: z.number(),
+  discovered: z.number(),
   added: z.number(),
   failed: z.number(),
   offers: z.array(portalOfferSchema),
