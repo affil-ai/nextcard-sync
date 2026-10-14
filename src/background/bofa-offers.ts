@@ -341,6 +341,7 @@ export function registerBofaOffers() {
               );
             const current = await chrome.tabs.get(opened.id);
             if (
+              current.status === "complete" &&
               current.url?.startsWith("https://deals.merchant-rewards.com/")
             ) {
               tab = current;

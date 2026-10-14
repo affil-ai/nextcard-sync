@@ -141,7 +141,11 @@ beforeEach(() => {
       query: async () => [
         { id: 7, active: true, url: "https://deals.merchant-rewards.com/" },
       ],
-      get: async () => ({ id: 7, url: "https://deals.merchant-rewards.com/" }),
+      get: async () => ({
+        id: 7,
+        status: "complete",
+        url: "https://deals.merchant-rewards.com/",
+      }),
     },
     scripting: { executeScript: execute },
     storage: {
