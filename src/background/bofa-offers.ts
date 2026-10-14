@@ -306,7 +306,7 @@ export function registerBofaOffers() {
       await persist(op);
     }
   }
-  async function start() {
+  async function start(reconnect = false) {
     if (
       starting ||
       operation?.state.phase === "checking" ||
@@ -322,7 +322,7 @@ export function registerBofaOffers() {
       const tabs = await chrome.tabs.query({
         url: "https://deals.merchant-rewards.com/*",
       });
-      let tab = tabs.find((t) => t.active) ?? tabs[0];
+      let tab = reconnect ? undefined : tabs.find((t) => t.active) ?? tabs[0];
       if (tab?.id === undefined) {
         // BofA's own View all deals link establishes the separate portal session.
         const dealsUrl =
@@ -332,14 +332,15 @@ export function registerBofaOffers() {
         });
         const bankingTab = bankingTabs.find((t) => t.active) ?? bankingTabs[0];
         const opened =
-          bankingTab?.id !== undefined
+          !reconnect && bankingTab?.id !== undefined
             ? await chrome.tabs.update(bankingTab.id, {
                 url: dealsUrl,
                 active: true,
               })
             : await chrome.tabs.create({ url: dealsUrl, active: true });
         if (opened?.id !== undefined) {
-          for (let attempt = 0; attempt < 40; attempt++) {
+          let redirectedAfterLogin = false;
+          for (let attempt = 0; attempt < (reconnect ? 480 : 40); attempt++) {
             if (!(await scopeCurrent(scope, generation)))
               throw new Error(
                 "The selected nextcard account changed. Check again.",
@@ -351,6 +352,30 @@ export function registerBofaOffers() {
             ) {
               tab = current;
               break;
+            }
+            if (
+              reconnect &&
+              !redirectedAfterLogin &&
+              attempt % 4 === 0 &&
+              current.status === "complete" &&
+              current.url?.startsWith("https://secure.bankofamerica.com/")
+            ) {
+              // Login may return to Accounts rather than retain BofA's deals target.
+              // Inspect only the signed-in navigation, never credentials or balances.
+              const signedIn = await chrome.scripting.executeScript({
+                target: { tabId: opened.id },
+                func: () =>
+                  Array.from(document.querySelectorAll("a")).some((link) =>
+                    /^log\s*out$/i.test(link.textContent?.trim() ?? ""),
+                  ),
+              }).catch(() => []);
+              if (signedIn[0]?.result === true) {
+                redirectedAfterLogin = true;
+                await chrome.tabs.update(opened.id, {
+                  url: dealsUrl,
+                  active: true,
+                });
+              }
             }
             await new Promise<void>((resolve) => setTimeout(resolve, 500));
           }
@@ -549,8 +574,11 @@ export function registerBofaOffers() {
     void (async () => {
       try {
         const { type, ids, runId } = envelope.data;
-        if (type === "BOFA_PORTAL_CHECK")
-          return respond({ ok: true, state: await start() });
+        if (type === "BOFA_PORTAL_CHECK" || type === "BOFA_PORTAL_SIGN_IN")
+          return respond({
+            ok: true,
+            state: await start(type === "BOFA_PORTAL_SIGN_IN"),
+          });
         if (type === "BOFA_PORTAL_ACTIVATE")
           return respond({
             ok: true,

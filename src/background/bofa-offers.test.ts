@@ -230,6 +230,57 @@ describe("BofA portal operation boundaries", () => {
     );
   });
 
+  it("reconnects through BofA instead of reusing an expired portal tab", async () => {
+    const create = vi.spyOn(chrome.tabs, "create");
+    const response = await send({ type: "BOFA_PORTAL_SIGN_IN" });
+    expect(response.ok).toBe(true);
+    expect(create).toHaveBeenCalledWith({
+      url: "https://secure.bankofamerica.com/myaccounts/brain/redirect.go?request_locale=en-us&target=offers&source=rewardDeals&location=myRewards",
+      active: true,
+    });
+    await vi.waitFor(async () =>
+      expect((await send({ type: "BOFA_PORTAL_STATUS" })).state?.phase).toBe("ready"),
+    );
+  });
+
+  it("waits for login and redirects Accounts back to deals before scanning", async () => {
+    vi.useFakeTimers();
+    try {
+      let loggedIn = false;
+      let portalOpened = false;
+      const bridge = execute.getMockImplementation();
+      execute.mockImplementation(async (args) =>
+        args.args ? bridge?.(args) : [{ result: loggedIn }],
+      );
+      vi.spyOn(chrome.tabs, "get").mockImplementation(async () => ({
+        id: 7, status: "complete", index: 0, pinned: false,
+        highlighted: true, windowId: 1, active: true, incognito: false,
+        selected: true, discarded: false, autoDiscardable: true, groupId: -1,
+        url: portalOpened
+          ? "https://deals.merchant-rewards.com/search"
+          : "https://secure.bankofamerica.com/myaccounts/signin/signIn.go",
+      }));
+      vi.mocked(chrome.tabs.update).mockImplementation(async () => {
+        portalOpened = true;
+        return chrome.tabs.get(7);
+      });
+      const reconnect = send({ type: "BOFA_PORTAL_SIGN_IN" });
+      await vi.advanceTimersByTimeAsync(25000);
+      expect(chrome.tabs.update).not.toHaveBeenCalled();
+      loggedIn = true;
+      await vi.advanceTimersByTimeAsync(3000);
+      expect((await reconnect).state?.phase).toBe("checking");
+      expect(chrome.tabs.update).toHaveBeenCalledWith(7, {
+        url: "https://secure.bankofamerica.com/myaccounts/brain/redirect.go?request_locale=en-us&target=offers&source=rewardDeals&location=myRewards",
+        active: true,
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      expect((await send({ type: "BOFA_PORTAL_STATUS" })).state?.phase).toBe("ready");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("runs the serialized issuer bridge without extension closures and keeps the issuer token in that page", async () => {
     const token = `fixture.${Buffer.from(JSON.stringify({ user_id: "synthetic-user", publisher_id: "synthetic-publisher", exp: 4102444800 })).toString("base64url")}.signature`;
     const requests: Array<{ path: string; headers: unknown; body: unknown }> =

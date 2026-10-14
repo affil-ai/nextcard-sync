@@ -40,6 +40,10 @@ export function mountBofaOffers() {
   const notice = document.createElement("div");
   notice.className = "error-box";
   notice.setAttribute("role", "alert");
+  const signIn = document.createElement("button");
+  signIn.type = "button";
+  signIn.className = "sync-btn";
+  signIn.textContent = "Sign in to Bank of America";
   const progress = document.createElement("div");
   progress.className = "offers-progress-bar";
   progress.setAttribute("role", "progressbar");
@@ -75,7 +79,7 @@ export function mountBofaOffers() {
   view.rel = "noopener noreferrer";
   view.textContent = "View offers →";
   links.append(done, view);
-  body.append(status, notice, progress, cancel, reviewHost, actions, links);
+  body.append(status, notice, signIn, progress, cancel, reviewHost, actions, links);
 
   const modal = document.createElement("div");
   modal.className = "consent-modal-backdrop";
@@ -146,7 +150,12 @@ export function mountBofaOffers() {
       ?.classList.toggle("bofa-operation-open", expanded);
     const running =
       state?.phase === "checking" || state?.phase === "activating";
-    const ready = state?.phase === "ready" && !actionPending;
+    const needsSignIn =
+      /session expired|session is unavailable|sign in to BofA|open.*deals.*portal|In BofA, open/i.test(
+        actionError ?? state?.error ?? "",
+      );
+    signIn.hidden = !needsSignIn || running || actionPending;
+    const ready = !needsSignIn && state?.phase === "ready" && !actionPending;
     const card = reviewCard();
     const count = card.offers?.length ?? 0;
     const selected = state ? review.selected(state.runId, card).length : 0;
@@ -162,6 +171,8 @@ export function mountBofaOffers() {
     const progressTotal = state?.phase === "activating" ? activationTotal : state?.total;
     status.textContent = actionPending
       ? pendingLabel
+      : needsSignIn
+        ? "Sign in to continue checking your offers."
       : state?.phase === "checking"
         ? state.checked
           ? `Reading ${current.toLocaleString()} of ${state.total.toLocaleString()} offers…`
@@ -185,7 +196,9 @@ export function mountBofaOffers() {
           ? `${state.failed} offers couldn't be checked. Refresh to retry.`
           : state?.error) ??
       "";
-    notice.hidden = !notice.textContent;
+    if (needsSignIn)
+      notice.textContent = "We'll open BofA. After you sign in, we'll continue to your offers and resume the check.";
+    notice.hidden = !notice.textContent || actionPending;
     progress.hidden = !running && !actionPending;
     progress.setAttribute("aria-label", status.textContent);
     progress.setAttribute("aria-valuemin", "0");
@@ -232,7 +245,11 @@ export function mountBofaOffers() {
     expanded = true;
     actionError = null;
     actionPending = true;
-    pendingLabel = "type" in message && message.type === "BOFA_PORTAL_ACTIVATE" ? "Activating your offers…" : "Opening Bank of America deals…";
+    pendingLabel = "type" in message && message.type === "BOFA_PORTAL_ACTIVATE"
+      ? "Activating your offers…"
+      : "type" in message && message.type === "BOFA_PORTAL_SIGN_IN"
+        ? "Sign in on the BofA tab. Waiting for your offers…"
+        : "Opening Bank of America deals…";
     render();
     try {
       const result = await send(message);
@@ -268,6 +285,9 @@ export function mountBofaOffers() {
     modal.setAttribute("aria-hidden", "false");
     confirm.focus();
   }
+  signIn.onclick = () => {
+    void action({ type: "BOFA_PORTAL_SIGN_IN" });
+  };
   check.onclick = () => {
     void action({ type: "BOFA_PORTAL_CHECK" });
   };

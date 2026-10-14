@@ -10,7 +10,7 @@ afterEach(() => {
   document.body.replaceChildren();
 });
 
-it("keeps the portal-opening instruction visible across idle status polls", async () => {
+it("keeps sign-in recovery visible across idle status polls", async () => {
   vi.useFakeTimers();
   document.body.innerHTML = '<section id="bofaOffersCard"></section>';
   const instruction =
@@ -32,9 +32,9 @@ it("keeps the portal-opening instruction visible across idle status polls", asyn
   if (!button) throw new Error("Missing BofA check button");
   button.click();
   await vi.advanceTimersByTimeAsync(0);
-  expect(document.body.textContent).toContain(instruction);
+  expect(document.body.textContent).toContain("Sign in to continue checking your offers.");
   await vi.advanceTimersByTimeAsync(3000);
-  expect(document.body.textContent).toContain(instruction);
+  expect(document.body.textContent).toContain("Sign in to continue checking your offers.");
   expect(button.disabled).toBe(false);
 });
 
@@ -142,3 +142,23 @@ it.each([true, false])(
     expect(document.querySelector('[role="progressbar"]')?.getAttribute("aria-valuemax")).toBe(all?"2":"1");
   },
 );
+
+it("offers a sign-in recovery action for an expired issuer session", async () => {
+  vi.useFakeTimers();
+  document.body.innerHTML = '<section id="bofaOffersCard"></section>';
+  const send = vi.fn(async () => ({ ok: true, state: {
+    runId: "expired", phase: "failed", total: 0, checked: 0,
+    discovered: 0, added: 0, failed: 0, offers: [], saveStatus: "saved",
+    error: "Your BofA session expired. Open deals from BofA again.",
+  } }));
+  vi.stubGlobal("chrome", { runtime: { sendMessage: send } });
+  mountBofaOffers();
+  await vi.advanceTimersByTimeAsync(0);
+  const login = Array.from(document.querySelectorAll("button")).find(
+    b => b.textContent === "Sign in to Bank of America",
+  );
+  expect(login).toBeDefined();
+  login?.click();
+  await vi.advanceTimersByTimeAsync(0);
+  expect(send).toHaveBeenCalledWith({ type: "BOFA_PORTAL_SIGN_IN" });
+});
