@@ -155,6 +155,7 @@ export function mountBofaOffers() {
     if (!state) {
       list.replaceChildren();
       status.textContent =
+        actionError ??
         "One set of offers for your BofA portal. Checkout requires an eligible BofA card. Upside is excluded.";
       updateButtons();
       more.hidden = true;
@@ -212,6 +213,7 @@ export function mountBofaOffers() {
     }
   }
   check.onclick = () => {
+    status.textContent = "Opening BofA deals. Sign in to BofA if asked.";
     void action({ type: "BOFA_PORTAL_CHECK" });
   };
   cancel.onclick = () => {

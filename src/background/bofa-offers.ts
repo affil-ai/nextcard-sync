@@ -317,15 +317,42 @@ export function registerBofaOffers() {
       const tabs = await chrome.tabs.query({
         url: "https://deals.merchant-rewards.com/*",
       });
-      const tab = tabs.find((t) => t.active) ?? tabs[0];
+      let tab = tabs.find((t) => t.active) ?? tabs[0];
       if (tab?.id === undefined) {
-        await chrome.tabs.create({
-          url: "https://www.bankofamerica.com/online-banking/sign-in/",
-          active: true,
+        // BofA's own View all deals link establishes the separate portal session.
+        const dealsUrl =
+          "https://secure.bankofamerica.com/myaccounts/brain/redirect.go?request_locale=en-us&target=offers&source=rewardDeals&location=myRewards";
+        const bankingTabs = await chrome.tabs.query({
+          url: "https://secure.bankofamerica.com/*",
         });
-        throw new Error(
-          "Open Cash back deals from BofA, then check offers here again.",
-        );
+        const bankingTab = bankingTabs.find((t) => t.active) ?? bankingTabs[0];
+        const opened =
+          bankingTab?.id !== undefined
+            ? await chrome.tabs.update(bankingTab.id, {
+                url: dealsUrl,
+                active: true,
+              })
+            : await chrome.tabs.create({ url: dealsUrl, active: true });
+        if (opened?.id !== undefined) {
+          for (let attempt = 0; attempt < 40; attempt++) {
+            if (!(await scopeCurrent(scope, generation)))
+              throw new Error(
+                "The selected nextcard account changed. Check again.",
+              );
+            const current = await chrome.tabs.get(opened.id);
+            if (
+              current.url?.startsWith("https://deals.merchant-rewards.com/")
+            ) {
+              tab = current;
+              break;
+            }
+            await new Promise<void>((resolve) => setTimeout(resolve, 500));
+          }
+        }
+        if (tab?.id === undefined)
+          throw new Error(
+            "In BofA, open Rewards & Deals, then Deals and View all deals. Keep that deals portal open and check offers again.",
+          );
       }
       const result = await chrome.scripting.executeScript({
         target: { tabId: tab.id },

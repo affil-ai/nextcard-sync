@@ -133,6 +133,7 @@ beforeEach(() => {
       },
     },
     tabs: {
+      update: vi.fn(async () => ({ id: 7 })),
       create: async () => ({
         id: 7,
         url: "https://deals.merchant-rewards.com/search",
@@ -169,6 +170,34 @@ async function ready() {
   return state;
 }
 describe("BofA portal operation boundaries", () => {
+  it("uses the signed-in banking tab to open Deals without opening another sign-in tab", async () => {
+    const bankTab = {
+      ...(await chrome.tabs.get(7)),
+      url: "https://secure.bankofamerica.com/myaccounts/signin/signIn.go",
+    };
+    vi.spyOn(chrome.tabs, "query")
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([bankTab]);
+    const create = vi.spyOn(chrome.tabs, "create");
+    registerBofaOffers();
+    const response = await send({ type: "BOFA_PORTAL_CHECK" });
+    expect(response.ok).toBe(true);
+    expect(chrome.tabs.update).toHaveBeenCalledWith(7, {
+      url: "https://secure.bankofamerica.com/myaccounts/brain/redirect.go?request_locale=en-us&target=offers&source=rewardDeals&location=myRewards",
+      active: true,
+    });
+    expect(create).toHaveBeenCalledTimes(1);
+    expect(create).toHaveBeenCalledWith({
+      url: "https://deals.merchant-rewards.com/search",
+      active: true,
+    });
+    await vi.waitFor(async () =>
+      expect((await send({ type: "BOFA_PORTAL_STATUS" })).state?.phase).toBe(
+        "ready",
+      ),
+    );
+  });
+
   it("runs the serialized issuer bridge without extension closures and keeps the issuer token in that page", async () => {
     const token = `fixture.${Buffer.from(JSON.stringify({ user_id: "synthetic-user", publisher_id: "synthetic-publisher", exp: 4102444800 })).toString("base64url")}.signature`;
     const requests: Array<{ path: string; headers: unknown; body: unknown }> =
