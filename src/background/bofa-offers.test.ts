@@ -104,7 +104,9 @@ beforeEach(() => {
         activated = true;
         data = { ok: true };
       }
-      return [{ result: { portalId, status: 200, data } }];
+      return [
+        { result: { portalId, hasLocationContext: true, status: 200, data } },
+      ];
     },
   );
   vi.stubGlobal("__CONVEX_SITE_URL__", "https://nextcard-test.example");
@@ -131,6 +133,10 @@ beforeEach(() => {
       },
     },
     tabs: {
+      create: async () => ({
+        id: 7,
+        url: "https://deals.merchant-rewards.com/search",
+      }),
       query: async () => [
         { id: 7, active: true, url: "https://deals.merchant-rewards.com/" },
       ],
@@ -170,6 +176,18 @@ describe("BofA portal operation boundaries", () => {
     const result: unknown = await runInNewContext(
       `(${bofaPortalRequest.toString()})("search", null, 24)`,
       {
+        window: {
+          __nextcardBofaLocation: {
+            latitude: 1,
+            longitude: 2,
+            sessionHash: Buffer.from(
+              await crypto.subtle.digest(
+                "SHA-256",
+                new TextEncoder().encode(token),
+              ),
+            ).toString("hex"),
+          },
+        },
         location: { origin: "https://deals.merchant-rewards.com", search: "" },
         localStorage: {
           getItem: (key: string) =>

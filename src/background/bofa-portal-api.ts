@@ -1,3 +1,4 @@
+import type {} from "../content-scripts/bofa-location-context";
 /** Serialized into the issuer page. No issuer token or raw identity leaves this function. */
 export async function bofaPortalRequest(
   kind: "session" | "search" | "details" | "activate",
@@ -39,50 +40,26 @@ export async function bofaPortalRequest(
     const portalId = `v1:${Array.from(new Uint8Array(digest), (b) => b.toString(16).padStart(2, "0")).join("")}`;
     if (expectedPortalId !== null && portalId !== expectedPortalId)
       throw new Error("Your BofA portal account changed. Check offers again.");
-    if (kind === "session") return { portalId, status: 200, data: null };
-    let proximity: { latitude: number; longitude: number } | undefined;
-    try {
-      const stored: unknown = JSON.parse(
-        localStorage.getItem("geo_fallback_location") || "null",
-      );
-      if (
-        stored &&
-        typeof stored === "object" &&
-        "latitude" in stored &&
-        "longitude" in stored &&
-        typeof stored.latitude === "number" &&
-        typeof stored.longitude === "number"
-      )
-        proximity = { latitude: stored.latitude, longitude: stored.longitude };
-    } catch {
-      /* The portal may be using its current location instead. */
-    }
-    if (!proximity && kind !== "activate") {
-      const permission = await navigator.permissions.query({
-        name: "geolocation",
-      });
-      if (permission.state !== "granted")
-        throw new Error(
-          "Set and save your location in the BofA portal, then check again.",
-        );
-      proximity = await new Promise<{ latitude: number; longitude: number }>(
-        (resolve, reject) =>
-          navigator.geolocation.getCurrentPosition(
-            (p) =>
-              resolve({
-                latitude: p.coords.latitude,
-                longitude: p.coords.longitude,
-              }),
-            () =>
-              reject(
-                new Error(
-                  "Set and save your location in the BofA portal, then check again.",
-                ),
-              ),
-            { timeout: 10000, maximumAge: 300000 },
-          ),
-      );
-    }
+    const sessionBytes = await crypto.subtle.digest(
+      "SHA-256",
+      new TextEncoder().encode(token),
+    );
+    const sessionHash = Array.from(new Uint8Array(sessionBytes), (b) =>
+      b.toString(16).padStart(2, "0"),
+    ).join("");
+    const captured = window.__nextcardBofaLocation;
+    const locationContext =
+      captured?.sessionHash === sessionHash ? captured : undefined;
+    if (kind === "session")
+      return {
+        portalId,
+        status: 200,
+        data: null,
+        hasLocationContext: locationContext !== undefined,
+      };
+    const proximity = locationContext;
+    if (!proximity && kind !== "activate")
+      throw new Error("The BofA offer location changed. Check offers again.");
     let path: string;
     let body: object;
     if (

@@ -53,10 +53,14 @@ export const providerRegistry = {
     group: "Airlines",
     iconPath: "src/icons/atmos-36.png",
     syncStrategy: "atmos",
-    syncUrl: "https://www.alaskaair.com/atmosrewards/account/overview/?lid=AS_Nav_Account_Profile",
+    syncUrl:
+      "https://www.alaskaair.com/atmosrewards/account/overview/?lid=AS_Nav_Account_Profile",
     tabUrlPattern: "https://*.alaskaair.com/*",
     accountUrlPattern: "https://www.alaskaair.com/atmosrewards/*",
-    manifestMatches: ["https://www.alaskaair.com/*", "https://auth0.alaskaair.com/*"],
+    manifestMatches: [
+      "https://www.alaskaair.com/*",
+      "https://auth0.alaskaair.com/*",
+    ],
     contentScriptPath: "src/content-scripts/atmos.ts",
   },
   chase: {
@@ -71,7 +75,10 @@ export const providerRegistry = {
     accountUrlPattern: "https://secure.chase.com/web/auth/dashboard*",
     manifestMatches: ["https://ultimaterewardspoints.chase.com/*"],
     contentScriptPath: "src/content-scripts/chase.ts",
-    benefitsMatches: ["https://secure.chase.com/*", "https://chaseloyalty.chase.com/*"],
+    benefitsMatches: [
+      "https://secure.chase.com/*",
+      "https://chaseloyalty.chase.com/*",
+    ],
     benefitsContentScriptPath: "src/content-scripts/chase-benefits.ts",
   },
   aa: {
@@ -257,7 +264,11 @@ export const providerRegistry = {
     tabUrlPattern: "https://*.discover.com/*",
     accountUrlPattern: "https://card.discover.com/web/achome/*",
     accountUrl: "https://card.discover.com/web/achome/homepage",
-    manifestMatches: ["https://card.discover.com/*", "https://portal.discover.com/*", "https://www.discover.com/*"],
+    manifestMatches: [
+      "https://card.discover.com/*",
+      "https://portal.discover.com/*",
+      "https://www.discover.com/*",
+    ],
     contentScriptPath: "src/content-scripts/discover.ts",
   },
   citi: {
@@ -295,42 +306,68 @@ export function getProviderHostPermissions(definition: ProviderDefinition) {
 }
 
 export function buildProviderContentScripts() {
-  const scripts: Array<{ matches: string[]; js: string[]; run_at: "document_idle" }> = [];
+  const scripts: Array<{
+    matches: string[];
+    js: string[];
+    run_at: "document_idle" | "document_start";
+    world?: "MAIN";
+  }> = [];
 
-  scripts.push(...providerIds.flatMap((providerId) => {
-    const definition: ProviderDefinition = providerRegistry[providerId];
-    const entries = [
-      {
-        matches: definition.manifestMatches,
-        js: [definition.contentScriptPath],
-        run_at: "document_idle" as const,
-      },
-    ];
+  scripts.push(
+    ...providerIds.flatMap((providerId) => {
+      const definition: ProviderDefinition = providerRegistry[providerId];
+      const entries = [
+        {
+          matches: definition.manifestMatches,
+          js: [definition.contentScriptPath],
+          run_at: "document_idle" as const,
+        },
+      ];
 
-    if (definition.benefitsMatches && definition.benefitsContentScriptPath) {
-      entries.push({
-        matches: definition.benefitsMatches,
-        js: [definition.benefitsContentScriptPath],
-        run_at: "document_idle" as const,
-      });
-    }
+      if (definition.benefitsMatches && definition.benefitsContentScriptPath) {
+        entries.push({
+          matches: definition.benefitsMatches,
+          js: [definition.benefitsContentScriptPath],
+          run_at: "document_idle" as const,
+        });
+      }
 
-    return entries;
-  }));
+      return entries;
+    }),
+  );
+
+  scripts.push({
+    matches: ["https://deals.merchant-rewards.com/*"],
+    js: ["src/content-scripts/bofa-location-context.ts"],
+    run_at: "document_start",
+    world: "MAIN",
+  });
 
   // Tool content scripts (offer management, not sync)
   scripts.push({
-    matches: ["https://global.americanexpress.com/*", "https://www.americanexpress.com/*"],
+    matches: [
+      "https://global.americanexpress.com/*",
+      "https://www.americanexpress.com/*",
+    ],
     js: ["src/content-scripts/amex-offers.ts"],
     run_at: "document_idle" as const,
   });
   scripts.push({
-    matches: ["https://secure.chase.com/*", "https://secure01a.chase.com/*", "https://secure03a.chase.com/*", "https://secure05a.chase.com/*", "https://secure07a.chase.com/*"],
+    matches: [
+      "https://secure.chase.com/*",
+      "https://secure01a.chase.com/*",
+      "https://secure03a.chase.com/*",
+      "https://secure05a.chase.com/*",
+      "https://secure07a.chase.com/*",
+    ],
     js: ["src/content-scripts/chase-offers.ts"],
     run_at: "document_idle" as const,
   });
   scripts.push({
-    matches: ["https://myaccounts.capitalone.com/*", "https://capitaloneoffers.com/*"],
+    matches: [
+      "https://myaccounts.capitalone.com/*",
+      "https://capitaloneoffers.com/*",
+    ],
     js: ["src/content-scripts/capitalone-offers.ts"],
     run_at: "document_idle" as const,
   });

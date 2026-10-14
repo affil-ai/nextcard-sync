@@ -97,7 +97,9 @@ export function registerBofaOffers() {
       !tab?.url ||
       new URL(tab.url).origin !== "https://deals.merchant-rewards.com"
     )
-      throw new BofaRequestError("Your BofA portal tab closed or changed. Check again.");
+      throw new BofaRequestError(
+        "Your BofA portal tab closed or changed. Check again.",
+      );
     const results = await chrome.scripting.executeScript({
       target: { tabId: op.tabId },
       world: "MAIN",
@@ -341,12 +343,53 @@ export function registerBofaOffers() {
       const fingerprint = await authFingerprint();
       if (!fingerprint || !(await scopeCurrent(scope, generation)))
         throw new Error("The selected nextcard account changed. Check again.");
+      // A fresh owned search page lets the issuer resolve its saved or estimated
+      // location normally. The MAIN-world listener captures only its read-request
+      // coordinates, without asking for GPS or sending them to Nextcard.
+      const owned = await chrome.tabs.create({
+        url: "https://deals.merchant-rewards.com/search",
+        active: true,
+      });
+      if (owned.id === undefined)
+        throw new Error("Could not open the BofA deals portal.");
+      let locationReady = false;
+      for (let attempt = 0; attempt < 40; attempt++) {
+        if (!(await scopeCurrent(scope, generation)))
+          throw new Error("The selected account changed. Check again.");
+        let ready: chrome.scripting.InjectionResult<unknown>[] = [];
+        try {
+          ready = await chrome.scripting.executeScript({
+            target: { tabId: owned.id },
+            world: "MAIN",
+            func: bofaPortalRequest,
+            args: ["session", session.portalId, null],
+          });
+        } catch {
+          /* The new issuer tab may still be loading. */
+        }
+        const context = z
+          .object({ portalId: z.string(), hasLocationContext: z.boolean() })
+          .safeParse(ready[0]?.result);
+        if (
+          context.success &&
+          context.data.portalId === session.portalId &&
+          context.data.hasLocationContext
+        ) {
+          locationReady = true;
+          break;
+        }
+        await new Promise<void>((resolve) => setTimeout(resolve, 500));
+      }
+      if (!locationReady)
+        throw new Error(
+          "Choose a location in the BofA search page, then check offers again.",
+        );
       const op: Operation = {
         authFingerprint: fingerprint,
         scope,
         generation,
         portalId: session.portalId,
-        tabId: tab.id,
+        tabId: owned.id,
         cancelled: false,
         state: {
           runId: crypto.randomUUID(),

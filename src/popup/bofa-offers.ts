@@ -173,7 +173,7 @@ export function mountBofaOffers() {
           `${state?.offers.filter((o) => o.action === action).length ?? 0} ${label.toLowerCase()}`,
       )
       .join(" · ");
-    status.textContent = `${actionError ? `${actionError} ` : ""}${state.error ? `${state.error} ` : ""}${state.phase === "checking" ? `Reading ${state.checked} of ${state.total} offers. ` : `${state.offers.length} offers. `}${counts}. ${state.saveStatus === "queued_for_retry" ? "Some offers are waiting to save. Check again to retry." : state.saveStatus === "saved" ? "Saved to nextcard." : "Saving to nextcard."}`;
+    status.textContent = `${actionError ? `${actionError} ` : ""}${state.error ? `${state.error} ` : ""}${state.phase === "checking" ? (state.total ? `Reading ${state.checked} of ${state.total} offers. ` : "Checking the complete BofA inventory. ") : `${state.offers.length} offers. `}${counts}. ${state.saveStatus === "queued_for_retry" ? "Some offers are waiting to save. Check again to retry." : state.saveStatus === "saved" ? "Saved to nextcard." : "Saving to nextcard."}`;
     const fingerprint = JSON.stringify([
       state.runId,
       state.phase,
