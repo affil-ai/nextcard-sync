@@ -980,11 +980,12 @@ function confirmOfferEnrollment(button: HTMLButtonElement) {
       : `Add ${count} offers`
     : "Add offers";
   if (offersFirstUiEnabled) {
+    const offerLabel = pluralize(Number(count), "offer");
     body.textContent = config.bulk
-      ? `Activate up to ${count} offers across: ${selectedCards.map(formatCardDisplayName).join(", ")}. This includes every available offer on those cards. Issuer activations cannot be undone.`
-      : `Activate only the ${count} selected offers on ${selectedLabel}. Other offers and cards will stay untouched. Issuer activations cannot be undone.`;
-    title.textContent = config.bulk ? `Activate across ${selectedCards.length} cards?` : `Activate ${count} selected offers?`;
-    continueButton.textContent = `Activate ${count} offers`;
+      ? `Activate up to ${offerLabel} across ${selectedCards.map(formatCardDisplayName).join(", ")}. Issuer activations cannot be undone.`
+      : `Activate your ${offerLabel} on ${selectedLabel}. Other offers and cards will stay untouched. Issuer activations cannot be undone.`;
+    title.textContent = config.bulk ? `Activate across ${pluralize(selectedCards.length, "card")}?` : `Activate ${offerLabel}?`;
+    continueButton.textContent = `Activate ${offerLabel}`;
   }
   offerConfirmationTrigger = button;
   modal.classList.add("visible");
@@ -2865,7 +2866,9 @@ function updateIssuerCardStatus(snapshot: OfferOperationSnapshot) {
       state.phase === "ready_to_add" && !isOfferResultFresh(state) && checkedDate
         ? ` · last checked ${checkedDate}`
         : "";
-    description.textContent = `${getOfferOperationStatusText(state)}${suffix}`;
+    description.textContent = state.phase === "failed" || state.phase === "interrupted"
+      ? "Needs attention"
+      : `${getOfferOperationStatusText(state)}${suffix}`;
   }
 }
 
@@ -2948,7 +2951,8 @@ function renderBackgroundOwnedIssuerState(snapshot: OfferOperationSnapshot) {
       if (reviewHost && selected) offerReview.render(reviewHost, state.runId, selected, updateSelection);
       const chosenCount = selected ? offerReview.selected(state.runId, selected).length : 0;
       const availableCount = selected?.availableCount ?? null;
-      const isFree = offerActivationUsage?.accountLevel !== "pro";
+      const allowanceKnown = offerActivationUsage !== null;
+      const isFree = offerActivationUsage?.accountLevel === "free";
       const remaining = isFree ? offerActivationUsage?.remaining ?? 0 : null;
       const enrollmentCount =
         availableCount == null
@@ -3039,7 +3043,9 @@ function renderBackgroundOwnedIssuerState(snapshot: OfferOperationSnapshot) {
       }
       if (runButton) {
         runButton.textContent =
-          enrollmentCount != null && enrollmentCount > 0
+          !allowanceKnown
+            ? "Loading activation allowance…"
+            : enrollmentCount != null && enrollmentCount > 0
             ? `Activate ${enrollmentCount} on ${selected ? formatCardDisplayName(selected) : "this card"}`
             : availableCount != null && availableCount > 0 && remaining === 0
               ? "Monthly limit reached"
@@ -3050,7 +3056,8 @@ function renderBackgroundOwnedIssuerState(snapshot: OfferOperationSnapshot) {
           delete runButton.dataset.enrollmentCount;
         }
         runButton.disabled =
-          !fresh
+          !allowanceKnown
+          || !fresh
           || selected?.offers == null
           || availableCount == null
           || availableCount === 0
@@ -3059,7 +3066,9 @@ function renderBackgroundOwnedIssuerState(snapshot: OfferOperationSnapshot) {
       if (runAllButton) {
         runAllButton.hidden = !showBulkAction;
         runAllButton.textContent =
-          bulkEnrollmentCount != null && bulkEnrollmentCount > 0
+          !allowanceKnown
+            ? "Loading activation allowance…"
+            : bulkEnrollmentCount != null && bulkEnrollmentCount > 0
             ? bulkAvailableCount != null && bulkEnrollmentCount < bulkAvailableCount
               ? `Activate up to ${bulkEnrollmentCount} across all cards`
               : `Activate all ${bulkEnrollmentCount} across ${bulkCards.length} cards`
@@ -3078,7 +3087,8 @@ function renderBackgroundOwnedIssuerState(snapshot: OfferOperationSnapshot) {
           && bulkEnrollmentCount < bulkAvailableCount,
         );
         runAllButton.disabled =
-          !fresh
+          !allowanceKnown
+          || !fresh
           || bulkAvailableCount == null
           || bulkAvailableCount === 0
           || bulkEnrollmentCount === 0;
@@ -3210,6 +3220,7 @@ function refreshOfferActivationUsage(force = false) {
         accountLevel: rawUsage.accountLevel === "pro" ? "pro" : "free",
       };
       renderOfferActivationUsage();
+      renderBackgroundOwnedIssuerState(latestOfferSnapshot);
     }
   }).finally(() => {
     offerActivationUsageRequest = null;
@@ -3310,10 +3321,10 @@ function renderOffersSetupHierarchy(snapshot: OfferOperationSnapshot) {
       : `Review your ${issuerName} offers`;
     text.textContent = setup.operation?.phase === "adding"
       ? "We’re activating your selections securely in the background."
-      : "Choose a card, confirm the count, and add its offers.";
+      : "Choose your card and select the offers you want to activate.";
   } else if (setup.stage === "sync_rewards") {
     if (eyebrow) eyebrow.textContent = "Offers are ready";
-    title.textContent = "One last step";
+    title.textContent = "Connect your rewards";
     text.textContent = "Connect one rewards program to keep your points, credits, and benefits together.";
   } else {
     if (eyebrow) eyebrow.textContent = "Step 1 of 3";
@@ -3954,6 +3965,12 @@ function renderPlanBadge() {
 function renderAuthState(auth: NextCardAuth | null) {
   if (!flagsLoaded) return;
   currentAuth = auth;
+  if (auth && !extensionProfile) {
+    const guidedSetup = document.getElementById("authView")?.classList.contains("guided-setup");
+    showView(guidedSetup ? "auth" : "loading");
+    return;
+  }
+  applyOffersFirstMode(extensionProfile);
   updateOnboardingSkipVisibility();
 
   if (!auth) {
@@ -3962,15 +3979,13 @@ function renderAuthState(auth: NextCardAuth | null) {
       resetOfferAccountUi();
       renderedAccountKey = null;
     }
-    // Don't flash the disclosure view on first load — service worker may still be waking up.
-    // Only show disclosure after a poll confirms auth is truly null.
+    // Wait for confirmed auth before showing sign-in. The install guide owns
+    // the first-run introduction, so the sidebar has no competing Next action.
     if (!authConfirmed) return;
-    if (currentView !== "disclosure") {
-      onboardingController.reset();
-      showView("disclosure");
-    }
+    if (currentView !== "auth") showView("auth");
     return;
   }
+
   finishNextcardAuthWait();
   const nextOffersSetupStorageKey = getOffersSetupCompletedStorageKey(auth);
   if (offersSetupCompletedStorageKey !== nextOffersSetupStorageKey) {
@@ -3990,12 +4005,10 @@ function renderAuthState(auth: NextCardAuth | null) {
   }
   renderedAccountKey = accountKey;
   authConfirmed = true;
-  applyOffersFirstMode(extensionProfile);
 
-  const needsOffersIntro =
-    offersFirstUiEnabled
-    && offersIntroVersion < CURRENT_OFFERS_INTRO_VERSION;
-  if (!disclosureAccepted || needsOffersIntro) {
+  // Offers setup starts with the issuer picker; the install guide owns the intro.
+  // Provider-data consent remains required when the user chooses an issuer.
+  if (!offersFirstUiEnabled && !disclosureAccepted) {
     onboardingElements.onboardingBtn.textContent = auth
       ? "Continue to Offers"
       : "Continue with nextcard";
@@ -4133,9 +4146,27 @@ footerElements.versionFooter.addEventListener("click", () => {
   footerElements.changelog.classList.toggle("visible");
 });
 
+async function refreshInstallGuideContext() {
+  try {
+    const guides = await chrome.tabs.query({
+      url: chrome.runtime.getURL(WELCOME_PAGE_PATH),
+      currentWindow: true,
+    });
+    for (const id of ["authView", "loadingView"]) {
+      document.getElementById(id)?.classList.toggle("guided-setup", guides.length > 0);
+    }
+  } catch {
+    // Keep normal sign-in available if Chrome cannot report the setup tab.
+    for (const id of ["authView", "loadingView"]) {
+      document.getElementById(id)?.classList.remove("guided-setup");
+    }
+  }
+}
+
 async function refreshPopupState() {
   try {
     const snapshot = await pollPopupSnapshot();
+    if (!snapshot.auth) await refreshInstallGuideContext();
     if (!snapshot.auth && !authConfirmed) {
       signedOutPollCount += 1;
       if (signedOutPollCount < SIGNED_OUT_CONFIRMATION_POLLS) return;
@@ -4190,6 +4221,8 @@ async function initializePopup() {
       });
     }
   }
+
+  await refreshInstallGuideContext();
 
   const [flags, initialSnapshot, uiState] = await Promise.all([
     loadOnboardingFlags(),
@@ -4302,4 +4335,16 @@ document.addEventListener("click", (event) => {
   if (!(done instanceof HTMLElement)) return;
   const issuer = done.dataset.finishOffers ?? done.dataset.viewOffers;
   if (issuer) void finishOfferReview(issuer, Boolean(done.dataset.viewOffers));
+});
+
+const accountOptions = document.querySelector(".user-menu");
+accountOptions?.addEventListener("click", (event) => {
+  if (accountOptions instanceof HTMLDetailsElement && event.target instanceof Element && event.target.closest("button")) accountOptions.open = false;
+});
+accountOptions?.addEventListener("keydown", (event) => {
+  if (event instanceof KeyboardEvent && event.key === "Escape" && accountOptions instanceof HTMLDetailsElement) {
+    accountOptions.open = false;
+    const summary = accountOptions.querySelector("summary");
+    if (summary instanceof HTMLElement) summary.focus();
+  }
 });

@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createExternalMessageRouter } from "./message-router";
 
 function setup(setAuth = vi.fn(async () => {})) {
@@ -15,6 +15,69 @@ const sender = { url: "https://nextcard.com/extension-auth" };
 const message = { type: "AUTH_TOKEN", token: "new-token" };
 
 describe("external sign-in", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  function mockNavigation(guides: Partial<chrome.tabs.Tab>[]) {
+    const tabs = {
+      query: vi.fn(async () => guides),
+      update: vi.fn(async () => ({})),
+      remove: vi.fn(async () => {}),
+      create: vi.fn(async () => ({})),
+    };
+    const windows = { update: vi.fn(async () => ({})) };
+    const welcomeUrl = "chrome-extension://test/src/welcome/index.html";
+    vi.stubGlobal("chrome", {
+      tabs,
+      windows,
+      runtime: { getURL: vi.fn(() => welcomeUrl) },
+    });
+    const authSender = { ...sender, tab: { id: 12, windowId: 4, index: 0, active: true, highlighted: true, pinned: false, incognito: false, selected: true, discarded: false, autoDiscardable: true, groupId: -1 } };
+    return { tabs, windows, welcomeUrl, authSender };
+  }
+
+  it("returns to the original guide without replacing its document", async () => {
+    const { tabs, windows, authSender, welcomeUrl } = mockNavigation([
+      { id: 9, windowId: 2 },
+      { id: 10, windowId: 4 },
+    ]);
+    const { router, reply, options } = setup();
+    router(message, authSender, reply);
+    await vi.waitFor(() => expect(tabs.remove).toHaveBeenCalledWith(12));
+    expect(tabs.query).toHaveBeenCalledWith({ url: welcomeUrl });
+    expect(tabs.update).toHaveBeenCalledWith(10, { active: true });
+    expect(windows.update).toHaveBeenCalledWith(4, { focused: true });
+    expect(tabs.create).not.toHaveBeenCalled();
+    expect(options.hydrateFromNextCard).toHaveBeenCalled();
+  });
+
+  it("keeps the existing website handoff when no setup guide is open", async () => {
+    const { tabs, authSender } = mockNavigation([]);
+    const { router, reply } = setup();
+    router(message, authSender, reply);
+    await vi.waitFor(() => expect(tabs.update).toHaveBeenCalledWith(12, {
+      url: "https://nextcard.com/get-started-extension",
+    }));
+    expect(tabs.remove).not.toHaveBeenCalled();
+  });
+
+  it("recovers into a guide if the original guide closes during sign-in", async () => {
+    const { tabs, authSender, welcomeUrl } = mockNavigation([{ id: 10, windowId: 4 }]);
+    tabs.update.mockRejectedValueOnce(new Error("Tab closed"));
+    const { router, reply } = setup();
+    router(message, authSender, reply);
+    await vi.waitFor(() => expect(tabs.update).toHaveBeenCalledWith(12, { url: welcomeUrl }));
+    expect(tabs.remove).not.toHaveBeenCalled();
+  });
+
+  it("does not navigate away when credentials cannot be saved", async () => {
+    const { tabs, authSender } = mockNavigation([{ id: 10, windowId: 4 }]);
+    const { router, reply } = setup(vi.fn(async () => { throw new Error("storage failed"); }));
+    router(message, authSender, reply);
+    await vi.waitFor(() => expect(reply).toHaveBeenCalledWith({ ok: false, error: "sign_in_failed" }));
+    expect(tabs.query).not.toHaveBeenCalled();
+    expect(tabs.remove).not.toHaveBeenCalled();
+  });
+
   it("keeps the channel open and acknowledges only persisted credentials", async () => {
     let finish!: () => void;
     const pending = new Promise<void>((resolve) => { finish = resolve; });

@@ -1,41 +1,166 @@
 // @vitest-environment jsdom
+import { readFileSync } from "node:fs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  createOfferOperation,
+  OFFER_OPERATION_STORAGE_KEY,
+} from "../lib/offer-operation";
+
+let auth: { token: string } | null;
+let pinned: boolean;
+let stored: Record<string, unknown>;
+let storageChanged: (() => void) | undefined;
+let open: ReturnType<typeof vi.fn>;
+let sendMessage: ReturnType<typeof vi.fn>;
 
 beforeEach(() => {
   vi.resetModules();
-  document.body.innerHTML = '<button id="open-extension" disabled>Open nextcard sync</button><p id="panel-status" role="status"></p>';
+  auth = null;
+  pinned = false;
+  stored = {};
+  storageChanged = undefined;
+  open = vi.fn().mockResolvedValue(undefined);
+  sendMessage = vi.fn(async (message: { type: string }) =>
+    message.type === "GET_AUTH_STATE" ? auth : { ok: true },
+  );
+  document.body.innerHTML = new DOMParser().parseFromString(
+    readFileSync("src/welcome/index.html", "utf8"),
+    "text/html",
+  ).body.innerHTML;
+  vi.stubGlobal("chrome", {
+    windows: { getCurrent: vi.fn().mockResolvedValue({ id: 42 }) },
+    sidePanel: { open },
+    runtime: { sendMessage },
+    action: { getUserSettings: vi.fn(async () => ({ isOnToolbar: pinned })) },
+    storage: {
+      local: { get: vi.fn(async () => stored) },
+      onChanged: {
+        addListener: (listener: () => void) => {
+          storageChanged = listener;
+        },
+        removeListener: vi.fn(),
+      },
+    },
+  });
 });
-afterEach(() => vi.unstubAllGlobals());
+afterEach(() => {
+  window.dispatchEvent(new Event("pagehide"));
+  vi.unstubAllGlobals();
+  vi.restoreAllMocks();
+});
 
-describe("welcome page handoff", () => {
-  it("opens the current window’s panel on click and confirms the next step", async () => {
-    const open = vi.fn().mockResolvedValue(undefined);
-    vi.stubGlobal("chrome", {
-      windows: { getCurrent: vi.fn().mockResolvedValue({ id: 42 }) },
-      sidePanel: { open },
-    });
-    await import("./welcome");
-    const button = document.getElementById("open-extension");
-    expect(button).toBeInstanceOf(HTMLButtonElement);
-    if (!(button instanceof HTMLButtonElement)) throw new Error("Missing open button");
-    expect(button.disabled).toBe(false);
+function primaryButton() {
+  const button = document.getElementById("open-extension");
+  if (!(button instanceof HTMLButtonElement))
+    throw new Error("Missing open button");
+  return button;
+}
+function expectStep(name: string) {
+  expect(document.querySelector(".setup")?.getAttribute("data-step")).toBe(
+    name,
+  );
+}
+async function load() {
+  await import("./welcome");
+  await vi.waitFor(() => expect(primaryButton().disabled).toBe(false));
+  await vi.waitFor(() =>
+    expect(document.querySelector(".setup")?.getAttribute("data-step")).toBe(
+      "open",
+    ),
+  );
+}
+
+describe("guided install setup", () => {
+  it("opens the panel in the user gesture and advances only on success", async () => {
+    await load();
     expect(open).not.toHaveBeenCalled();
-    button.click();
-    // The API call happens synchronously in the user gesture.
+    primaryButton().click();
     expect(open).toHaveBeenCalledWith({ windowId: 42 });
-    await Promise.resolve();
-    expect(document.getElementById("panel-status")?.textContent).toContain("open beside this page");
+    await vi.waitFor(() => expectStep("pin"));
+    expect(document.getElementById("skip-pin")?.hidden).toBe(false);
+    expect(document.querySelectorAll('[aria-current="step"]').length).toBe(1);
   });
 
-  it("gives toolbar instructions when Chrome rejects opening the panel", async () => {
-    vi.stubGlobal("chrome", {
-      windows: { getCurrent: vi.fn().mockResolvedValue({ id: 42 }) },
-      sidePanel: { open: vi.fn().mockRejectedValue(new Error("Panel unavailable")) },
-    });
-    await import("./welcome");
-    document.getElementById("open-extension")?.click();
-    await vi.waitFor(() => {
-      expect(document.getElementById("panel-status")?.textContent).toContain("Could not open the panel");
-    });
+  it("keeps the open step and shows toolbar instructions when opening fails", async () => {
+    open.mockRejectedValue(new Error("Panel unavailable"));
+    await load();
+    primaryButton().click();
+    await vi.waitFor(() =>
+      expect(document.getElementById("panel-status")?.textContent).toContain(
+        "Could not open the panel",
+      ),
+    );
+    expectStep("open");
+  });
+
+  it("does not mark an unpinned extension complete and allows skipping", async () => {
+    await load();
+    primaryButton().click();
+    await vi.waitFor(() => expectStep("pin"));
+    expect(primaryButton().hidden).toBe(true);
+    expectStep("pin");
+    document.getElementById("skip-pin")?.click();
+    await vi.waitFor(() => expectStep("sign-in"));
+    expect(
+      document.querySelectorAll(".progress li")[1]?.getAttribute("aria-label"),
+    ).toContain("skipped");
+    primaryButton().click();
+    await vi.waitFor(() =>
+      expect(sendMessage).toHaveBeenCalledWith({ type: "SIGN_IN_NEXTCARD" }),
+    );
+    expectStep("sign-in");
+    auth = { token: "synthetic-token" };
+    storageChanged?.();
+    await vi.waitFor(() => expectStep("activate"));
+  });
+
+  it("observes real pin state and skips sign-in only when already connected", async () => {
+    auth = { token: "synthetic-token" };
+    await load();
+    primaryButton().click();
+    await vi.waitFor(() => expectStep("pin"));
+    pinned = true;
+    storageChanged?.();
+    await vi.waitFor(() => expectStep("activate"));
+    expect(document.querySelectorAll(".progress .completed").length).toBe(3);
+    expect(
+      document.querySelector(".setup")?.classList.contains("is-pinned"),
+    ).toBe(true);
+  });
+
+  it("shows completion only after new offers are actually activated and saved", async () => {
+    auth = { token: "synthetic-token" };
+    const operation = createOfferOperation(
+      "chase",
+      "test-run",
+      new Date(Date.now() - 60_000).toISOString(),
+    );
+    const result = {
+      ...operation,
+      phase: "completed",
+      added: 2,
+      saveStatus: "saved",
+    };
+    stored = {
+      [OFFER_OPERATION_STORAGE_KEY]: {
+        active: null,
+        history: { chase: result },
+      },
+    };
+    await load();
+    primaryButton().click();
+    await vi.waitFor(() => expectStep("pin"));
+    document.getElementById("skip-pin")?.click();
+    await vi.waitFor(() => expectStep("activate"));
+    result.startedAt = new Date(Date.now() + 1000).toISOString();
+    result.saveStatus = "queued_for_retry";
+    storageChanged?.();
+    await vi.waitFor(() => expect(sendMessage).toHaveBeenCalled());
+    expectStep("activate");
+    result.saveStatus = "saved";
+    storageChanged?.();
+    await vi.waitFor(() => expectStep("done"));
+    expect(primaryButton().hidden).toBe(true);
+    expect(document.getElementById("view-offers")?.hidden).toBe(false);
   });
 });

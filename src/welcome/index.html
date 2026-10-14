@@ -8,40 +8,135 @@
   </head>
   <body>
     <header class="page-width">
-      <a class="brand" href="https://www.nextcard.com/" aria-label="nextcard homepage"><img src="../icons/icon128.png" alt="" />nextcard sync</a>
-      <p class="installed"><span aria-hidden="true">✓</span> Installed</p>
+      <a
+        class="brand"
+        href="https://www.nextcard.com/"
+        aria-label="nextcard homepage"
+        ><img src="../icons/icon128.png" alt="" />nextcard sync</a
+      >
+      <p class="installed">Extension installed</p>
     </header>
-    <main class="page-width">
-      <section class="intro" aria-labelledby="welcome-title">
-        <h1 id="welcome-title">Start with your <br />first card offers</h1>
-        <p>Open the extension, then follow these three steps.</p>
-        <button id="open-extension" type="button" disabled>Open nextcard sync <span aria-hidden="true">→</span></button>
-        <p class="toolbar-instructions">Or click <svg class="inline-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M9 4H4v5a3 3 0 1 1 0 6v5h5a3 3 0 1 1 6 0h5v-5a3 3 0 1 0 0-6V4h-5a3 3 0 1 0-6 0Z" /></svg> Chrome’s puzzle-piece icon, then <span class="extension-label"><img src="../icons/icon128.png" alt="" />nextcard sync</span>.</p>
-        <p id="panel-status" role="status" aria-live="polite"></p>
-        <div class="pin-tip">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M8 3h8l-1 6 3 3v2H6v-2l3-3-1-6ZM12 14v7" /></svg>
-          <p>Pin nextcard sync in the puzzle-piece menu for easy access.</p>
-        </div>
-      </section>
-      <section class="setup" aria-label="Setup steps">
+    <main>
+      <nav class="progress" aria-label="Setup progress">
         <ol role="list">
-          <li>
-            <span class="number" aria-hidden="true">1</span>
-            <div><h2>Sign in to nextcard</h2><p>In the extension, click <strong>Sign in to nextcard</strong>. Use the same account as the website, then return to the extension.</p></div>
+          <li aria-current="step">
+            <span class="step-number">1</span
+            ><span class="step-label">Open</span>
           </li>
           <li>
-            <span class="number" aria-hidden="true">2</span>
-            <div><h2>Check your card offers</h2><p>Open <strong>Offers</strong>, choose your issuer, and click <strong>Check for offers</strong>. Sign in on the issuer’s website and keep that tab open.</p></div>
+            <span class="step-number">2</span
+            ><span class="step-label">Pin</span>
           </li>
           <li>
-            <span class="number" aria-hidden="true">3</span>
-            <div><h2>Review and activate</h2><p>Return to the extension. Choose your card, review the offer count, then confirm activation.</p><p class="activation-note">This activates the available offers for that card, up to your plan’s limit. Checking alone does not activate them.</p></div>
+            <span class="step-number">3</span
+            ><span class="step-label">Sign in</span>
+          </li>
+          <li>
+            <span class="step-number">4</span
+            ><span class="step-label">Activate</span>
           </li>
         </ol>
-        <p class="next-step">Once saving finishes, <a href="https://www.nextcard.com/dashboard/offers" target="_blank" rel="noopener noreferrer">view your offers in nextcard ↗</a>.</p>
+      </nav>
+      <section class="setup" aria-labelledby="step-title">
+        <div class="illustration" aria-hidden="true">
+          <div class="browser-preview">
+            <div class="browser-toolbar">
+              <div class="browser-address"></div>
+              <svg
+                class="puzzle"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.8"
+              >
+                <path
+                  d="M9 4H4v5a3 3 0 1 1 0 6v5h5a3 3 0 1 1 6 0h5v-5a3 3 0 1 0 0-6V4h-5a3 3 0 1 0-6 0Z"
+                />
+              </svg>
+              <img class="pinned-icon" src="../icons/icon128.png" alt="" />
+              <div class="browser-avatar"></div>
+            </div>
+            <div class="extensions-menu">
+              <p class="menu-heading">Extensions</p>
+              <div class="extension-row">
+                <img src="../icons/icon128.png" alt="" /><span
+                  >nextcard sync</span
+                ><svg
+                  class="pin"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="1.8"
+                >
+                  <path d="M8 3h8l-1 6 3 3v2H6v-2l3-3-1-6ZM12 14v7" />
+                </svg>
+              </div>
+            </div>
+            <div class="panel-preview">
+              <div class="panel-brand">
+                <img src="../icons/icon128.png" alt="" />nextcard sync
+              </div>
+              <div class="panel-sign-in">Sign in to nextcard</div>
+              <div class="panel-offers">
+                <p class="panel-tab">Offers</p>
+                <p>Choose your issuer</p>
+                <div class="preview-action">Check for offers</div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <p id="step-count" class="step-count">Step 1 of 4</p>
+        <h1 id="step-title" tabindex="-1">Open nextcard sync</h1>
+        <p id="step-description" class="description">
+          Click the button below to open the extension beside this page.
+        </p>
+        <p id="step-detail" class="detail">
+          You can also find nextcard sync in Chrome’s puzzle-piece menu.
+        </p>
+        <div class="setup-actions">
+        <button id="open-extension" type="button" disabled>
+          Open nextcard sync <span aria-hidden="true">→</span>
+        </button>
+        <button id="skip-pin" type="button" hidden>
+          Skip for now
+        </button>
+        <a
+          id="view-offers"
+          class="primary-link"
+          href="https://www.nextcard.com/dashboard/offers"
+          target="_blank"
+          rel="noopener noreferrer"
+          hidden
+          >View my offers <span aria-hidden="true">↗</span></a
+        >
+        <button
+          id="previous-step"
+          class="text-button back-button"
+          type="button"
+          hidden
+        >
+          Back
+        </button>
+        </div>
+        <p
+          id="panel-status"
+          class="status"
+          role="status"
+          aria-live="polite"
+        ></p>
       </section>
     </main>
-    <footer class="page-width"><p>Reopen this page from <strong>Setup guide</strong> in the extension.</p><a href="https://www.nextcard.com/privacy/nextcard-sync" target="_blank" rel="noopener noreferrer">Privacy ↗</a></footer>
+    <footer class="page-width">
+      <p>
+        Reopen this guide from <strong>Setup guide</strong> in the extension.
+      </p>
+      <a
+        href="https://www.nextcard.com/privacy/nextcard-sync"
+        target="_blank"
+        rel="noopener noreferrer"
+        >Privacy</a
+      >
+    </footer>
     <script type="module" src="./welcome.ts"></script>
   </body>
 </html>

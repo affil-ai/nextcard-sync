@@ -15,11 +15,15 @@ it("keeps card-specific choices through confirmation and releases review with Do
   const ready: OfferOperationState = { ...createOfferOperation("chase", "run"), phase: "ready_to_add",
     checkedAt: new Date().toISOString(), ownedTabId: 42, cards };
   let snapshot: OfferOperationSnapshot = { active: ready, history: { chase: ready } };
+  const usage = { accountLevel: "pro", used: 0, remaining: null, limit: null };
+  let finishUsage: ((value: typeof usage) => void) | undefined;
+  const usageReady = new Promise<typeof usage>((resolve) => { finishUsage = resolve; });
+  let profileReady = false;
   const sendMessage = vi.fn(async (message: Record<string, unknown>) => {
     switch (message.type) {
       case "GET_AUTH_STATE": return { token: "test-token", email: "test@example.com", signedInAt: "test" };
-      case "GET_EXTENSION_PROFILE": return { accountLevel: "pro", offersFirstUiEnabled: true };
-      case "GET_OFFER_ACTIVATION_USAGE": return { accountLevel: "pro", used: 0, remaining: null, limit: null };
+      case "GET_EXTENSION_PROFILE": return profileReady ? { accountLevel: "pro", offersFirstUiEnabled: true } : null;
+      case "GET_OFFER_ACTIVATION_USAGE": return usageReady;
       case "GET_OFFER_OPERATION_STATUS": return snapshot;
       case "START_OFFER_ENROLLMENT": return { ok: true };
       case "FINISH_OFFER_REVIEW": snapshot = { ...snapshot, active: null }; return { ok: true };
@@ -27,15 +31,25 @@ it("keeps card-specific choices through confirmation and releases review with Do
     }
   });
   vi.stubGlobal("chrome", { runtime: { sendMessage, onMessage: { addListener: () => {} }, getManifest: () => ({ version: "0.8.5" }), getURL: (path: string) => path },
-    storage: { local: { get: async () => ({ disclosureAccepted: true, consentGiven: true, firstSyncCompleted: true,
-      offersIntroVersion: 100, offerConsentVersion: 100 }), set: async () => {}, remove: async () => {} },
+    storage: { local: { get: async () => ({ disclosureAccepted: false, consentGiven: true, firstSyncCompleted: true,
+      offersIntroVersion: 0, offerConsentVersion: 100 }), set: async () => {}, remove: async () => {} },
       onChanged: { addListener: () => {}, removeListener: () => {} } },
     tabs: { create: vi.fn() }, windows: { getCurrent: async () => ({ id: 1 }) } });
   await import("./app");
+  await vi.waitFor(() => expect(sendMessage).toHaveBeenCalledWith({ type: "GET_EXTENSION_PROFILE" }));
+  expect(document.getElementById("loadingView")?.classList.contains("active")).toBe(true);
+  expect(document.getElementById("disclosureView")?.classList.contains("active")).toBe(false);
+  profileReady = true;
   await vi.waitFor(() => expect(document.querySelectorAll("#chaseOffersReview input")).toHaveLength(1));
+  expect(document.getElementById("homeView")?.classList.contains("active")).toBe(true);
+  expect(document.getElementById("disclosureView")?.classList.contains("active")).toBe(false);
   const run = document.getElementById("chaseOffersRunBtn");
   if (!(run instanceof HTMLButtonElement)) throw new Error("Missing activation button");
   expect(run.disabled).toBe(true);
+  expect(run.textContent).toBe("Loading activation allowance…");
+  expect(document.getElementById("chaseOffersQuotaNotice")).toBeNull();
+  finishUsage?.(usage);
+  await vi.waitFor(() => expect(run.textContent).toBe("Choose offers to activate"));
   const first = document.querySelector("#chaseOffersReview input");
   if (!(first instanceof HTMLInputElement)) throw new Error("Missing offer choice"); first.click();
   expect(run.textContent).toContain("1234"); expect(run.disabled).toBe(false);
@@ -53,4 +67,37 @@ it("keeps card-specific choices through confirmation and releases review with Do
   const otherIssuer = document.getElementById("amexOffersDiscoverBtn");
   if (!(otherIssuer instanceof HTMLButtonElement)) throw new Error("Missing issuer button");
   expect(otherIssuer.disabled).toBe(false);
+});
+
+it("lets the install guide own sign-in and restores sidebar sign-in when the guide closes", async () => {
+  vi.resetModules();
+  vi.useFakeTimers();
+  document.documentElement.innerHTML = readFileSync(`${process.cwd()}/src/popup/popup.html`, "utf8");
+  let guideOpen = true;
+  const query = vi.fn(async () => guideOpen ? [{ id: 42 }] : []);
+  vi.stubGlobal("chrome", {
+    runtime: {
+      sendMessage: vi.fn(async (message: Record<string, unknown>) => {
+        if (message.type === "GET_EXTENSION_PROFILE") return { accountLevel: "free", offersFirstUiEnabled: true };
+        return null;
+      }),
+      onMessage: { addListener: () => {} },
+      getManifest: () => ({ version: "0.8.5" }),
+      getURL: (path: string) => `chrome-extension://test/${path}`,
+    },
+    storage: {
+      local: { get: async () => ({}), set: async () => {}, remove: async () => {} },
+      onChanged: { addListener: () => {}, removeListener: () => {} },
+    },
+    tabs: { query, create: vi.fn() },
+    windows: { getCurrent: async () => ({ id: 1 }) },
+  });
+  await import("./app");
+  await vi.waitFor(() => expect(document.getElementById("authView")?.classList.contains("active")).toBe(true), { timeout: 3000 });
+  expect(document.getElementById("authView")?.classList.contains("guided-setup")).toBe(true);
+  expect(document.getElementById("disclosureView")?.classList.contains("active")).toBe(false);
+  expect(query).toHaveBeenCalledWith({ url: "chrome-extension://test/src/welcome/index.html", currentWindow: true });
+  guideOpen = false;
+  await vi.waitFor(() => expect(document.getElementById("authView")?.classList.contains("guided-setup")).toBe(false), { timeout: 3000 });
+  expect(document.getElementById("authView")?.classList.contains("active")).toBe(true);
 });

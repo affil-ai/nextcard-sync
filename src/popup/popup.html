@@ -4,15 +4,19 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>nextcard sync</title>
-    <link rel="preconnect" href="https://fonts.googleapis.com" />
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link
-      href="https://fonts.googleapis.com/css2?family=Nunito:wght@400;500;600;700;800&display=swap"
-      rel="stylesheet"
-    />
     <link rel="stylesheet" href="./popup.css" />
   </head>
   <body>
+    <aside id="pinReminder" class="pin-reminder" aria-label="Pin nextcard sync" hidden>
+      <svg class="pin-reminder-arrow" width="24" height="24" viewBox="0 0 20 20" fill="none" aria-hidden="true">
+        <path d="M9.33467 16.6663V4.93978L4.6374 9.63704L4.1667 9.16634L3.69599 8.69661L9.52998 2.86263L9.63447 2.77767C9.8925 2.60753 10.2433 2.63564 10.4704 2.86263L16.3034 8.69661L16.3884 8.80111C16.5588 9.05922 16.5306 9.40982 16.3034 9.63704C16.0762 9.86414 15.7255 9.89242 15.4675 9.722L15.363 9.63704L10.6647 4.9388V16.6663C10.6647 17.0336 10.367 17.3314 9.99971 17.3314C9.63259 17.3312 9.33467 17.0335 9.33467 16.6663ZM4.6374 9.63704C4.3777 9.89674 3.95569 9.89674 3.69599 9.63704C3.43657 9.37744 3.43668 8.95628 3.69599 8.69661L4.6374 9.63704Z" fill="currentColor" />
+      </svg>
+      <div>
+        <p class="pin-reminder-title">Pin nextcard sync for easy access</p>
+        <p class="pin-reminder-copy">Click the pin at the top of this sidebar to keep nextcard sync in your toolbar.</p>
+        <button id="dismissPinReminder" class="pin-reminder-dismiss" type="button" aria-label="Dismiss pin reminder">Not now</button>
+      </div>
+    </aside>
     <!-- STARTUP VIEW: shown only while auth and rollout state are loading -->
     <div class="view active" id="loadingView" role="status" aria-live="polite">
       <div class="popup-loading-screen">
@@ -28,7 +32,7 @@
         <img class="auth-logo" id="authLogo" alt="nextcard" />
         <div class="auth-title">nextcard sync</div>
         <div class="auth-subtitle">
-          Sign in to check and add card offers, then track your rewards.
+          Sign in to check your card offers and track your rewards.
         </div>
         <button class="auth-sign-in-btn" id="authSignInBtn">
           Sign in to nextcard
@@ -44,105 +48,27 @@
         <button class="onboarding-skip" id="onboardingSkipBtn" type="button" hidden>Skip to sign in</button>
         <div class="onboarding-step active" data-step="0">
           <img class="auth-logo" id="disclosureLogo" alt="nextcard" />
-          <div class="auth-title">Find card offers before you miss them</div>
-          <div class="onboarding-subtitle">
-            Check supported issuers to find the offers currently available on your cards.
-          </div>
-          <div class="onboarding-issuer-preview amex-preview" aria-label="Example Amex Offers page">
-            <div class="onboarding-issuer-header">
-              <span class="onboarding-issuer-brand amex-brand">AMEX</span>
-              <span>Offers</span>
-            </div>
-            <div class="onboarding-issuer-card">
-              <span>Example Platinum ···· 1234</span>
-              <small>Card offers</small>
-            </div>
-            <div class="onboarding-merchant-row">
-              <span class="onboarding-merchant-logo">A</span>
-              <span><strong>Example store</strong><small>Spend $100, get $20 back</small></span>
-              <span class="onboarding-add-offer">Add to card</span>
-            </div>
-            <div class="onboarding-merchant-row">
-              <span class="onboarding-merchant-logo">B</span>
-              <span><strong>Example hotel</strong><small>Get 5x points</small></span>
-              <span class="onboarding-add-offer">Add to card</span>
-            </div>
-          </div>
-          <div class="onboarding-footnote">You sign in directly with your card issuer.</div>
+          <div class="auth-title">Find your card offers</div>
+          <div class="onboarding-subtitle">Choose an issuer, then sign in on its website. We’ll check the offers available on your cards.</div>
+          <div class="onboarding-footnote">You sign in directly with your issuer.</div>
         </div>
-
         <div class="onboarding-step" data-step="1">
-          <div class="onboarding-step-icon" aria-hidden="true">••••</div>
-          <div class="auth-title">Choose the card you want to use</div>
-          <div class="onboarding-subtitle">
-            We show each card’s available offers separately. Choose a card, review what we found, then decide what to add.
-          </div>
-          <div class="onboarding-issuer-preview chase-preview" aria-label="Example Chase Offers card selection">
-            <div class="onboarding-issuer-header">
-              <span class="onboarding-issuer-brand chase-brand">CHASE</span>
-              <span>Offers</span>
-            </div>
-            <div class="onboarding-card-preview">
-            <div class="onboarding-card-preview-row selected">
-                <span><small>Example card</small>Freedom ···· 1234</span>
-              <strong>Not checked</strong>
-            </div>
-            <div class="onboarding-card-preview-row">
-                <span><small>Example card</small>Sapphire ···· 5678</span>
-              <strong>Not checked</strong>
-            </div>
-            </div>
-          </div>
-          <div class="onboarding-footnote">Counts appear only after you check the issuer.</div>
+          <div class="auth-title">Choose a card</div>
+          <div class="onboarding-subtitle">See the offers on each card and choose the card you want to use.</div>
+          <div class="onboarding-footnote">Nothing is selected for you.</div>
         </div>
-
         <div class="onboarding-step" data-step="2">
-          <div class="onboarding-step-icon review" aria-hidden="true">✓</div>
-          <div class="auth-title">Review before anything is added</div>
-          <div class="onboarding-subtitle">
-            Checking finds and saves offer details. Adding offers always requires your confirmation.
-          </div>
-          <div class="onboarding-confirm-preview" aria-label="Example offer confirmation">
-            <strong>Add the available offers to Example Platinum ending 1234?</strong>
-            <span>Nothing is added until you confirm.</span>
-            <div>Confirm offer activation</div>
-          </div>
+          <div class="auth-title">Review, then activate</div>
+          <div class="onboarding-subtitle">Select the offers you want. We’ll ask you to confirm the card and offer count before activating them.</div>
           <div class="onboarding-trust">
-            <span>We do not store your bank password or verification codes</span>
-            <span>You can stop offer activation at any time</span>
+            <span>We never store your issuer password or verification codes.</span>
+            <span>You can stop activation after the current offer.</span>
           </div>
           <a class="onboarding-privacy-link" href="https://www.nextcard.com/privacy/nextcard-sync" target="_blank" rel="noopener noreferrer">How your data is used</a>
         </div>
-
         <div class="onboarding-step" data-step="3">
-          <div class="onboarding-step-icon rewards" aria-hidden="true">★</div>
-          <div class="auth-title">Keep your rewards in one place</div>
-          <div class="onboarding-subtitle">
-            nextcard sync also tracks points, benefits, status, certificates, and award progress across your programs.
-          </div>
-          <div class="onboarding-dashboard-preview" aria-label="Example nextcard rewards dashboard">
-            <div class="onboarding-dashboard-header">
-              <span>Your rewards</span>
-              <small>Example</small>
-            </div>
-            <div class="onboarding-dashboard-row">
-              <div class="onboarding-dashboard-item">
-                <div class="onboarding-dashboard-label">Membership Rewards</div>
-                <div class="onboarding-dashboard-value">84,250</div>
-                <div class="onboarding-dashboard-meta">points</div>
-              </div>
-              <div class="onboarding-dashboard-item">
-                <div class="onboarding-dashboard-label">Free night award</div>
-                <div class="onboarding-dashboard-value">1</div>
-                <div class="onboarding-dashboard-meta">expires Dec 2026</div>
-              </div>
-            </div>
-            <div class="onboarding-progress-preview">
-              <span><strong>Gold status</strong><small>8 nights to Platinum</small></span>
-              <span class="onboarding-progress-track"><span></span></span>
-            </div>
-          </div>
-          <div class="onboarding-footnote">After checking your first card, we’ll help you sync your rewards.</div>
+          <div class="auth-title">Rewards when you’re ready</div>
+          <div class="onboarding-subtitle">You can also sync points, benefits, and status. Start with your offers, then connect a rewards program anytime.</div>
         </div>
 
         <div class="onboarding-footer">
@@ -152,7 +78,7 @@
             <button class="onboarding-dot" data-dot="2" type="button" aria-label="Step 3"></button>
             <button class="onboarding-dot" data-dot="3" type="button" aria-label="Step 4"></button>
           </div>
-          <button class="auth-sign-in-btn onboarding-btn" id="onboardingBtn">Next</button>
+          <button class="auth-sign-in-btn onboarding-btn" id="onboardingBtn" type="button">Next</button>
         </div>
       </div>
     </div>
@@ -165,11 +91,14 @@
           <div class="user-name" id="userName"></div>
           <div class="user-email" id="userEmail"></div>
         </div>
-        <div class="user-actions">
-          <button class="user-replay-guide" id="installationSetupGuideBtn" type="button">Setup guide</button>
-          <button class="user-replay-guide" id="onboardingReplayBtn" type="button">Replay guide</button>
-          <button class="user-sign-out" id="userSignOutBtn">Sign out</button>
-        </div>
+        <details class="user-menu">
+          <summary aria-label="Account options">•••</summary>
+          <div class="user-actions">
+            <button class="user-replay-guide" id="installationSetupGuideBtn" type="button">Setup guide</button>
+            <button class="user-replay-guide" id="onboardingReplayBtn" type="button">Rewards guide</button>
+            <button class="user-sign-out" id="userSignOutBtn" type="button">Sign out</button>
+          </div>
+        </details>
       </div>
       <div class="tab-bar hidden" id="tabBar" data-active="offers" role="tablist" aria-label="Extension sections">
         <div class="tab-slider"></div>
@@ -223,11 +152,23 @@
         <section class="offers-recommendation" id="offersRecommendation" aria-live="polite">
           <div class="offers-eyebrow" id="offersRecommendationEyebrow">Your setup</div>
           <h2 id="offersRecommendationTitle">Start with your first card</h2>
-          <p id="offersRecommendationText">We’ll guide you through card offers first, then help you connect your rewards.</p>
+          <p id="offersRecommendationText">Choose an issuer to check the offers on your cards.</p>
           <div class="offers-issuer-actions" id="offersIssuerActions">
-            <button type="button" data-offer-issuer="chase">Chase</button>
-            <button type="button" data-offer-issuer="amex">Amex</button>
-            <button type="button" data-offer-issuer="citi">Citi</button>
+            <button class="provider-card" type="button" data-offer-issuer="chase">
+              <span class="provider-icon"><img src="../icons/chase-36.png" alt="" width="40" height="40" /></span>
+              <span class="provider-info"><span class="provider-name">Chase</span></span>
+              <svg class="issuer-choice-arrow" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" aria-hidden="true"><path d="m9 5 7 7-7 7" stroke-linecap="round" stroke-linejoin="round" /></svg>
+            </button>
+            <button class="provider-card" type="button" data-offer-issuer="amex">
+              <span class="provider-icon"><img src="../icons/amex-36.png" alt="" width="40" height="40" /></span>
+              <span class="provider-info"><span class="provider-name">Amex</span></span>
+              <svg class="issuer-choice-arrow" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" aria-hidden="true"><path d="m9 5 7 7-7 7" stroke-linecap="round" stroke-linejoin="round" /></svg>
+            </button>
+            <button class="provider-card" type="button" data-offer-issuer="citi">
+              <span class="provider-icon"><img src="../icons/citi-36.png" alt="" width="40" height="40" /></span>
+              <span class="provider-info"><span class="provider-name">Citi</span></span>
+              <svg class="issuer-choice-arrow" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" aria-hidden="true"><path d="m9 5 7 7-7 7" stroke-linecap="round" stroke-linejoin="round" /></svg>
+            </button>
           </div>
           <div class="offers-setup-milestone" id="offersSetupMilestone" hidden>
             <span class="offers-setup-milestone-check" aria-hidden="true">✓</span>
@@ -284,11 +225,11 @@
             nextcard finds offers on your cards and saves them to your Offers dashboard. It can remind you when one works on the site you’re visiting. When you ask it to check a bank, the extension uses the account you’re already signed into. nextcard never sees or stores your bank username, password, or verification codes.
           </div>
         </div>
+
         <section id="bofaOffersPanel" class="bofa-offers-panel" aria-label="Bank of America offers">
           <h3>Bank of America</h3>
           <p>Offers from your deals portal. Use an eligible BofA card at checkout.</p>
         </section>
-
 
         <div class="provider-card tool-card" id="chaseOffersCard">
           <div class="provider-icon"><img src="" id="chaseOffersIcon" alt="Chase" /></div>
@@ -519,6 +460,14 @@
       </div>
       <div class="version-footer" id="versionFooter"></div>
       <div class="changelog" id="changelog">
+        <h4>v0.8.6</h4>
+        <ul>
+          <li>A focused setup guide with automatic pin detection and a return to setup after sign-in</li>
+          <li>A sidebar pin reminder that hides when pinned and returns when unpinned</li>
+          <li>Cleaner onboarding with visible actions, issuer logos, and a larger nextcard mascot</li>
+          <li>Go straight to choosing an issuer after sign-in, without a second onboarding walkthrough</li>
+          <li>Clearer offer selection counts, activation confirmations, and allowance loading</li>
+        </ul>
         <h4>v0.8.5</h4>
         <ul>
           <li>New install welcome page with clear setup steps, also available from Setup guide</li>
@@ -2042,7 +1991,7 @@
     <!-- CONSENT MODAL -->
     <div class="consent-modal-backdrop" id="consentModal" aria-hidden="true">
       <div class="consent-modal" role="dialog" aria-modal="true" aria-labelledby="consentTitle" aria-describedby="consentBody">
-        <div class="auth-title" id="consentTitle" style="margin-bottom: 10px;" tabindex="-1">Before we continue</div>
+        <div class="auth-title" id="consentTitle" tabindex="-1">Before we continue</div>
         <div class="onboarding-privacy" id="consentBody">
           <dl class="privacy-summary">
             <div>
@@ -2074,8 +2023,8 @@
 
     <!-- OFFER ACTION CONFIRMATION -->
     <div class="consent-modal-backdrop" id="offerConfirmModal">
-      <div class="consent-modal offer-confirm-modal" role="dialog" aria-modal="true" aria-labelledby="offerConfirmTitle">
-        <div class="auth-title" id="offerConfirmTitle" style="margin-bottom: 10px;">Add offers?</div>
+      <div class="consent-modal offer-confirm-modal" role="dialog" aria-modal="true" aria-labelledby="offerConfirmTitle" aria-describedby="offerConfirmBody">
+        <div class="auth-title" id="offerConfirmTitle">Add offers?</div>
         <p class="offer-confirm-body" id="offerConfirmBody"></p>
         <button class="auth-sign-in-btn consent-btn" id="offerConfirmContinue" type="button">Add offers</button>
         <button class="consent-cancel-btn" id="offerConfirmCancel" type="button">Not now</button>

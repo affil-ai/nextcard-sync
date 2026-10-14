@@ -1,3 +1,4 @@
+import { WELCOME_PAGE_PATH } from "../../lib/welcome";
 import { readOfferSelection } from "../../lib/offer-selection";
 import { getCachedAmexOfferIds } from "../../lib/sync-offers-to-nextcard";
 import type {
@@ -1900,6 +1901,36 @@ export function createMessageRouter(options: {
 
 let amexOffersTabId: number | null = null;
 
+async function returnAfterSignIn(authTab: chrome.tabs.Tab, nextCardOrigin: string) {
+  const authTabId = authTab.id;
+  if (authTabId === undefined) return;
+
+  const welcomeUrl = chrome.runtime.getURL(WELCOME_PAGE_PATH);
+  const guides = await chrome.tabs.query({ url: welcomeUrl });
+  const guide = guides.find((tab) => tab.windowId === authTab.windowId) ?? guides[0];
+  if (guide?.id !== undefined) {
+    try {
+      // Preserve the existing guide document and its current setup step.
+      await chrome.tabs.update(guide.id, { active: true });
+      await chrome.windows.update(guide.windowId, { focused: true });
+      if (guide.id !== authTabId) {
+        await chrome.tabs.remove(authTabId).catch(() => {
+          // Returning to the guide still succeeds if Chrome already closed auth.
+        });
+      }
+      return;
+    } catch {
+      // The guide may have been closed while authentication was completing.
+      await chrome.tabs.update(authTabId, { url: welcomeUrl });
+      return;
+    }
+  }
+
+  // Sign-in outside the install guide retains the existing website handoff.
+  const url = `${nextCardOrigin}/get-started-extension`;
+  await chrome.tabs.update(authTabId, { url }).catch(() => chrome.tabs.create({ url }));
+}
+
 export function createExternalMessageRouter(options: {
   nextCardOrigin: string;
   setAuth: (auth: NextCardAuth) => Promise<void>;
@@ -1932,17 +1963,12 @@ export function createExternalMessageRouter(options: {
         options.resetAuthCache();
         sendResponse({ ok: true });
 
-        if (sender.tab?.id) {
-          const authTabId = sender.tab.id;
-          chrome.tabs
-            .update(authTabId, {
-              url: `${options.nextCardOrigin}/get-started-extension`,
-            })
-            .catch(() => {
-              chrome.tabs.create({
-                url: `${options.nextCardOrigin}/get-started-extension`,
-              });
-            });
+        if (sender.tab?.id !== undefined) {
+          try {
+            await returnAfterSignIn(sender.tab, options.nextCardOrigin);
+          } catch (error) {
+            console.warn("[NextCard SW] Could not return after sign-in:", error);
+          }
         }
 
         try {
