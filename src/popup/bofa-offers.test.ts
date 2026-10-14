@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, expect, it, vi } from "vitest";
+import type { BofaPortalState, PortalOffer } from "../providers/bofa-offers";
 import { mountBofaOffers } from "./bofa-offers";
 
 afterEach(() => {
@@ -11,7 +12,7 @@ afterEach(() => {
 
 it("keeps the portal-opening instruction visible across idle status polls", async () => {
   vi.useFakeTimers();
-  document.body.innerHTML = '<section id="bofaOffersPanel"></section>';
+  document.body.innerHTML = '<section id="bofaOffersCard"></section>';
   const instruction =
     "In BofA, open Rewards & Deals, then Cash back deals. Keep that deals portal open and check offers again.";
   vi.stubGlobal("chrome", {
@@ -26,7 +27,7 @@ it("keeps the portal-opening instruction visible across idle status polls", asyn
   mountBofaOffers();
   await vi.advanceTimersByTimeAsync(0);
   const button = Array.from(document.querySelectorAll("button")).find(
-    (b) => b.textContent === "Check BofA offers",
+    (b) => b.id === "bofaOffersDiscoverBtn",
   );
   if (!button) throw new Error("Missing BofA check button");
   button.click();
@@ -39,10 +40,14 @@ it("keeps the portal-opening instruction visible across idle status polls", asyn
 
 it("shows an actionable error instead of treating an unrelated OK reply as an empty scan", async () => {
   vi.useFakeTimers();
-  document.body.innerHTML = '<section id="bofaOffersPanel"></section>';
-  vi.stubGlobal("chrome", {runtime:{sendMessage:vi.fn(async()=>({ok:true}))}});
+  document.body.innerHTML = '<section id="bofaOffersCard"></section>';
+  vi.stubGlobal("chrome", {
+    runtime: { sendMessage: vi.fn(async () => ({ ok: true })) },
+  });
   mountBofaOffers();
-  const check=Array.from(document.querySelectorAll("button")).find(b=>b.textContent==="Check BofA offers");
+  const check = Array.from(document.querySelectorAll("button")).find(
+    (b) => b.id === "bofaOffersDiscoverBtn",
+  );
   if (!check) throw new Error("Missing check button");
   check.click();
   await vi.advanceTimersByTimeAsync(0);
@@ -50,3 +55,90 @@ it("shows an actionable error instead of treating an unrelated OK reply as an em
   await vi.advanceTimersByTimeAsync(3000);
   expect(document.body.textContent).toContain("Reload nextcard sync");
 });
+
+it.each([true, false])(
+  "confirms only eligible %s bulk or selected activations using the shared review",
+  async (all) => {
+    vi.useFakeTimers();
+    document.body.innerHTML = '<section id="bofaOffersCard"></section>';
+    const offer = (id: string, action: PortalOffer["action"]): PortalOffer => ({
+      issuerOfferId: id,
+      merchantName: `Merchant ${id}`,
+      offerValue: "5% cash back",
+      detailsText: "Eligible purchases",
+      termsText: "Issuer terms",
+      category: "general",
+      expirationDate: null,
+      rewardType: "percentage",
+      rewardAmount: 5,
+      rewardCurrency: "cash",
+      maxReward: null,
+      minSpend: null,
+      merchantUrl: null,
+      merchantLogoUrl: null,
+      redemptionChannel: "online",
+      action,
+      activationExpiresAt: null,
+    });
+    const state: BofaPortalState = {
+      runId: "run",
+      phase: "ready",
+      total: 6,
+      checked: 6,
+      discovered: 6,
+      added: 0,
+      failed: 0,
+      error: null,
+      saveStatus: "saved",
+      offers: [
+        offer("1", "activate"),
+        offer("2", "activate"),
+        offer("3", "ready"),
+        offer("4", "activated"),
+        offer("5", "shop_through_issuer"),
+        offer("6", "merchant_deal"),
+      ],
+    };
+    const send = vi.fn(async (message: Record<string, unknown>) => ({
+      ok: true,
+      state:
+        message.type === "BOFA_PORTAL_ACTIVATE"
+          ? { ...state, phase: "activating" }
+          : state,
+    }));
+    vi.stubGlobal("chrome", { runtime: { sendMessage: send } });
+    mountBofaOffers();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(document.querySelectorAll(".offer-review-row")).toHaveLength(2);
+    expect(document.body.textContent).toContain("6 offers synced");
+    expect(document.body.textContent).not.toContain("Shop through BofA");
+    if (!all) {
+      const checkbox =
+        document.querySelector<HTMLInputElement>('input[value="2"]');
+      if (!checkbox) throw new Error("Missing selection");
+      checkbox.click();
+    }
+    const trigger = Array.from(document.querySelectorAll("button")).find(
+      (b) =>
+        b.textContent ===
+        (all ? "Activate all 2 offers" : "Activate 1 selected offer"),
+    );
+    if (!trigger) throw new Error("Missing activation action");
+    trigger.click();
+    expect(
+      send.mock.calls.some(([m]) => m.type === "BOFA_PORTAL_ACTIVATE"),
+    ).toBe(false);
+    const confirm = Array.from(document.querySelectorAll("button")).find(
+      (b) => b.textContent === (all ? "Activate 2 offers" : "Activate 1 offer"),
+    );
+    if (!confirm) throw new Error("Missing confirmation");
+    confirm.click();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(send).toHaveBeenCalledWith({
+      type: "BOFA_PORTAL_ACTIVATE",
+      runId: "run",
+      ids: all ? ["1", "2"] : ["2"],
+    });
+    expect(document.querySelector('[role="progressbar"]')?.getAttribute("aria-valuemax")).toBe(all?"2":"1");
+  },
+);

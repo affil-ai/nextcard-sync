@@ -3402,7 +3402,7 @@ async function refreshOfferOperationUi() {
   }
 
   renderOffersSetupHierarchy(snapshot);
-  document.querySelectorAll<HTMLButtonElement>("[data-offer-issuer]").forEach((button) => {
+  document.querySelectorAll<HTMLButtonElement>("[data-offer-issuer], #bofaOffersStartBtn").forEach((button) => {
     button.disabled = Boolean(active && active.phase !== "ready_to_add");
   });
   for (const issuer of ["chase", "amex", "citi", "capitalone"] as OfferIssuer[]) {
