@@ -1,3 +1,4 @@
+import { registerBofaOffers } from "./bofa-offers";
 import { registerInstallWelcome } from "../lib/welcome";
 import type { NextCardAuth, ProviderId, PushToNextCardResult } from "../lib/types";
 import {
@@ -1180,6 +1181,7 @@ async function canCurrentMemberWriteOffers() {
 }
 
 registerInstallWelcome();
+registerBofaOffers();
 
 chrome.action.onClicked.addListener((tab) => {
   if (tab.windowId) {

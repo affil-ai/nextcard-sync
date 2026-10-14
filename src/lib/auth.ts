@@ -50,6 +50,9 @@ export async function clearAuth(expectedGeneration?: number): Promise<void> {
     || key === "detectedOfferUrlCache"
     || key === "pendingOfferSyncs"
     || key === "pendingDetectedOfferSyncs"
+    || key === "bofa_portal_operation"
+    || key === "bofa_portal_pending"
+    || key.startsWith("bofa_portal_pending::")
     || key === "pendingOfferActivationCompletions"
     || key === "nextcard_legacy_offer_queue_migration_v2"
     || key === "nextcard_household_context_v2"

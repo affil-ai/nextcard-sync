@@ -3381,3 +3381,11 @@
 .offer-review-row details { margin: 6px 0 0 26px; font-size: 12px; }
 .offer-review-row summary { cursor: pointer; }
 .offer-review-row p { white-space: pre-wrap; overflow-wrap: anywhere; }
+
+.bofa-offers-panel { margin: 16px 0; padding: 16px; border: 1px solid #d6cbc5; border-radius: 12px; color: #342019; }
+.bofa-offers-panel h3 { font-size: 16px; margin: 0 0 8px; }
+.bofa-offers-panel p { font-size: 12px; line-height: 1.5; }
+.bofa-offers-panel input[type="search"], .bofa-offers-panel select { width: 100%; margin: 6px 0; padding: 8px; color: inherit; background: #fff; border: 1px solid #d6cbc5; border-radius: 6px; }
+.bofa-offers-panel .offer-review-list { max-height: 480px; overflow-y: auto; }
+.bofa-offers-panel details p { white-space: pre-line; }
+.bofa-offers-panel a { color: #342019; text-decoration: underline; }

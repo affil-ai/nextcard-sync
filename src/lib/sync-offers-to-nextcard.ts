@@ -1,3 +1,4 @@
+import type { PortalOffer } from "../providers/bofa-offers";
 /**
  * Syncs enrolled merchant offers from the extension to the NextCard backend.
  *
@@ -93,6 +94,9 @@ export interface CompleteOfferSnapshot {
 }
 
 export interface CachedOffer {
+  portalAction?: PortalOffer["action"];
+  activationExpiresAt?: string | null;
+  issuerOfferId?: string;
   merchantName: string;
   offerValue: string | null;
   cardName: string;
@@ -352,6 +356,7 @@ async function postOfferSync(
     headers: {
       "Content-Type": "application/json",
       Authorization: `Bearer ${auth.token}`,
+        "X-Nextcard-Offer-Sources": "portal",
       ...(payload.scope
         ? {
             "X-Nextcard-Extension-Version": chrome.runtime.getManifest().version,
@@ -668,6 +673,7 @@ async function postDetectedOfferSync(
         headers: {
           "Content-Type": "application/json",
           Authorization: `Bearer ${auth.token}`,
+        "X-Nextcard-Offer-Sources": "portal",
           ...(payload.scope
             ? {
                 "X-Nextcard-Extension-Version": chrome.runtime.getManifest().version,
@@ -887,6 +893,7 @@ export async function pullOfferUrlCache(
       method: "GET",
       headers: {
         Authorization: `Bearer ${auth.token}`,
+        "X-Nextcard-Offer-Sources": "portal",
         ...(scope
           ? {
               "X-Nextcard-Extension-Version": chrome.runtime.getManifest().version,
@@ -900,6 +907,9 @@ export async function pullOfferUrlCache(
 
     const data = await response.json();
     const offers: Array<{
+      portalAction?: CachedOffer["portalAction"];
+      activationExpiresAt?: string | null;
+      issuerOfferId?: string;
       merchantName: string;
       merchantUrl: string | null;
       offerValue: string | null;
@@ -930,6 +940,9 @@ export async function pullOfferUrlCache(
         rewardType: offer.rewardType,
         rewardAmount: offer.rewardAmount,
         status: offer.status,
+        portalAction: offer.portalAction,
+        activationExpiresAt: offer.activationExpiresAt,
+        issuerOfferId: offer.issuerOfferId,
       };
 
       const target = offer.status === "detected" ? detectedCache : enrolledCache;
@@ -978,7 +991,8 @@ export async function getCachedAmexOfferIds(input: unknown): Promise<string[] | 
   try {
     const response = await fetch(`${__CONVEX_SITE_URL__}/extension/amex-offer-terms-cache`, {
       method: "POST",
-      headers: { Authorization: `Bearer ${auth.token}`, "Content-Type": "application/json" },
+      headers: { Authorization: `Bearer ${auth.token}`,
+        "X-Nextcard-Offer-Sources": "portal", "Content-Type": "application/json" },
       body: JSON.stringify({ offers: parsed.data }),
       signal: AbortSignal.timeout(10000),
     });

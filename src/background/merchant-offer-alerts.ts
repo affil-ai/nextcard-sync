@@ -16,6 +16,8 @@ interface OfferGroup {
   offerValue: string | null;
   rewardAmount: number;
   status: "enrolled" | "detected" | "mixed";
+  portalAction?: CachedOffer["portalAction"];
+  issuerOfferId?: string;
   cards: string[];
 }
 
@@ -41,14 +43,21 @@ function isActiveOffer(offer: CachedOffer, now = Date.now()) {
   return !offer.expirationDate || new Date(offer.expirationDate).getTime() > now;
 }
 
+function currentAlertOffer(offer: CachedOffer, status: "enrolled" | "detected", now: number): CachedOffer {
+  if (offer.portalAction === "activated" && offer.activationExpiresAt && Date.parse(offer.activationExpiresAt) <= now) {
+    return { ...offer, portalAction: "activate", status: "detected" };
+  }
+  return { ...offer, status };
+}
+
 function getMatchingOffers(hostname: string, enrolledCache?: OfferUrlCache, detectedCache?: OfferUrlCache) {
   const now = Date.now();
   const enrolledOffers = (enrolledCache?.[hostname] ?? [])
     .filter((offer) => isActiveOffer(offer, now))
-    .map((offer) => ({ ...offer, status: "enrolled" as const }));
+    .map((offer) => currentAlertOffer(offer, "enrolled", now));
   const detectedOffers = (detectedCache?.[hostname] ?? [])
     .filter((offer) => isActiveOffer(offer, now))
-    .map((offer) => ({ ...offer, status: "detected" as const }));
+    .map((offer) => currentAlertOffer(offer, "detected", now));
 
   return [...enrolledOffers, ...detectedOffers];
 }
@@ -197,6 +206,7 @@ function injectOfferToast(
         offer.offerValue?.trim().toLowerCase() ?? "",
         offer.rewardType ?? "",
         offer.rewardAmount ?? "",
+        offer.portalAction ?? "",
       ].join("|");
       const label = cardLabel(offer);
       const group = groups.get(key);
@@ -212,6 +222,8 @@ function injectOfferToast(
         offerValue: offer.offerValue,
         rewardAmount: offer.rewardAmount ?? 0,
         status: offer.status ?? "enrolled",
+        portalAction: offer.portalAction,
+        issuerOfferId: offer.issuerOfferId,
         cards: [label],
       });
     }
@@ -227,7 +239,8 @@ function injectOfferToast(
   const offerRows = offerGroups.map((group) => {
     const offerText = group.offerValue ?? group.merchantName ?? "Special offer";
     const isDetectedGroup = group.status === "detected";
-    const tagText = isDetectedGroup ? "AVAILABLE" : "OFFER";
+    const portalLabels = {ready:"READY",activate:"ACTIVATE ON BOFA",activated:"ACTIVATED",shop_through_issuer:"USE BOFA LINK",merchant_deal:"MERCHANT DEAL"};
+    const tagText = group.portalAction ? portalLabels[group.portalAction] : isDetectedGroup ? "AVAILABLE" : "OFFER";
     const tagClass = isDetectedGroup ? "nc-tag nc-tag-detected" : "nc-tag";
     const cardRows = group.cards
       .map((card) => `<div class="nc-card-row">${esc(card)}</div>`)
@@ -236,8 +249,9 @@ function injectOfferToast(
     return `
       <div class="nc-offer-group">
         <div class="nc-offer"><span>${esc(offerText)}</span><span class="${tagClass}">${tagText}</span></div>
-        <div class="nc-card">Eligible cards</div>
+        <div class="nc-card">${group.portalAction ? "BofA portal, use an eligible BofA card" : "Eligible cards"}</div>
         ${cardRows}
+        ${group.portalAction && group.issuerOfferId && /^\d+$/.test(group.issuerOfferId) ? `<a href="https://deals.merchant-rewards.com/offers/${group.issuerOfferId}" target="_blank" rel="noopener noreferrer">${group.portalAction === "activate" ? "Review and activate on BofA" : "Open BofA offer"}</a>` : ""}
       </div>
     `;
   }).join("");
