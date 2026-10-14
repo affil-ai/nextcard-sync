@@ -1,5 +1,7 @@
-import { defineConfig } from "vite";
+import { defineConfig, transformWithEsbuild, type Plugin } from "vite";
+import { readFile } from "node:fs/promises";
 import { crx } from "@crxjs/vite-plugin";
+import { z } from "zod";
 import manifest from "./manifest.json";
 import {
   buildProviderContentScripts,
@@ -10,6 +12,64 @@ import {
 
 const NEXTCARD_URL = "https://nextcard.com";
 const CONVEX_SITE_URL = "https://laudable-turtle-546.convex.site";
+
+const manifestSchema = z
+  .object({
+    content_scripts: z
+      .array(
+        z
+          .object({
+            world: z.string().optional(),
+            matches: z.array(z.string()),
+            js: z.array(z.string()).optional(),
+          })
+          .passthrough(),
+      )
+      .optional(),
+  })
+  .passthrough();
+
+// MAIN-world document-start code must execute synchronously. CRX's module
+// loader uses an asynchronous import, which can miss the issuer's first request.
+const issuerLocationScript: Plugin = {
+  name: "bofa-document-start-script",
+  generateBundle: {
+    order: "post",
+    async handler(_options, bundle) {
+      const manifestAsset = bundle["manifest.json"];
+      if (
+        !manifestAsset ||
+        manifestAsset.type !== "asset" ||
+        typeof manifestAsset.source !== "string"
+      )
+        throw new Error("Missing extension manifest");
+      const outputManifest: unknown = JSON.parse(manifestAsset.source);
+      const manifest = manifestSchema.parse(outputManifest);
+      const sourcePath = "src/content-scripts/bofa-location-context.ts";
+      const source = await readFile(
+        new URL(sourcePath, import.meta.url),
+        "utf8",
+      );
+      const compiled = await transformWithEsbuild(source, sourcePath, {
+        loader: "ts",
+        format: "iife",
+        target: "chrome120",
+        minify: true,
+      });
+      const fileName = "assets/bofa-location-context.js";
+      this.emitFile({ type: "asset", fileName, source: compiled.code });
+      for (const script of manifest.content_scripts ?? []) {
+        if (
+          script.world !== "MAIN" ||
+          !script.matches.includes("https://deals.merchant-rewards.com/*")
+        )
+          continue;
+        script.js = [fileName];
+      }
+      manifestAsset.source = JSON.stringify(manifest, null, 2);
+    },
+  },
+};
 
 export default defineConfig(({ mode }) => {
   const hostPermissions = Array.from(
@@ -28,11 +88,13 @@ export default defineConfig(({ mode }) => {
       crx({
         manifest: {
           ...manifest,
-          name: mode === "development" ? `[DEV] ${manifest.name}` : manifest.name,
+          name:
+            mode === "development" ? `[DEV] ${manifest.name}` : manifest.name,
           host_permissions: hostPermissions,
           content_scripts: buildProviderContentScripts(),
         },
       }),
+      issuerLocationScript,
     ],
     publicDir: "public",
     define: {
