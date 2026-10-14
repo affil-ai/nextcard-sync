@@ -2905,3 +2905,15 @@
 #toolsTabPanel.bofa-operation-open > #offersRecommendation { display: none; }
 
 #bofaOffersCard .offer-enrollment-actions[hidden] { display: none; }
+
+#bofaOffersCard .offer-done-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+#bofaOffersCard .offer-done-actions .tool-link-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
