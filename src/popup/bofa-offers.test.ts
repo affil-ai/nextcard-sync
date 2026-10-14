@@ -36,3 +36,17 @@ it("keeps the portal-opening instruction visible across idle status polls", asyn
   expect(document.body.textContent).toContain(instruction);
   expect(button.disabled).toBe(false);
 });
+
+it("shows an actionable error instead of treating an unrelated OK reply as an empty scan", async () => {
+  vi.useFakeTimers();
+  document.body.innerHTML = '<section id="bofaOffersPanel"></section>';
+  vi.stubGlobal("chrome", {runtime:{sendMessage:vi.fn(async()=>({ok:true}))}});
+  mountBofaOffers();
+  const check=Array.from(document.querySelectorAll("button")).find(b=>b.textContent==="Check BofA offers");
+  if (!check) throw new Error("Missing check button");
+  check.click();
+  await vi.advanceTimersByTimeAsync(0);
+  expect(document.body.textContent).toContain("BofA did not return its status");
+  await vi.advanceTimersByTimeAsync(3000);
+  expect(document.body.textContent).toContain("Reload nextcard sync");
+});

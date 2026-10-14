@@ -4,11 +4,10 @@ import {
   type PortalOffer,
 } from "../providers/bofa-offers";
 
-const responseSchema = z.object({
-  ok: z.boolean(),
-  state: bofaPortalStateSchema.nullable().optional(),
-  error: z.string().optional(),
-});
+const responseSchema = z.discriminatedUnion("ok",[
+  z.object({ok:z.literal(true),state:bofaPortalStateSchema.nullable()}),
+  z.object({ok:z.literal(false),error:z.string().optional()}),
+]);
 const labels: Record<PortalOffer["action"], string> = {
   ready: "Ready to use",
   activate: "Activate",
@@ -78,7 +77,9 @@ export function mountBofaOffers() {
   let actionError: string | null = null;
   async function send(message: object) {
     const raw: unknown = await chrome.runtime.sendMessage(message);
-    return responseSchema.parse(raw);
+    const response = responseSchema.safeParse(raw);
+    if (!response.success) throw new Error("BofA did not return its status. Reload nextcard sync and check again.");
+    return response.data;
   }
   function renderOffers() {
     list.replaceChildren();

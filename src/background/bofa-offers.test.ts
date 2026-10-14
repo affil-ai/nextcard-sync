@@ -3,6 +3,11 @@ import { z } from "zod";
 import { registerBofaOffers } from "./bofa-offers";
 import { bofaPortalRequest } from "./bofa-portal-api";
 import { runInNewContext } from "node:vm";
+import { createMessageRouter } from "./core/message-router";
+import { createRuntimeStateStore } from "./core/runtime-state";
+import { createOfferOperationStore } from "./offer-operation-store";
+import { createOfferOperationCoordinator } from "./offer-operation-coordinator";
+import { providerRegistry } from "../providers/provider-registry";
 
 const mocks = vi.hoisted(() => ({
   generation: 1,
@@ -174,6 +179,29 @@ async function ready() {
   return state;
 }
 describe("BofA portal operation boundaries", () => {
+  it("returns BofA progress and saves offers when the general message listener is also registered", async()=>{
+    const unused=async()=>{throw new Error("Unexpected unrelated handler call");};
+    const store=createOfferOperationStore();
+    const general=createMessageRouter({providerRegistry,stateStore:createRuntimeStateStore(),
+      syncHandlers:{generic:unused,atmos:unused,"chase-v1":unused,amex:unused,capitalone:unused,hyatt:unused,bilt:unused},
+      cancelRun:unused,startSignIn:unused,signOut:unused,getCachedAuth:unused,recordConsent:unused,
+      pushToNextCard:unused,deleteFromNextCard:unused,offerOperations:store,
+      offerCoordinator:createOfferOperationCoordinator(store,async()=>null,async()=>true),
+      travelSyncCoordinator:{start:unused,getStatus:unused,cancel:unused,resetResult:unused}});
+    registerBofaOffers();
+    function broadcast(message:Record<string,unknown>) {
+      return new Promise<unknown>(resolve=>{
+        listener(message,{id:"fixture-extension"},resolve);
+        general(message,{id:"fixture-extension"},resolve);
+      }).then(raw=>replySchema.parse(raw));
+    }
+    const started=await broadcast({type:"BOFA_PORTAL_CHECK"});
+    expect(started.state?.phase).toBe("checking");
+    await vi.waitFor(async()=>expect((await broadcast({type:"BOFA_PORTAL_STATUS"})).state?.phase).toBe("ready"));
+    expect((await broadcast({type:"BOFA_PORTAL_STATUS"})).state?.offers).toHaveLength(2);
+    expect(fetch).toHaveBeenCalledWith(expect.stringContaining("/extension/portal-offers-sync"),expect.anything());
+  });
+
   it("uses the signed-in banking tab to open Deals without opening another sign-in tab", async () => {
     const bankTab = {
       ...(await chrome.tabs.get(7)),
