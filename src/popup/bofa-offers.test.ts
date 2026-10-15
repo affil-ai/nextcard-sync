@@ -168,6 +168,28 @@ it.each([true, false])(
   },
 );
 
+it("shows automatic cooldown progress and keeps cancellation available", async () => {
+  vi.useFakeTimers();
+  document.body.innerHTML = '<section id="bofaOffersCard"></section>';
+  const state: BofaPortalState = {
+    runId:"cooldown",phase:"checking",total:100,checked:0,discovered:24,added:0,
+    failed:0,offers:[],saveStatus:"saving",error:null,retryAt:Date.now()+45000,
+  };
+  const send = vi.fn(async () => ({ok:true,state}));
+  vi.stubGlobal("chrome",{runtime:{sendMessage:send}});
+  mountBofaOffers();
+  await vi.advanceTimersByTimeAsync(0);
+  expect(document.querySelector('[aria-live="polite"]')?.textContent).toBe("BofA is busy. Continuing automatically in 45s…");
+  expect(document.querySelector<HTMLButtonElement>("#bofaOffersDiscoverBtn")?.disabled).toBe(true);
+  await vi.advanceTimersByTimeAsync(3000);
+  expect(document.querySelector('[aria-live="polite"]')?.textContent).toContain("42s");
+  const cancel = Array.from(document.querySelectorAll("button")).find(b=>b.textContent==="Cancel");
+  expect(cancel?.hidden).toBe(false);
+  cancel?.click();
+  await vi.advanceTimersByTimeAsync(0);
+  expect(send).toHaveBeenCalledWith({type:"BOFA_PORTAL_CANCEL"});
+});
+
 it("offers a sign-in recovery action for an expired issuer session", async () => {
   vi.useFakeTimers();
   document.body.innerHTML = '<section id="bofaOffersCard"></section>';

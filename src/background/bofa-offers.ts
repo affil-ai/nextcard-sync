@@ -81,7 +81,7 @@ export function registerBofaOffers(options: { isOtherBusy?: () => Promise<boolea
       );
   }
   async function persist(op: Operation) {
-    if (!(await scopeCurrent(op.scope, op.generation))) return;
+    if (!(await scopeCurrent(op.scope, op.generation)) || operation !== op) return;
     await chrome.storage.local.set({
       [STATE_KEY]: {
         state: op.state,
@@ -95,11 +95,16 @@ export function registerBofaOffers(options: { isOtherBusy?: () => Promise<boolea
     kind: "search" | "details" | "activate",
     input: number | string,
   ) {
-    for (let attempt = 0; attempt < 3; attempt++) {
+    for (let attempt = 0; attempt < 6; attempt++) {
       await requireCurrent(op);
       if (kind !== "activate") {
         while (op.readPausedUntil > Date.now()) {
           await new Promise<void>(resolve => setTimeout(resolve, op.readPausedUntil - Date.now()));
+          await requireCurrent(op);
+        }
+        if (op.state.retryAt !== undefined) {
+          delete op.state.retryAt;
+          await persist(op);
           await requireCurrent(op);
         }
       }
@@ -130,16 +135,20 @@ export function registerBofaOffers(options: { isOtherBusy?: () => Promise<boolea
         .parse(results[0]?.result);
       if (result.portalId !== op.portalId)
         throw new BofaRequestError("Your BofA portal account changed. Check offers again.");
-      if (kind !== "activate" && (result.status === 429 || result.status === 503)) {
-        op.readConcurrency = 4;
-        if (attempt < 2 && (result.retryAfterMs ?? 0) <= 30000) {
+      if (kind !== "activate" && [408, 429, 500, 502, 503, 504].includes(result.status)) {
+        op.readConcurrency = Math.max(1, Math.floor(op.readConcurrency / 2));
+        if (attempt < 5 && (result.retryAfterMs ?? 0) <= 60000) {
           op.readPausedUntil = Math.max(
             op.readPausedUntil,
-            Date.now() + Math.max(result.retryAfterMs ?? 0, 1000 * 2 ** attempt),
+            Date.now() + Math.max(result.retryAfterMs ?? 0, 2000 * 2 ** attempt),
           );
+          op.state.retryAt = op.readPausedUntil;
+          await persist(op);
           continue;
         }
-        throw new BofaRequestError("BofA is limiting requests. Wait before checking again.");
+        throw new BofaRequestError(result.status === 429
+          ? "BofA is still limiting requests. Your saved offers are available. Try again later."
+          : "BofA is temporarily unavailable. Your saved offers are available. Try again later.");
       }
       if (result.status !== 200)
         throw new BofaRequestError(
@@ -343,6 +352,7 @@ export function registerBofaOffers(options: { isOtherBusy?: () => Promise<boolea
       if (pendingSave) await pendingSave;
       await requireCurrent(op);
       op.state.phase = "ready";
+      delete op.state.retryAt;
       if (op.state.saveStatus !== "queued_for_retry")
         op.state.saveStatus = "saved";
       if (op.state.failed)
@@ -352,6 +362,7 @@ export function registerBofaOffers(options: { isOtherBusy?: () => Promise<boolea
     } catch (error) {
       if (pendingSave) await pendingSave.catch(() => {});
       op.state.phase = op.cancelled ? "cancelled" : "failed";
+      delete op.state.retryAt;
       op.state.error =
         error instanceof Error ? error.message : "Could not check BofA offers.";
       await persist(op);
@@ -674,6 +685,7 @@ export function registerBofaOffers(options: { isOtherBusy?: () => Promise<boolea
         if (type === "BOFA_PORTAL_CANCEL" && operation) {
           operation.cancelled = true;
           operation.state.phase = "cancelled";
+          delete operation.state.retryAt;
           await persist(operation);
         }
         if (operation) {

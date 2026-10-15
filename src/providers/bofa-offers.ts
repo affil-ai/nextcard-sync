@@ -208,6 +208,7 @@ export const bofaPortalStateSchema = z.object({
   offers: z.array(portalOfferSchema),
   error: z.string().nullable(),
   saveStatus: z.enum(["saving", "saved", "queued_for_retry", "failed"]),
+  retryAt: z.number().optional(),
 });
 export type BofaPortalState = z.infer<typeof bofaPortalStateSchema>;
 export const bofaPortalBatchSchema = z.object({

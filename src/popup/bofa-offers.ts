@@ -185,15 +185,17 @@ export function mountBofaOffers(options: { onStateChange?: (state: BofaOffersSet
       : needsSignIn
         ? "Sign in to continue checking your offers."
       : state?.phase === "checking"
-        ? state.checked
+        ? state.retryAt && state.retryAt > Date.now()
+          ? `BofA is busy. Continuing automatically in ${Math.ceil((state.retryAt - Date.now()) / 1000)}s…`
+          : state.checked
           ? `Reading ${current.toLocaleString()} of ${state.total.toLocaleString()} offers…`
           : `Finding offers${current ? ` · ${current.toLocaleString()} found` : ""}…`
         : state?.phase === "activating"
           ? activationTotal ? `Activating offers · ${state.added} of ${activationTotal} activated` : `Activating offers · ${state.added} activated`
           : state?.phase === "completed" && !reviewingRemaining
             ? `${state.added} offer${state.added === 1 ? "" : "s"} activated`
-            : state?.phase === "failed" ? "The check couldn't finish. Refresh to try again."
-          : state?.phase === "cancelled" ? "Check stopped. Refresh to continue."
+            : state?.phase === "failed" ? "The check couldn't finish."
+          : state?.phase === "cancelled" ? "Check stopped."
           : count
               ? `${count} offer${count === 1 ? "" : "s"} available to activate`
               : state?.offers.length

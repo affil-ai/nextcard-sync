@@ -57,6 +57,8 @@ const replySchema = z.object({
       phase: z.string(),
       reviewFinished: z.boolean().optional(),
       added: z.number(),
+      discovered: z.number().optional(),
+      retryAt: z.number().optional(),
       offers: z.array(
         z.object({ issuerOfferId: z.string(), action: z.string() }),
       ),
@@ -473,10 +475,95 @@ describe("BofA portal operation boundaries", () => {
       expect(attempts).toBe(1);
       await vi.advanceTimersByTimeAsync(1999);
       expect(attempts).toBe(1);
-      await vi.advanceTimersByTimeAsync(2001);
+      await vi.advanceTimersByTimeAsync(4001);
       expect(attempts).toBe(3);
       expect((await send({ type: "BOFA_PORTAL_STATUS" })).state?.phase).toBe("ready");
       expect((await send({ type: "BOFA_PORTAL_STATUS" })).state?.offers).toHaveLength(2);
+    } finally { vi.useRealTimers(); }
+  });
+
+  it("resumes a rate-limited discovery page after longer cooldowns without restarting earlier pages", async () => {
+    vi.useFakeTimers();
+    const bridge = execute.getMockImplementation();
+    let limitedAttempts = 0;
+    execute.mockImplementation(async args => {
+      const [kind, , offset] = args.args;
+      if (kind !== "search" || typeof offset !== "number") return bridge?.(args);
+      if (offset === 24 && ++limitedAttempts < 4)
+        return [{ result: { portalId, status: 429, data: null, retryAfterMs: 45000 } }];
+      return [{ result: { portalId, status: 200, data: {
+        total: 48, offers: Array.from({length:24},(_,i)=>({offer_id:String(offset+i+1)})),
+      } } }];
+    });
+    try {
+      await send({type:"BOFA_PORTAL_CHECK"});
+      await vi.advanceTimersByTimeAsync(0);
+      const paused = (await send({type:"BOFA_PORTAL_STATUS"})).state;
+      expect(paused).toMatchObject({phase:"checking",discovered:24,retryAt:Date.now()+45000});
+      const runId = paused?.runId;
+      await vi.advanceTimersByTimeAsync(44999);
+      expect(limitedAttempts).toBe(1);
+      await vi.advanceTimersByTimeAsync(90001);
+      const finished = (await send({type:"BOFA_PORTAL_STATUS"})).state;
+      expect(finished).toMatchObject({runId,phase:"ready",discovered:48});
+      expect(finished?.retryAt).toBeUndefined();
+      expect(finished?.offers).toHaveLength(48);
+      expect(execute.mock.calls.filter(([a])=>a.args[0]==="search" && a.args[2]===0)).toHaveLength(1);
+      expect(limitedAttempts).toBe(4);
+    } finally { vi.useRealTimers(); }
+  });
+
+  it.each(["cancel", "account change"])("does not resume a paused scan after %s", async reason => {
+    vi.useFakeTimers();
+    const bridge = execute.getMockImplementation();
+    execute.mockImplementation(async args => args.args[0] === "search"
+      ? [{result:{portalId,status:429,data:null,retryAfterMs:45000}}]
+      : bridge?.(args));
+    try {
+      await send({type:"BOFA_PORTAL_CHECK"});
+      await vi.advanceTimersByTimeAsync(0);
+      expect((await send({type:"BOFA_PORTAL_STATUS"})).state?.phase).toBe("checking");
+      if (reason === "cancel") await send({type:"BOFA_PORTAL_CANCEL"});
+      else mocks.generation++;
+      await vi.advanceTimersByTimeAsync(60000);
+      expect(execute.mock.calls.filter(([a])=>a.args[0]==="search")).toHaveLength(1);
+      expect((await send({type:"BOFA_PORTAL_STATUS"})).state?.phase ?? null).toBe(reason === "cancel" ? "cancelled" : null);
+    } finally { vi.useRealTimers(); }
+  });
+
+  it("does not let a cancelled cooldown overwrite a newer completed run", async () => {
+    vi.useFakeTimers();
+    const bridge = execute.getMockImplementation();
+    let limited = true;
+    execute.mockImplementation(async args => limited && args.args[0] === "search"
+      ? [{result:{portalId,status:429,data:null,retryAfterMs:45000}}]
+      : bridge?.(args));
+    try {
+      await send({type:"BOFA_PORTAL_CHECK"});
+      await vi.advanceTimersByTimeAsync(0);
+      await send({type:"BOFA_PORTAL_CANCEL"});
+      limited = false;
+      const next = await send({type:"BOFA_PORTAL_CHECK"});
+      await vi.advanceTimersByTimeAsync(60000);
+      const saved = z.object({bofa_portal_operation:z.object({state:z.object({runId:z.string(),phase:z.string()})})})
+        .parse(await chrome.storage.local.get("bofa_portal_operation"));
+      expect(saved.bofa_portal_operation.state).toMatchObject({runId:next.state?.runId,phase:"ready"});
+    } finally { vi.useRealTimers(); }
+  });
+
+  it("bounds automatic retries if the issuer remains unavailable", async () => {
+    vi.useFakeTimers();
+    const bridge = execute.getMockImplementation();
+    execute.mockImplementation(async args => args.args[0] === "search"
+      ? [{result:{portalId,status:503,data:null}}]
+      : bridge?.(args));
+    try {
+      await send({type:"BOFA_PORTAL_CHECK"});
+      await vi.advanceTimersByTimeAsync(62000);
+      const state = (await send({type:"BOFA_PORTAL_STATUS"})).state;
+      expect(state?.phase).toBe("failed");
+      expect(state?.retryAt).toBeUndefined();
+      expect(execute.mock.calls.filter(([a])=>a.args[0]==="search")).toHaveLength(6);
     } finally { vi.useRealTimers(); }
   });
 
