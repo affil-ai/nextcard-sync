@@ -45,6 +45,7 @@ export const portalActionSchema = z.enum([
 ]);
 export type BofaOffer = z.infer<typeof bofaOfferSchema>;
 export const portalOfferSchema = z.object({
+  offerType: z.enum(["CARD_LINKED", "AFFILIATE", "MERCHANT_FULFILLED"]).optional(),
   issuerOfferId: z.string(),
   merchantName: z.string(),
   offerValue: z.string().nullable(),
@@ -114,6 +115,7 @@ export function normalizeBofaOffer(offer: BofaOffer): PortalOffer {
       ? `${offer.reward_type === "PERCENTAGE" ? `${amount}%` : `$${amount}`} cash back`
       : offer.headline;
   return {
+    offerType: offer.type,
     issuerOfferId: offer.offer_id,
     merchantName: offer.merchant_name,
     offerValue: value,

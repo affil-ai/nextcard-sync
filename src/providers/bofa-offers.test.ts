@@ -53,6 +53,7 @@ describe("BofA redemption and discovery", () => {
     );
     expect(discount).toMatchObject({
       action: "merchant_deal",
+      offerType: "MERCHANT_FULFILLED",
       offerValue: "Save 5%-50%",
       rewardAmount: null,
       rewardType: null,
