@@ -30,7 +30,9 @@ it("keeps sign-in interactive despite a saved extracting state and waits for rea
   expect(detectLoginState()).toBe("unknown");
   document.body.innerHTML = '<span data-locator="points-balance" hidden>500</span>';
   expect(detectLoginState()).toBe("unknown");
-  document.body.innerHTML = '<span data-locator="points-balance">0</span>';
+  document.body.innerHTML = '<span data-locator="points-balance" hidden>121,000</span><span data-locator="points-balance">121,000</span>';
+  expect(detectLoginState()).toBe("logged_in");
+  document.body.innerHTML = '<span data-locator="points-balance" hidden>0</span><span data-locator="points-balance">0</span>';
   expect(detectLoginState()).toBe("logged_in");
   document.body.insertAdjacentHTML("beforeend", '<input type="email">');
   expect(detectLoginState()).toBe("logged_out");

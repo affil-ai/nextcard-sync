@@ -21,11 +21,11 @@ export function detectLoginState(): LoginState {
   if (/\/(sign-in|login|signin)(?:\/|$)/.test(path)) return "logged_out";
   if (isMfaPage()) return "mfa_challenge";
 
-  const signIn = document.querySelector('input[type="email"], input[type="password"]');
-  if (signIn && signIn.getClientRects().length > 0) return "logged_out";
+  const signInFields = document.querySelectorAll('input[type="email"], input[type="password"]');
+  if (Array.from(signInFields).some(field => field.getClientRects().length > 0)) return "logged_out";
   if (path.startsWith("/profile/") || path.startsWith("/loyalty/")) {
-    const balance = document.querySelector('[data-locator="points-balance"]');
-    if (balance && balance.getClientRects().length > 0 && parseIntSafe(balance.textContent ?? "") !== null) {
+    const balances = document.querySelectorAll('[data-locator="points-balance"]');
+    if (Array.from(balances).some(balance => balance.getClientRects().length > 0 && parseIntSafe(balance.textContent ?? "") !== null)) {
       return "logged_in";
     }
   }
