@@ -2923,3 +2923,24 @@
   order: 3;
   flex-basis: 100%;
 }
+
+.rewards-sync-stop {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: 1px solid #e7c9c3;
+  border-radius: 8px;
+  background: #fff7f5;
+  color: #a73227;
+  cursor: pointer;
+}
+.rewards-sync-stop:hover { background: #fce9e4; }
+.rewards-sync-stop:focus-visible { outline: 2px solid #a73227; outline-offset: 2px; }
+.provider-card-row { position: relative; }
+.provider-card-row .provider-card { padding-right: 58px; }
+.provider-card-row > .rewards-sync-stop { position: absolute; right: 12px; top: 50%; transform: translateY(-50%); }
+.provider-card-row .provider-arrow { display: none; }

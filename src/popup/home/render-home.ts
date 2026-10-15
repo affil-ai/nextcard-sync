@@ -64,6 +64,20 @@ export function createHomeRenderer(options: {
 }) {
   let lastHomeSnapshot = "";
 
+  function createStopButton(providerId: ProviderId) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "rewards-sync-stop";
+    button.title = "Stop sync";
+    button.setAttribute("aria-label", `Stop ${providerRegistry[providerId].name} sync`);
+    button.innerHTML = '<svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden="true"><rect x="5" y="5" width="14" height="14" rx="2" /></svg>';
+    button.addEventListener("click", (event) => {
+      event.stopPropagation();
+      options.onSummaryCancelRequested(providerId);
+    });
+    return button;
+  }
+
   return (allStates: Record<ProviderId, ProviderSyncState>) => {
     const firstSyncCompleted = options.getFirstSyncCompleted();
     const previewRewardsGuide = options.getRewardsGuidePreview?.() ?? false;
@@ -220,6 +234,7 @@ export function createHomeRenderer(options: {
           </div>
         `;
 
+        if (isSyncing) card.querySelector(".rewards-summary-header")?.appendChild(createStopButton(summary.provider));
         card
           .querySelector<HTMLButtonElement>(".rewards-summary-primary")
           ?.addEventListener("click", () => options.onSummarySelected(summary));
@@ -303,7 +318,15 @@ export function createHomeRenderer(options: {
           card.classList.add("tour-target");
         }
 
-        options.providerList.appendChild(card);
+        if (isSyncing) {
+          const row = document.createElement("div");
+          row.className = "provider-card-row";
+          if (group.label === "Banks") row.classList.add("tour-target");
+          row.append(card, createStopButton(providerId));
+          options.providerList.appendChild(row);
+        } else {
+          options.providerList.appendChild(card);
+        }
       }
     }
 
