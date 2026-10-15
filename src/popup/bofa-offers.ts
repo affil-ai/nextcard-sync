@@ -193,7 +193,7 @@ export function mountBofaOffers() {
       (state?.saveStatus === "queued_for_retry"
         ? "Some offers are waiting to sync. Refresh to retry."
         : state?.failed && state.phase === "ready"
-          ? `${state.failed} offers couldn't be checked. Refresh to retry.`
+          ? `${state.failed} offer${state.failed === 1 ? "" : "s"} couldn't be read. Your saved offers are still available.`
           : state?.error) ??
       "";
     if (needsSignIn)

@@ -296,7 +296,7 @@ export function registerBofaOffers() {
       if (op.state.saveStatus !== "queued_for_retry")
         op.state.saveStatus = "saved";
       if (op.state.failed)
-        op.state.error = `${op.state.failed} offers could not be read. Saved offers remain available. Check again to retry.`;
+        op.state.error = `${op.state.failed} offer${op.state.failed === 1 ? "" : "s"} could not be read. Your saved offers are still available.`;
       await persist(op);
       await pullOfferUrlCache(op.scope);
     } catch (error) {
