@@ -568,6 +568,7 @@ export function createGenericSyncHandlers(options: GenericSyncDeps) {
     const closed = tabClosedSignal(tabId);
     const cancelled = options.stateStore.createRunCancelSignal(providerId, attemptId);
 
+    let cleanupWait = () => {};
     return Promise.race([
       closed.promise,
       cancelled.promise,
@@ -576,19 +577,38 @@ export function createGenericSyncHandlers(options: GenericSyncDeps) {
           cleanup();
           reject(new Error(`Timed out waiting for ${definition.name} login`));
         }, timeoutMs);
+        let waitFinished = false;
         let extractionTriggered = false;
+        let extractionTimer: ReturnType<typeof setTimeout> | null = null;
         let loginCheckInFlight = false;
         let redirectTimeout: ReturnType<typeof setTimeout> | null = null;
 
-        function handleAccountArrival(arrivalTabId: number) {
-          if (extractionTriggered) return;
+        async function handleAccountArrival(arrivalTabId: number) {
+          if (waitFinished || extractionTriggered) return;
           extractionTriggered = true;
+          if (providerId === "capitalone") {
+            try {
+              const tab = await chrome.tabs.get(arrivalTabId);
+              if (waitFinished) return;
+              // Only leave a card/rewards landing page after its content script
+              // has verified authentication. Never navigate a challenge page.
+              if (new URL(tab.url ?? definition.syncUrl).pathname.toLowerCase() !== "/accountsummary") {
+                options.extensionNavigatingTabs.add(arrivalTabId);
+                extractionTriggered = false;
+                await chrome.tabs.update(arrivalTabId, { url: definition.syncUrl });
+                return;
+              }
+            } catch (error) {
+              if (!waitFinished) { cleanup(); reject(error); }
+              return;
+            }
+          }
           options.extensionNavigatingTabs.delete(arrivalTabId);
           options.stateStore.recordRunTab(providerId, attemptId, arrivalTabId, {
             owned: arrivalTabId === tabId,
           });
-          options.stateStore.updateProvider(providerId, { status: "extracting" });
-          setTimeout(() => {
+          options.stateStore.updateProvider(providerId, { status: "extracting", progressMessage: `Reading ${definition.name} rewards...` });
+          extractionTimer = setTimeout(() => {
             void triggerExtraction({
               providerId,
               attemptId,
@@ -626,6 +646,7 @@ export function createGenericSyncHandlers(options: GenericSyncDeps) {
             loginCheckInFlight = true;
             try {
               const loginState = await getTabLoginState(updatedTabId);
+              if (waitFinished) return;
               if (loginState === "logged_in") {
                 redirectPending = false;
                 handleAccountArrival(updatedTabId);
@@ -643,6 +664,7 @@ export function createGenericSyncHandlers(options: GenericSyncDeps) {
                 });
               }
             } catch {
+              if (waitFinished) return;
               options.stateStore.updateProvider(providerId, {
                 status: "detecting_login",
                 progressMessage: `Checking ${definition.name} sign-in...`,
@@ -651,7 +673,8 @@ export function createGenericSyncHandlers(options: GenericSyncDeps) {
               loginCheckInFlight = false;
             }
           } else if (
-            definition.accountUrl
+            providerId !== "capitalone"
+            && definition.accountUrl
             && !redirectPending
             && !url.includes("signin")
             && !url.includes("login")
@@ -734,6 +757,16 @@ export function createGenericSyncHandlers(options: GenericSyncDeps) {
             && message.attemptId == null
             && isExpectedTab;
 
+          if (isExpectedTab && message.provider === providerId &&
+              (message.attemptId == null || message.attemptId === attemptId) &&
+              ((message.type === "LOGIN_STATE" && (message.state === "mfa_challenge" || message.state === "logged_out")) ||
+                (message.type === "STATUS_UPDATE" && message.status === "waiting_for_login"))) {
+            if (extractionTimer) clearTimeout(extractionTimer);
+            extractionTimer = null;
+            extractionTriggered = false;
+            options.stateStore.updateProvider(providerId, { status: "waiting_for_login" });
+            return;
+          }
           if (
             message.state === "logged_in"
             && (isCurrentAttemptLoginState || isInitialPageLoginState)
@@ -743,7 +776,9 @@ export function createGenericSyncHandlers(options: GenericSyncDeps) {
         }
 
         function cleanup() {
+          waitFinished = true;
           clearTimeout(timeout);
+          if (extractionTimer) clearTimeout(extractionTimer);
           if (redirectTimeout) {
             clearTimeout(redirectTimeout);
             redirectTimeout = null;
@@ -754,6 +789,7 @@ export function createGenericSyncHandlers(options: GenericSyncDeps) {
           chrome.runtime.onMessage.removeListener(onMessage);
         }
 
+        cleanupWait = cleanup;
         chrome.tabs.onUpdated.addListener(onTabUpdated);
         chrome.runtime.onMessage.addListener(onMessage);
 
@@ -766,7 +802,7 @@ export function createGenericSyncHandlers(options: GenericSyncDeps) {
           })
           .catch(() => {});
       }),
-    ]);
+    ]).finally(() => cleanupWait());
   }
 
   async function startSync(providerId: ProviderId) {

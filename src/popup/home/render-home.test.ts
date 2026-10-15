@@ -1,4 +1,6 @@
-import { describe, expect, it } from "vitest";
+// @vitest-environment jsdom
+import { readFileSync } from "node:fs";
+import { describe, expect, it, vi } from "vitest";
 
 import type {
   ExtensionRewardsSummary,
@@ -77,4 +79,43 @@ describe("getConnectedTravelProviderIds", () => {
       "aa",
     ]);
   });
+});
+
+
+it("lets a saved program cancel its active sync directly from the summary card", async () => {
+  document.documentElement.innerHTML = readFileSync(`${process.cwd()}/src/popup/popup.html`, "utf8");
+  vi.stubGlobal("chrome", { runtime: { getURL: (path: string) => path }, storage: { local: { set: vi.fn() } } });
+  try {
+    const { createHomeRenderer } = await import("./render-home");
+    const { createRuntimeStateStore } = await import("../../background/core/runtime-state");
+    const states = createRuntimeStateStore().states;
+    states.capitalone = { ...states.capitalone, ...syncedState, status: "waiting_for_login" };
+    const onSummaryCancelRequested = vi.fn();
+    const onSummarySyncRequested = vi.fn();
+    const providerList = document.createElement("div");
+    const render = createHomeRenderer({
+      providerList, tourTooltip: document.createElement("div"),
+      getFirstSyncCompleted: () => true, getExtensionProfile: () => null,
+      getRewardsSummaries: () => [{ ...summary, provider: "capitalone", programName: "Capital One Miles" }],
+      getSyncAllState: () => ({ status: "idle", providerIds: [], currentProviderId: null, processedCount: 0, failedCount: 0, startedAt: null, updatedAt: null }),
+      markFirstSyncCompleted() {}, onProviderSelected() {}, onLockedProviderSelected() {},
+      onSummarySelected() {}, onSummarySyncRequested, onSummaryCancelRequested,
+      onSyncAllRequested() {}, onSyncAllCancelRequested() {},
+    });
+    render(states);
+    const button = providerList.querySelector(".rewards-summary-secondary");
+    if (!(button instanceof HTMLButtonElement)) throw new Error("Missing summary action");
+    expect(button.disabled).toBe(false);
+    expect(button.textContent).toBe("Cancel");
+    button.click();
+    expect(onSummaryCancelRequested).toHaveBeenCalledWith("capitalone");
+    expect(onSummarySyncRequested).not.toHaveBeenCalled();
+    states.capitalone.status = "done";
+    render(states);
+    const retry = providerList.querySelector(".rewards-summary-secondary");
+    if (!(retry instanceof HTMLButtonElement)) throw new Error("Missing sync action");
+    expect(retry.textContent).toBe("Sync again");
+    retry.click();
+    expect(onSummarySyncRequested).toHaveBeenCalledWith("capitalone");
+  } finally { vi.unstubAllGlobals(); }
 });

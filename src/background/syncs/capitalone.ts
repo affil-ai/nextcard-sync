@@ -395,58 +395,13 @@ export function createCapitalOneSync(options: CapitalOneSyncDeps) {
       });
       await waitForTabLoad(tabId, 30000);
 
-      const currentTab = await chrome.tabs.get(tabId);
-      const landingUrl = currentTab.url ?? "";
-
-      const isLoggedIn =
-        landingUrl.includes("myaccounts.capitalone.com/accountSummary")
-        || landingUrl.includes("myaccounts.capitalone.com/Card/")
-        || landingUrl.includes("myaccounts.capitalone.com/rewards");
-      const isLogin =
-        landingUrl.includes("verified.capitalone.com")
-        || landingUrl.includes("identity-management");
-
-      let summaryResult: Record<string, unknown>;
-      if (isLoggedIn) {
-        setCapitalOneProgress("Reading Capital One rewards...");
-
-        if (!landingUrl.includes("accountSummary")) {
-          setCapitalOneProgress("Opening Capital One account summary...");
-          await navigateAndWait(
-            tabId,
-            definition.syncUrl,
-            options.extensionNavigatingTabs,
-          );
-        }
-
-        await new Promise((resolve) => setTimeout(resolve, 3000));
-        const extractionMessage = waitForCapitalOneMessage(
-          attemptId,
-          "EXTRACTION_DONE",
-        );
-        setCapitalOneProgress("Reading Capital One rewards...");
-        await triggerExtraction({
-          providerId: "capitalone",
-          attemptId,
-          tabId,
-          assertRunActive: options.stateStore.assertRunActive,
-        });
-        summaryResult = await extractionMessage.promise;
-      } else if (isLogin) {
-        setCapitalOneProgress("Waiting for Capital One sign-in...", "waiting_for_login");
-        summaryResult = await options.waitForGenericLoginAndExtract(
-          "capitalone",
-          attemptId,
-          tabId,
-        );
-      } else {
-        setCapitalOneProgress("Waiting for Capital One sign-in...", "waiting_for_login");
-        summaryResult = await options.waitForGenericLoginAndExtract(
-          "capitalone",
-          attemptId,
-          tabId,
-        );
-      }
+      // The account URL can appear before authentication and 2FA have finished.
+      // Wait for the content script's authenticated page evidence instead.
+      setCapitalOneProgress("Complete Capital One sign-in and any security verification. We'll wait here.", "waiting_for_login");
+      let summaryResult = await options.waitForGenericLoginAndExtract(
+        "capitalone", attemptId, tabId, 10 * 60_000,
+      );
+      options.stateStore.assertRunActive("capitalone", attemptId);
 
       if (getCapitalOneTotalRewards(summaryResult) == null) {
         try {

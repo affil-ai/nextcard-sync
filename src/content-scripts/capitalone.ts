@@ -13,7 +13,7 @@
 import type { LoginState } from "../lib/types";
 import { createContentScriptRunControl } from "../lib/content-script-run-control";
 import { showOverlay, updateOverlay, updateOverlayProgress } from "../lib/overlay";
-import { createLoginStateMonitor } from "../lib/login-state-monitor";
+import { createLoginStateMonitor, isMfaPage } from "../lib/login-state-monitor";
 import {
   isLikelyCapitalOneCardTile,
   parseCapitalOneRewardsSummary,
@@ -26,25 +26,30 @@ const runControl = createContentScriptRunControl("capitalone");
 
 // ── Login detection ──────────────────────────────────────────
 
-function detectLoginState(): LoginState {
-  const url = window.location.href.toLowerCase();
-
-  if (
-    url.includes("myaccounts.capitalone.com/accountsummary") ||
-    url.includes("myaccounts.capitalone.com/card/") ||
-    url.includes("myaccounts.capitalone.com/rewards")
-  ) {
-    return "logged_in";
-  }
-
-  if (
-    url.includes("verified.capitalone.com") ||
-    url.includes("capitalone.com/identity-management")
-  ) {
+export function detectLoginState(): LoginState {
+  const url = new URL(window.location.href);
+  if (isMfaPage()) return "mfa_challenge";
+  if (url.hostname === "verified.capitalone.com" || url.pathname.includes("identity-management")) {
     return "logged_out";
   }
-
-  return "unknown";
+  if (url.hostname !== "myaccounts.capitalone.com") return "unknown";
+  const pageText = document.body?.innerText ?? document.body?.textContent ?? "";
+  if (/we (?:can['’]t|cannot) access your account information|unable to load your accounts/i.test(pageText)) return "unknown";
+  const visible = (element: Element) => element.getClientRects().length > 0 &&
+    getComputedStyle(element).visibility !== "hidden";
+  // Challenge screens can share the account summary URL with signed-in pages.
+  const challenges = document.querySelectorAll("form, [role='dialog'], main, h1, h2");
+  for (const element of challenges) {
+    if (visible(element) && /verify (?:it's you|your identity)|enter (?:the |your )?(?:verification |security |one.time )?code|send (?:me |a )?(?:verification |security )?code|check your (?:phone|device)|two.step verification/i.test(element.textContent ?? "")) {
+      return "mfa_challenge";
+    }
+  }
+  if (Array.from(document.querySelectorAll("input[type='password']")).some(visible)) return "logged_out";
+  const content = document.querySelectorAll(
+    "c1-ease-account-tile .primary-detail__identity__account-number, .account-tile .primary-detail__identity__account-number, c1-ease-rewards-tile-container, .loyalty-tile, .c1-ease-card-rewards-display__balance, .c1-cc-rewards-benefit-tile"
+  );
+  return Array.from(content).some((element) => visible(element) && Boolean(element.textContent?.trim()))
+    ? "logged_in" : "unknown";
 }
 
 // ── Wait for content to render ───────────────────────────────
@@ -278,8 +283,8 @@ async function runExtraction(attemptId: string) {
   const loginState = detectLoginState();
   await runControl.sendMessage(attemptId, { type: "LOGIN_STATE", state: loginState });
 
-  if (loginState === "logged_out" || loginState === "mfa_challenge") {
-    showOverlay("waiting_for_login", "capitalone");
+  if (loginState !== "logged_in") {
+    showOverlay(loginState === "mfa_challenge" ? "mfa_challenge" : "waiting_for_login", "capitalone");
     await runControl.sendMessage(attemptId, {
       type: "STATUS_UPDATE",
       status: "waiting_for_login",
@@ -374,6 +379,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     sendResponse({ ok: true });
   }
   if (message.type === "GET_LOGIN_STATE") {
+    monitor.check();
     sendResponse({ state: monitor.getState() });
   }
   return true;
@@ -398,12 +404,12 @@ monitor.start();
 const initialState = monitor.getState();
 chrome.runtime.sendMessage({ type: "GET_PROVIDER_STATUS", provider: "capitalone" }, (r) => {
   const s = r?.status;
-  if (s === "extracting" || (s === "detecting_login" && initialState === "logged_in")) {
+  if ((s === "extracting" || s === "detecting_login" || s === "waiting_for_login") && initialState === "logged_in") {
     syncActive = true;
     showOverlay("extracting", "capitalone");
     if (typeof r?.progressMessage === "string") updateOverlayProgress(r.progressMessage);
-  } else if ((s === "waiting_for_login" || s === "detecting_login") && initialState !== "logged_in") {
+  } else if (s === "waiting_for_login" || s === "detecting_login" || s === "extracting") {
     syncActive = true;
-    showOverlay("waiting_for_login", "capitalone");
+    showOverlay(initialState === "mfa_challenge" ? "mfa_challenge" : "waiting_for_login", "capitalone");
   }
 });

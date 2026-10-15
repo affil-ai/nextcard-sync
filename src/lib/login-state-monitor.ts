@@ -25,7 +25,7 @@ const MFA_INPUT_KEYWORDS = [
   "security-code", "securitycode", "mfa", "2fa", "passcode",
 ];
 
-function isMfaPage(): boolean {
+export function isMfaPage(): boolean {
   const url = window.location.href.toLowerCase();
   if (MFA_URL_PATTERNS.some((p) => url.includes(p))) return true;
 

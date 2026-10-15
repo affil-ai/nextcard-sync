@@ -3968,6 +3968,10 @@ const renderHome = createHomeRenderer({
     resetRewardsSyncAllState();
     void requestSync(providerId);
   },
+  onSummaryCancelRequested: (providerId) => {
+    void chrome.runtime.sendMessage({ type: "CANCEL_SYNC", provider: providerId })
+      .then(() => refreshPopupState());
+  },
   onSyncAllRequested: requestRewardsSyncAll,
   onSyncAllCancelRequested: () => {
     void cancelRewardsSyncAll();

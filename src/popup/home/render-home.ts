@@ -58,6 +58,7 @@ export function createHomeRenderer(options: {
   onLockedProviderSelected: (providerId: ProviderId) => void;
   onSummarySelected: (summary: ExtensionRewardsSummary) => void;
   onSummarySyncRequested: (providerId: ProviderId) => void;
+  onSummaryCancelRequested: (providerId: ProviderId) => void;
   onSyncAllRequested: (providerIds: ProviderId[]) => void;
   onSyncAllCancelRequested: () => void;
 }) {
@@ -211,11 +212,11 @@ export function createHomeRenderer(options: {
             ${balance ? `<strong class="rewards-summary-balance" aria-label="Balance ${escapeHtml(balance)}">${escapeHtml(balance)}</strong>` : ""}
             ${summary.statusLevel ? `<span class="rewards-summary-status">${escapeHtml(summary.statusLevel)}</span>` : ""}
             ${meta ? `<div class="rewards-summary-meta">${escapeHtml(meta)}</div>` : ""}
-            <div class="provider-last-sync">${isSyncing ? "Syncing now…" : `Synced ${lastSync ?? "recently"}`}</div>
+            <div class="provider-last-sync">${isSyncing ? state?.status === "waiting_for_login" ? "Waiting for sign-in and verification" : "Syncing now…" : `Synced ${lastSync ?? "recently"}`}</div>
           </div>
           <div class="rewards-summary-actions">
             <button class="rewards-summary-primary" type="button">View details <span aria-hidden="true">→</span></button>
-            <button class="rewards-summary-secondary" type="button"${isSyncing || isSyncAllRunning ? " disabled" : ""}>${isSyncing ? "Syncing…" : hasError ? "Try again" : "Sync again"}</button>
+            <button class="rewards-summary-secondary" type="button"${!isSyncing && isSyncAllRunning ? " disabled" : ""}>${isSyncing ? "Cancel" : hasError ? "Try again" : "Sync again"}</button>
           </div>
         `;
 
@@ -225,7 +226,9 @@ export function createHomeRenderer(options: {
         card
           .querySelector<HTMLButtonElement>(".rewards-summary-secondary")
           ?.addEventListener("click", () =>
-            options.onSummarySyncRequested(summary.provider)
+            isSyncing
+              ? options.onSummaryCancelRequested(summary.provider)
+              : options.onSummarySyncRequested(summary.provider)
           );
         options.providerList.appendChild(card);
       }

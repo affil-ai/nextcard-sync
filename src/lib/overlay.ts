@@ -444,6 +444,11 @@ const OVERLAY_STYLES = /* css */ `
     border-radius: 4px;
   }
 
+  .nc-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+  .nc-cancel-button { appearance: none; border: 1px solid #d0c8c0; border-radius: 8px; padding: 8px 12px; background: #fff; color: #342019; font: inherit; font-size: 12px; cursor: pointer; }
+  .nc-cancel-button:focus-visible { outline: 2px solid #ae752c; outline-offset: 2px; }
+  .nc-cancel-button:disabled { opacity: .6; cursor: wait; }
+  .nc-cancel-error { color: #a51d25; font-size: 12px; }
   .nc-compact-status {
     display: none;
     align-items: center;
@@ -487,6 +492,9 @@ function buildBanner(status: OverlayStatus): string {
     extractingHtml = `<div class="nc-progress"><div class="nc-progress-bar"></div></div>`;
   }
 
+  const cancelHtml = knownProvider && (status === "extracting" || isLoginStatus(status))
+    ? `<div class="nc-actions"><button class="nc-cancel-button" type="button">Cancel sync</button><span class="nc-cancel-error" role="alert" hidden></span></div>`
+    : "";
   const logoHtml = `<img class="nc-logo" src="${ICON_URL}" alt="nextcard" />`;
   const loginControlsHtml = isLoginStatus(status)
     ? `
@@ -513,6 +521,7 @@ function buildBanner(status: OverlayStatus): string {
         ${stepsHtml}
         ${extractingHtml}
         ${shieldHtml}
+        ${cancelHtml}
       </div>
     </div>
   `;
@@ -534,9 +543,29 @@ function updateMinimizedState(minimized: boolean): void {
 function wireOverlayControls(): void {
   if (!shadowRoot) return;
   const button = shadowRoot.querySelector(".nc-minimize-button");
-  if (!(button instanceof HTMLButtonElement)) return;
-  button.addEventListener("click", () => updateMinimizedState(!isMinimized));
-  updateMinimizedState(isMinimized);
+  if (button instanceof HTMLButtonElement) {
+    button.addEventListener("click", () => updateMinimizedState(!isMinimized));
+    updateMinimizedState(isMinimized);
+  }
+  const cancelButton = shadowRoot.querySelector(".nc-cancel-button");
+  const cancelError = shadowRoot.querySelector(".nc-cancel-error");
+  if (cancelButton instanceof HTMLButtonElement) {
+    cancelButton.addEventListener("click", async () => {
+      if (!knownProvider) return;
+      cancelButton.disabled = true;
+      try {
+        const result = await chrome.runtime.sendMessage({ type: "CANCEL_SYNC", provider: knownProvider });
+        if (result?.ok === false) throw new Error("Could not cancel. Try the Cancel button in the sidebar.");
+        hideOverlay("cancelled");
+      } catch {
+        cancelButton.disabled = false;
+        if (cancelError instanceof HTMLElement) {
+          cancelError.hidden = false;
+          cancelError.textContent = "Could not cancel. Try the Cancel button in the sidebar.";
+        }
+      }
+    });
+  }
 }
 
 function renderBanner(status: OverlayStatus): void {
