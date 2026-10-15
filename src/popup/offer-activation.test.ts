@@ -146,13 +146,13 @@ it("reviews the wrong profile's data removal before confirming a household corre
   const confirm = document.getElementById("householdSyncConfirmationConfirm");
   const memberSelect = document.getElementById("householdMemberSelect");
   if (!(correct instanceof HTMLButtonElement) || !(confirm instanceof HTMLButtonElement) || !(memberSelect instanceof HTMLSelectElement)) throw new Error("Missing profile controls");
-  await vi.waitFor(() => expect(correct.textContent).toBe("Use Vishal instead"));
+  await vi.waitFor(() => expect(correct.textContent).toBe("Sync to Vishal"));
   correct.click();
   await vi.waitFor(() => expect(confirm.textContent).toBe("Clear and sync"));
   expect(document.getElementById("householdSyncConfirmationText")?.textContent).toContain("from Jordan, then sync this login to Vishal");
   expect(sendMessage.mock.calls.some(([message]) => message.type === "CONFIRM_HOUSEHOLD_SYNC")).toBe(false);
   document.getElementById("householdSyncConfirmationCancel")?.click();
-  await vi.waitFor(() => expect(confirm.textContent).toBe("Sync to Jordan"));
+  await vi.waitFor(() => expect(confirm.textContent).toBe("Keep on Jordan"));
   correct.click();
   await vi.waitFor(() => expect(confirm.textContent).toBe("Clear and sync"));
   confirm.click();

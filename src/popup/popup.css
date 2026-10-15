@@ -2680,9 +2680,9 @@
   font-weight: 650;
 }
 
-.household-sync-confirmation span {
+.household-sync-confirmation p {
   display: block;
-  margin-top: 3px;
+  margin: 8px 0 0;
   color: var(--text-primary, #352b25);
   font-size: 12px;
   line-height: 1.45;
@@ -2782,51 +2782,70 @@
 .household-sync-confirmation {
   margin-right: 20px;
   margin-left: 20px;
-  padding: 12px;
-  border: 1px solid color-mix(in srgb, var(--accent, #9a651e) 25%, transparent);
-  border-radius: 12px;
+  padding: 16px;
+  border: 1px solid var(--border-color, #e6ded6);
+  border-radius: 16px;
   outline: none;
-  background: color-mix(in srgb, var(--accent, #9a651e) 7%, var(--surface-card, #fff));
+  background: var(--surface-card, #fff);
 }
 
 .household-sync-confirmation:focus-visible {
   box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent, #9a651e) 20%, transparent);
 }
 
-.household-sync-confirmation-actions {
+.household-sync-confirmation-header {
   display: flex;
-  justify-content: flex-end;
-  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.household-sync-confirmation-actions {
+  display: grid;
   gap: 8px;
-  margin-top: 10px;
+  margin-top: 16px;
 }
 
-.household-sync-confirmation button {
-  padding: 0 11px;
+.household-sync-confirmation-actions button {
+  width: 100%;
+  min-height: 42px;
+  padding: 10px 12px;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
 }
 
-#householdSyncConfirmationConfirm {
-  border-color: #ae752c;
-  background: #ae752c;
-  color: #fff;
+#householdSyncConfirmationCancel {
+  flex-shrink: 0;
+  min-height: 32px;
+  padding: 4px 0 4px 8px;
+  border: 0;
+  background: transparent;
+  color: var(--text-primary, #352b25);
+  font-size: 12px;
 }
 
-#householdSyncConfirmationCancel:hover,
-#householdSyncConfirmationCancel:focus-visible {
-  border-color: #b8a79a;
-  background: #f7f1eb;
-  outline: none;
+#householdSyncConfirmationConfirm,
+#householdSyncCorrection {
+  border-color: #ffb34d;
+  background: #ffb34d;
+  color: #342019;
+}
+
+.has-profile-choice #householdSyncConfirmationConfirm {
+  border-color: var(--border-color, #e6ded6);
+  background: var(--surface-card, #fff);
 }
 
 #householdSyncConfirmationConfirm:hover,
-#householdSyncConfirmationConfirm:focus-visible {
-  border-color: #915d20;
-  background: #915d20;
-  outline: none;
+#householdSyncCorrection:hover {
+  filter: brightness(0.97);
 }
 
 .household-sync-confirmation button:focus-visible {
-  box-shadow: 0 0 0 2px #fff, 0 0 0 4px rgb(174 117 44 / 35%);
+  outline: 2px solid #9a651e;
+  outline-offset: 3px;
 }
 
 .household-sync-confirmation button:disabled {
@@ -2917,11 +2936,6 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-}
-
-#householdSyncCorrection {
-  order: 3;
-  flex-basis: 100%;
 }
 
 .rewards-sync-stop {

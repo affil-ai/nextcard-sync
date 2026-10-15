@@ -318,10 +318,14 @@ async function refreshHouseholdUi() {
   const reviewingCorrection = Boolean(correctionReviewOperationId && confirmation?.collisionMemberDisplayName);
   if (householdSyncCorrection) {
     householdSyncCorrection.hidden = !confirmation?.collisionMemberDisplayName || reviewingCorrection;
-    householdSyncCorrection.textContent = confirmation ? `Use ${confirmation.memberDisplayName} instead` : "Use selected profile";
+    householdSyncCorrection.textContent = confirmation ? `Sync to ${confirmation.memberDisplayName}` : "Use selected profile";
   }
   if (householdSyncConfirmation) {
     householdSyncConfirmation.hidden = !confirmation;
+    householdSyncConfirmation.classList.toggle("has-profile-choice", Boolean(confirmation?.collisionMemberDisplayName && !reviewingCorrection));
+  }
+  if (householdSyncConfirmationCancel) {
+    householdSyncConfirmationCancel.textContent = reviewingCorrection ? "Back" : "Cancel";
   }
   if (confirmation) {
     const providerName = getProviderDisplayName(confirmation.provider);
@@ -329,7 +333,7 @@ async function refreshHouseholdUi() {
       householdSyncConfirmationTitle.textContent = reviewingCorrection
         ? "Correct this profile?"
         : confirmation.collisionMemberDisplayName
-        ? "Possible profile mismatch"
+        ? "Choose a profile"
         : confirmation.manualConversionRequired
           ? "Review saved balance"
           : "Ready to confirm";
@@ -338,7 +342,7 @@ async function refreshHouseholdUi() {
       householdSyncConfirmationText.textContent = reviewingCorrection
         ? `Clear ${!["chase", "amex", "capitalone", "bilt", "discover", "citi"].includes(confirmation.provider) ? "saved sync data and balance history" : "synced rewards, cards, offers, and history"} for ${providerName} from ${confirmation.collisionMemberDisplayName}, then sync this login to ${confirmation.memberDisplayName}? Manually saved rewards are kept. Your account with the provider is unchanged.`
         : confirmation.collisionMemberDisplayName
-        ? `This ${providerName} account looks like ${confirmation.collisionMemberDisplayName}'s account, not ${confirmation.memberDisplayName}. Nothing was saved.`
+        ? `This ${providerName} login was previously synced to ${confirmation.collisionMemberDisplayName}. Choose where to sync it now.`
         : confirmation.manualConversionRequired
           ? `Convert the manual balance and sync ${providerName} for ${confirmation.memberDisplayName}?`
           : `Does this ${providerName} account belong to ${confirmation.memberDisplayName}? Nothing is saved until you confirm.`;
@@ -347,7 +351,7 @@ async function refreshHouseholdUi() {
       householdSyncConfirmationConfirm.textContent = reviewingCorrection
         ? "Clear and sync"
         : confirmation.collisionMemberDisplayName
-        ? `Sync to ${confirmation.collisionMemberDisplayName}`
+        ? `Keep on ${confirmation.collisionMemberDisplayName}`
         : "Confirm and save";
     }
     if (!householdConfirmationWasVisible && householdSyncConfirmation) {

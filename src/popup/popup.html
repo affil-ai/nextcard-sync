@@ -123,12 +123,12 @@
       </section>
       <div id="syncTabPanel" role="tabpanel" aria-labelledby="rewardsTab" style="display:none;">
         <section class="household-sync-confirmation" id="householdSyncConfirmation" hidden tabindex="-1" aria-live="polite">
-          <div>
+          <div class="household-sync-confirmation-header">
             <strong id="householdSyncConfirmationTitle">Ready to confirm</strong>
-            <span id="householdSyncConfirmationText"></span>
-          </div>
-          <div class="household-sync-confirmation-actions">
             <button type="button" id="householdSyncConfirmationCancel">Cancel</button>
+          </div>
+          <p id="householdSyncConfirmationText"></p>
+          <div class="household-sync-confirmation-actions">
             <button type="button" id="householdSyncCorrection" hidden>Use selected profile</button>
             <button type="button" id="householdSyncConfirmationConfirm">Confirm and save</button>
           </div>
