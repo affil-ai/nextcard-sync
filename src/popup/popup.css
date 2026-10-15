@@ -2906,7 +2906,7 @@
 
 #bofaOffersCard .offer-enrollment-actions[hidden] { display: none; }
 
-#bofaOffersCard .offer-done-actions {
+#bofaOffersCard .offer-done-actions:not([hidden]) {
   display: flex;
   align-items: center;
   justify-content: space-between;

@@ -2,6 +2,7 @@ import {
   DETECTED_OFFER_URL_CACHE_KEY,
   OFFER_URL_CACHE_KEY,
   normalizeHostname,
+  isIssuerOfferHost,
   type CachedOffer,
   type OfferUrlCache,
 } from "../lib/sync-offers-to-nextcard";
@@ -20,16 +21,6 @@ interface OfferGroup {
   issuerOfferId?: string;
   cards: string[];
 }
-
-const ISSUER_HOSTNAMES = new Set([
-  "chase.com",
-  "secure.chase.com",
-  "americanexpress.com",
-  "global.americanexpress.com",
-  "amex.com",
-  "citi.com",
-  "online.citi.com",
-]);
 
 const ALERT_ICON_PATH = "src/icons/icon128.png";
 const IGNORED_OFFER_ALERT_HOSTS_KEY = "ignoredOfferAlertHosts";
@@ -66,7 +57,7 @@ async function maybeInjectOfferAlert(tab: chrome.tabs.Tab) {
   if (!tab.id || !tab.url || !isScriptableUrl(tab.url)) return;
 
   const hostname = normalizeHostname(tab.url);
-  if (!hostname || ISSUER_HOSTNAMES.has(hostname)) return;
+  if (!hostname || isIssuerOfferHost(hostname)) return;
 
   const generation = offerAlertGeneration;
   const scope = await getCurrentHouseholdOperationScope();

@@ -27,6 +27,45 @@ beforeEach(() => {
 });
 
 describe("merchant offer alerts", () => {
+  it.each([
+    ["deals.merchant-rewards.com", false],
+    ["secure.bankofamerica.com", false],
+    ["secure03a.chase.com", false],
+    ["example.com", true],
+    ["bankofamerica.com.example.com", true],
+  ])("limits reminders on %s to merchant sites", async (hostname, shouldInject) => {
+    vi.mocked(getCurrentHouseholdOperationScope).mockResolvedValue(null);
+    const executeScript = vi.fn(async () => []);
+    const get = vi.fn(async () => ({ offerUrlCache: { [hostname]: [{
+      merchantName: "Example", offerValue: "10% cash back", cardName: "BofA portal",
+      cardLastDigits: null, expirationDate: null, issuer: "bofa",
+      rewardType: "percentage", rewardAmount: 10,
+    }] } }));
+    const tab: chrome.tabs.Tab = {
+      id: 42, active: true, status: "complete", url: `https://${hostname}/search`,
+      autoDiscardable: true, discarded: false, groupId: -1, highlighted: true,
+      incognito: false, index: 0, pinned: false, selected: true, windowId: 1,
+    };
+    vi.stubGlobal("chrome", {
+      runtime: { getURL: (path: string) => path },
+      storage: { local: { get } },
+      scripting: { executeScript },
+      tabs: {
+        query: vi.fn((_query, callback) => callback([tab])),
+        onUpdated: { addListener: vi.fn() },
+        onActivated: { addListener: vi.fn() },
+      },
+    });
+    registerMerchantOfferAlertMonitor();
+    if (shouldInject) {
+      await vi.waitFor(() => expect(executeScript).toHaveBeenCalledTimes(1));
+    } else {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(get).not.toHaveBeenCalled();
+      expect(executeScript).not.toHaveBeenCalled();
+    }
+  });
+
   it("clears pre-upgrade toasts before registering startup listeners", async () => {
     const order: string[] = [];
     let queryCount = 0;

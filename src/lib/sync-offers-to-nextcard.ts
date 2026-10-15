@@ -236,13 +236,25 @@ export function normalizeHostname(urlOrHostname: string): string | null {
   }
 }
 
+// Issuer portals are offer sources, not merchant shopping destinations.
+export function isIssuerOfferHost(hostname: string): boolean {
+  return [
+    "chase.com",
+    "americanexpress.com",
+    "amex.com",
+    "citi.com",
+    "bankofamerica.com",
+    "merchant-rewards.com",
+  ].some((issuer) => hostname === issuer || hostname.endsWith(`.${issuer}`));
+}
+
 function splitOfferMapByStatus(offerMap: OfferUrlCache): { enrolled: OfferUrlCache; detected: OfferUrlCache } {
   const enrolled: OfferUrlCache = {};
   const detected: OfferUrlCache = {};
 
   for (const [host, offers] of Object.entries(offerMap)) {
     const normalizedHost = normalizeHostname(host);
-    if (!normalizedHost) continue;
+    if (!normalizedHost || isIssuerOfferHost(normalizedHost)) continue;
 
     for (const offer of offers) {
       const target = offer.status === "detected" ? detected : enrolled;
@@ -290,7 +302,7 @@ async function updateOfferUrlCache(payload: OfferSyncPayload): Promise<void> {
       if (!offer.merchantUrl) continue;
 
       const hostname = normalizeHostname(offer.merchantUrl);
-      if (!hostname) continue;
+      if (!hostname || isIssuerOfferHost(hostname)) continue;
 
       const entry: CachedOffer = {
         merchantName: offer.merchantName,
@@ -928,7 +940,7 @@ export async function pullOfferUrlCache(
     for (const offer of offers) {
       if (!offer.merchantUrl) continue;
       const host = normalizeHostname(offer.merchantUrl);
-      if (!host) continue;
+      if (!host || isIssuerOfferHost(host)) continue;
 
       const entry: CachedOffer = {
         merchantName: offer.merchantName,

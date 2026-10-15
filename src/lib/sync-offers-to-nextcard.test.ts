@@ -732,6 +732,25 @@ describe("syncDetectedOffersToNextCard", () => {
 });
 
 describe("pullOfferUrlCache", () => {
+  it("caches merchant destinations without treating BofA portal URLs as merchants", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => ({
+      ok: true,
+      json: async () => ({ offers: [
+        { ...payload.offers[0], merchantUrl: "https://deals.merchant-rewards.com/offers/123", portalAction: "ready" },
+        { ...payload.offers[0], merchantUrl: "https://secure.bankofamerica.com/", portalAction: "ready" },
+        { ...payload.offers[0], merchantUrl: "https://example.com/", portalAction: "ready" },
+      ] }),
+    })));
+    storageSet.mockResolvedValue(undefined);
+    await pullOfferUrlCache(householdScope);
+    expect(storageSet).toHaveBeenCalledWith({
+      "offerUrlCache::account%3Aowner-a::member-primary::1": {
+        "example.com": [expect.objectContaining({ merchantName: "Example", portalAction: "ready" })],
+      },
+      "detectedOfferUrlCache::account%3Aowner-a::member-primary::1": {},
+    });
+  });
+
   it("keeps ordinary accounts on the legacy offer pull and cache", async () => {
     vi.mocked(getCurrentHouseholdOperationScope).mockResolvedValue(null);
     vi.mocked(isLegacyHouseholdOperationMode).mockResolvedValue(true);
