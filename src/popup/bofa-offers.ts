@@ -160,7 +160,7 @@ export function mountBofaOffers(options: { onStateChange?: (state: BofaOffersSet
       .getElementById("toolsTabPanel")
       ?.classList.toggle("bofa-operation-open", expanded);
     const running =
-      state?.phase === "checking" || state?.phase === "activating";
+      state?.phase === "checking" || state?.phase === "activating" || state?.reconnecting === true;
     const needsSignIn =
       /session expired|session is unavailable|sign in to BofA|open.*deals.*portal|In BofA, open/i.test(
         actionError ?? state?.error ?? "",
@@ -182,6 +182,8 @@ export function mountBofaOffers(options: { onStateChange?: (state: BofaOffersSet
     const progressTotal = state?.phase === "activating" ? activationTotal : state?.total;
     status.textContent = actionPending
       ? pendingLabel
+      : state?.reconnecting
+        ? "Reconnecting to BofA. Sign in if prompted. Your progress is saved."
       : needsSignIn
         ? "Sign in to continue checking your offers."
       : state?.phase === "checking"
@@ -211,7 +213,7 @@ export function mountBofaOffers(options: { onStateChange?: (state: BofaOffersSet
       "";
     if (needsSignIn)
       notice.textContent = "We'll open BofA. After you sign in, we'll continue to your offers and resume the check.";
-    notice.hidden = !notice.textContent || actionPending;
+    notice.hidden = !notice.textContent || actionPending || state?.reconnecting === true;
     progress.hidden = !running && !actionPending;
     progress.setAttribute("aria-label", status.textContent);
     progress.setAttribute("aria-valuemin", "0");

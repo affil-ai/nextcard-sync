@@ -221,6 +221,8 @@ export const bofaPortalStateSchema = z.object({
   retryAt: z.number().optional(),
   skippedPages: z.number().optional(),
   offerCacheMeta: z.record(z.string(),z.object({signature:z.string(),readAt:z.number()})).optional(),
+  sessionExpiresAt: z.number().optional(),
+  reconnecting: z.boolean().optional(),
 });
 export type BofaPortalState = z.infer<typeof bofaPortalStateSchema>;
 export const bofaPortalBatchSchema = z.object({

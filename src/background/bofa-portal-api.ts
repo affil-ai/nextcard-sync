@@ -56,6 +56,7 @@ export async function bofaPortalRequest(
         status: 200,
         data: null,
         hasLocationContext: locationContext !== undefined,
+        expiresAt: claims.exp * 1000,
       };
     const proximity = locationContext ? {
       latitude: locationContext.latitude,

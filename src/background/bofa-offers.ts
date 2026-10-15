@@ -40,6 +40,8 @@ type Operation = {
   readConcurrency: number;
   cachedOffers: Map<string, PortalOffer>;
   cachedMeta: NonNullable<BofaPortalState["offerCacheMeta"]>;
+  sessionExpiresAt?: number;
+  autoRenewals: number;
 };
 
 class BofaRequestError extends Error {}
@@ -415,9 +417,21 @@ export function registerBofaOffers(options: { isOtherBusy?: () => Promise<boolea
       op.state.error =
         error instanceof Error ? error.message : "Could not check BofA offers.";
       await persist(op);
+      if (!op.cancelled && operation === op && op.autoRenewals < 1
+        && /Your BofA session expired|Your BofA session is unavailable|Sign in to BofA/i.test(op.state.error)) {
+        op.state.reconnecting = true;
+        await persist(op);
+        try {
+          await start(true, op, op.autoRenewals + 1);
+        } catch (reconnectError) {
+          op.state.reconnecting = false;
+          if (!op.cancelled) op.state.error = reconnectError instanceof Error ? reconnectError.message : "Sign in to BofA to continue. Your progress is saved.";
+          await persist(op);
+        }
+      }
     }
   }
-  async function start(reconnect = false) {
+  async function start(reconnect = false, recovery?: Pick<Operation,"portalId" | "sessionExpiresAt"> | Operation, autoRenewals = 0) {
     if (
       starting ||
       operation?.state.phase === "checking" ||
@@ -426,10 +440,11 @@ export function registerBofaOffers(options: { isOtherBusy?: () => Promise<boolea
       throw new Error("A BofA operation is already running.");
     starting = true;
     const revision = ++openingRevision;
-    const assertOpening = () => { if (revision !== openingRevision) throw new Error("BofA check cancelled."); };
+    const assertOpening = () => { if (revision !== openingRevision || (recovery && "cancelled" in recovery && (recovery.cancelled || recovery.generation !== getAuthGeneration()))) throw new Error("BofA check cancelled."); };
     try {
       if (await options.isOtherBusy?.()) throw new Error("Finish or stop the current offer check first.");
       if (options.canWriteOffers && !await options.canWriteOffers()) throw new Error("Offers sync is unavailable for this profile.");
+      if (recovery && "cancelled" in recovery) await requireCurrent(recovery);
       const generation = getAuthGeneration();
       const scope = await getCurrentHouseholdOperationScope();
       if (!(await scopeCurrent(scope, generation)))
@@ -515,14 +530,25 @@ export function registerBofaOffers(options: { isOtherBusy?: () => Promise<boolea
         if (!reconnect && /session.*(?:expired|unavailable)|not signed in/i.test(failure.data.error)) {
           assertOpening();
           starting = false;
-          return await start(true);
+          return await start(true, recovery, autoRenewals);
         }
         throw new BofaRequestError(failure.data.error);
       }
       const session = z
-        .object({ portalId: z.string().regex(/^v1:[a-f0-9]{64}$/) })
+        .object({ portalId: z.string().regex(/^v1:[a-f0-9]{64}$/), expiresAt:z.number().finite().positive().optional() })
         .parse(result[0]?.result);
+      if (recovery && session.portalId !== recovery.portalId)
+        throw new Error("The BofA account changed during reconnection. Your progress is saved. Open the original account to continue.");
+      if (recovery && (session.expiresAt === undefined || session.expiresAt <= Date.now()+60000
+        || (recovery.sessionExpiresAt !== undefined && session.expiresAt <= recovery.sessionExpiresAt)))
+        throw new Error("BofA did not renew the portal session. Sign in again to continue. Your progress is saved.");
+      if (!reconnect && session.expiresAt !== undefined && session.expiresAt-Date.now()<5*60*1000) {
+        assertOpening();
+        starting = false;
+        return await start(true, {portalId:session.portalId,sessionExpiresAt:session.expiresAt}, autoRenewals);
+      }
       const fingerprint = await authFingerprint();
+      if (recovery && "cancelled" in recovery) await requireCurrent(recovery);
       if (!fingerprint || !(await scopeCurrent(scope, generation)))
         throw new Error("The selected nextcard account changed. Check again.");
       // A fresh owned search page lets the issuer resolve its saved or estimated
@@ -588,6 +614,8 @@ export function registerBofaOffers(options: { isOtherBusy?: () => Promise<boolea
         readConcurrency: 8,
         cachedOffers: new Map(canReuse && previous.success ? previous.data.state.offers.map(offer=>[offer.issuerOfferId,offer]) : []),
         cachedMeta: canReuse && previous.success ? {...previous.data.state.offerCacheMeta} : {},
+        sessionExpiresAt:session.expiresAt,
+        autoRenewals,
         state: {
           runId: crypto.randomUUID(),
           phase: "checking",
@@ -600,6 +628,7 @@ export function registerBofaOffers(options: { isOtherBusy?: () => Promise<boolea
           error: null,
           saveStatus: "saving",
           offerCacheMeta: canReuse && previous.success ? previous.data.state.offerCacheMeta : undefined,
+          sessionExpiresAt:session.expiresAt,
         },
       };
       operation = op;
@@ -748,6 +777,7 @@ export function registerBofaOffers(options: { isOtherBusy?: () => Promise<boolea
         if (type === "BOFA_PORTAL_CANCEL" && operation) {
           operation.cancelled = true;
           operation.state.phase = "cancelled";
+          operation.state.reconnecting = false;
           delete operation.state.retryAt;
           await persist(operation);
         }

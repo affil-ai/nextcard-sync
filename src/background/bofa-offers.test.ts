@@ -317,6 +317,86 @@ describe("BofA portal operation boundaries", () => {
     );
   });
 
+  it("renews a near-expiry session before scanning", async () => {
+    const bridge = execute.getMockImplementation();
+    const create = vi.spyOn(chrome.tabs, "create");
+    let sessions = 0;
+    execute.mockImplementation(async (args) => {
+      if (args.args?.[0] === "session") {
+        sessions++;
+        return [{ result: { portalId, hasLocationContext: true, expiresAt: Date.now() + (sessions === 1 ? 60000 : 1800000) } }];
+      }
+      return bridge?.(args);
+    });
+    await ready();
+    expect(create.mock.calls.filter(([options]) => options.url?.includes("redirect.go"))).toHaveLength(1);
+    expect(sessions).toBeGreaterThanOrEqual(2);
+  });
+
+  it.each(["unchanged expiry", "different account"])("rejects renewal with %s before reading offers", async (scenario) => {
+    const bridge = execute.getMockImplementation();
+    const expiry = Date.now() + 60000;
+    let sessions = 0;
+    execute.mockImplementation(async (args) => {
+      if (args.args?.[0] === "session") {
+        sessions++;
+        return [{ result: { portalId: sessions > 1 && scenario === "different account" ? `v1:${"b".repeat(64)}` : portalId, expiresAt: expiry } }];
+      }
+      return bridge?.(args);
+    });
+    const response = await send({ type: "BOFA_PORTAL_CHECK" });
+    expect(response.ok).toBe(false);
+    expect(response.error).toMatch(scenario === "different account" ? /account changed/ : /did not renew/);
+    expect(execute.mock.calls.some(([args]) => args.args?.[0] === "search")).toBe(false);
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it("keeps acknowledged details when reconnecting after a partial scan", async () => {
+    const bridge = execute.getMockImplementation();
+    let sessions = 0;
+    let expired = false;
+    execute.mockImplementation(async (args) => {
+      const [kind,,input] = args.args;
+      if (kind === "session") return [{ result: { portalId, hasLocationContext: true, expiresAt: Date.now() + ++sessions * 1800000 } }];
+      if (kind === "search" && typeof input === "number") return [{ result: { portalId, status: 200, data: {
+        total: 55,
+        offers: Array.from({ length: Math.min(24, 55 - input) }, (_, index) => ({ ...issuerOffer(String(input + index + 1)), offer_version: 1, updated_at: 1 })),
+      } } }];
+      if (kind === "details" && input === "51" && !expired) {
+        expired = true;
+        return [{ result: { error: "Your BofA session expired. Sign in to BofA." } }];
+      }
+      return bridge?.(args);
+    });
+    await send({ type: "BOFA_PORTAL_CHECK" });
+    await vi.waitFor(async () => expect((await send({ type: "BOFA_PORTAL_STATUS" })).state?.phase).toBe("ready"));
+    const state = (await send({ type: "BOFA_PORTAL_STATUS" })).state;
+    expect(state?.offers).toHaveLength(55);
+    for (let id = 1; id <= 50; id++)
+      expect(execute.mock.calls.filter(([args]) => args.args[0] === "details" && args.args[2] === String(id))).toHaveLength(1);
+  });
+
+  it("reconnects once after expiry and stops if the renewed session also expires", async () => {
+    const bridge = execute.getMockImplementation();
+    const create = vi.spyOn(chrome.tabs, "create");
+    let sessions = 0;
+    execute.mockImplementation(async (args) => {
+      if (args.args?.[0] === "session") {
+        sessions++;
+        return [{ result: { portalId, hasLocationContext: true, expiresAt: Date.now() + sessions * 1800000 } }];
+      }
+      if (args.args?.[0] === "search") return [{ result: { error: "Your BofA session expired. Sign in to BofA." } }];
+      return bridge?.(args);
+    });
+    await send({ type: "BOFA_PORTAL_CHECK" });
+    await vi.waitFor(async () => {
+      const response = await send({ type: "BOFA_PORTAL_STATUS" });
+      expect(response.state?.phase).toBe("failed");
+      expect(create.mock.calls.filter(([options]) => options.url?.includes("redirect.go"))).toHaveLength(1);
+      expect(execute.mock.calls.filter(([args]) => args.args?.[0] === "search")).toHaveLength(2);
+    });
+  });
+
   it("reconnects through BofA instead of reusing an expired portal tab", async () => {
     const create = vi.spyOn(chrome.tabs, "create");
     const response = await send({ type: "BOFA_PORTAL_SIGN_IN" });
