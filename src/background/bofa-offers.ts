@@ -36,6 +36,8 @@ type Operation = {
   generation: number;
   authFingerprint: string;
   cancelled: boolean;
+  readConcurrency: number;
+  readPausedUntil: number;
 };
 
 class BofaRequestError extends Error {}
@@ -91,34 +93,59 @@ export function registerBofaOffers() {
     kind: "search" | "details" | "activate",
     input: number | string,
   ) {
-    await requireCurrent(op);
-    const tab = await chrome.tabs.get(op.tabId).catch(() => null);
-    if (
-      !tab?.url ||
-      new URL(tab.url).origin !== "https://deals.merchant-rewards.com"
-    )
-      throw new BofaRequestError(
-        "Your BofA portal tab closed or changed. Check again.",
-      );
-    const results = await chrome.scripting.executeScript({
-      target: { tabId: op.tabId },
-      world: "MAIN",
-      func: bofaPortalRequest,
-      args: [kind, op.portalId, input],
-    });
-    if (kind !== "activate") await requireCurrent(op);
-    const failure = z
-      .object({ error: z.string() })
-      .safeParse(results[0]?.result);
-    if (failure.success) throw new BofaRequestError(failure.data.error);
-    const result = z
-      .object({ portalId: z.string(), status: z.number(), data: z.unknown() })
-      .parse(results[0]?.result);
-    if (result.portalId !== op.portalId || result.status !== 200)
-      throw new BofaRequestError(
-        `BofA could not return offers (${result.status}). Check again.`,
-      );
-    return result.data;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      await requireCurrent(op);
+      if (kind !== "activate") {
+        while (op.readPausedUntil > Date.now()) {
+          await new Promise<void>(resolve => setTimeout(resolve, op.readPausedUntil - Date.now()));
+          await requireCurrent(op);
+        }
+      }
+      const tab = await chrome.tabs.get(op.tabId).catch(() => null);
+      if (
+        !tab?.url ||
+        new URL(tab.url).origin !== "https://deals.merchant-rewards.com"
+      )
+        throw new BofaRequestError(
+          "Your BofA portal tab closed or changed. Check again.",
+        );
+      const results = await chrome.scripting.executeScript({
+        target: { tabId: op.tabId },
+        world: "MAIN",
+        func: bofaPortalRequest,
+        args: [kind, op.portalId, input],
+      });
+      if (kind !== "activate") await requireCurrent(op);
+      const failure = z
+        .object({ error: z.string() })
+        .safeParse(results[0]?.result);
+      if (failure.success) throw new BofaRequestError(failure.data.error);
+      const result = z
+        .object({
+          portalId: z.string(), status: z.number(), data: z.unknown(),
+          retryAfterMs: z.number().finite().nonnegative().optional(),
+        })
+        .parse(results[0]?.result);
+      if (result.portalId !== op.portalId)
+        throw new BofaRequestError("Your BofA portal account changed. Check offers again.");
+      if (kind !== "activate" && (result.status === 429 || result.status === 503)) {
+        op.readConcurrency = 4;
+        if (attempt < 2 && (result.retryAfterMs ?? 0) <= 30000) {
+          op.readPausedUntil = Math.max(
+            op.readPausedUntil,
+            Date.now() + Math.max(result.retryAfterMs ?? 0, 1000 * 2 ** attempt),
+          );
+          continue;
+        }
+        throw new BofaRequestError("BofA is limiting requests. Wait before checking again.");
+      }
+      if (result.status !== 200)
+        throw new BofaRequestError(
+          `BofA could not return offers (${result.status}). Check again.`,
+        );
+      return result.data;
+    }
+    throw new BofaRequestError("BofA could not return this request.");
   }
   async function detail(op: Operation, id: string) {
     const response = z
@@ -277,9 +304,9 @@ export function registerBofaOffers() {
         const readOffers = new Map<string, PortalOffer>();
         let next = 0;
         const failures: unknown[] = [];
-        // Replace each completed read immediately, without raising issuer concurrency.
-        await Promise.all(Array.from({ length: Math.min(4, chunk.length) }, async () => {
-          while (next < chunk.length && !failures.length) {
+        // Keep a bounded pool of reads, reducing concurrency after issuer backoff.
+        const workers = await Promise.allSettled(Array.from({ length: Math.min(op.readConcurrency, chunk.length) }, async (_, worker) => {
+          while (next < chunk.length && !failures.length && worker < op.readConcurrency) {
             const id = chunk[next++];
             try {
               readOffers.set(id, await detail(op, id));
@@ -291,9 +318,12 @@ export function registerBofaOffers() {
               op.state.failed++;
             }
             op.state.checked++;
+            if (op.state.checked % 10 === 0) await persist(op);
           }
         }));
         await requireCurrent(op);
+        const failedWorker = workers.find(result => result.status === "rejected");
+        if (failedWorker?.status === "rejected") throw failedWorker.reason;
         if (failures.length) throw failures[0];
         const offers = chunk.flatMap(id => {
           const offer = readOffers.get(id);
@@ -468,6 +498,8 @@ export function registerBofaOffers() {
         portalId: session.portalId,
         tabId: owned.id,
         cancelled: false,
+        readConcurrency: 8,
+        readPausedUntil: 0,
         state: {
           runId: crypto.randomUUID(),
           phase: "checking",

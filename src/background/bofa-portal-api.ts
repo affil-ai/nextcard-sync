@@ -110,6 +110,19 @@ export async function bofaPortalRequest(
         throw new Error(
           "Your BofA session expired. Open deals from BofA again.",
         );
+      if (!response.ok) {
+        const retryAfter = response.headers.get("Retry-After");
+        const seconds = retryAfter === null ? NaN : Number(retryAfter);
+        const retryAfterMs = Number.isFinite(seconds)
+          ? Math.max(0, seconds * 1000)
+          : retryAfter === null ? 0 : Math.max(0, Date.parse(retryAfter) - Date.now());
+        return {
+          portalId,
+          status: response.status,
+          data: null,
+          ...(Number.isFinite(retryAfterMs) ? { retryAfterMs } : {}),
+        };
+      }
       const data: unknown = await response.json();
       return { portalId, status: response.status, data };
     } finally {

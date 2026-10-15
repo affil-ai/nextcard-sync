@@ -281,7 +281,7 @@ describe("BofA portal operation boundaries", () => {
     }
   });
 
-  it("runs the serialized issuer bridge without extension closures and keeps the issuer token in that page", async () => {
+  it.each([200, 429])("handles issuer status %s inside the serialized bridge without exposing its token", async (status) => {
     const token = `fixture.${Buffer.from(JSON.stringify({ user_id: "synthetic-user", publisher_id: "synthetic-publisher", exp: 4102444800 })).toString("base64url")}.signature`;
     const requests: Array<{ path: string; headers: unknown; body: unknown }> =
       [];
@@ -322,16 +322,16 @@ describe("BofA portal operation boundaries", () => {
             headers: init.headers,
             body: JSON.parse(typeof init.body === "string" ? init.body : "{}"),
           });
-          return new Response(JSON.stringify({ offers: [], total: 0 }), {
-            status: 200,
+          return new Response(status === 200 ? JSON.stringify({ offers: [], total: 0 }) : "Rate limited", {
+            status,
+            headers: { "Retry-After": "2" },
           });
         },
       },
     );
-    expect(result).toMatchObject({
-      status: 200,
-      data: { offers: [], total: 0 },
-    });
+    expect(result).toMatchObject(status === 200 ? {
+      status: 200, data: { offers: [], total: 0 },
+    } : { status: 429, data: null, retryAfterMs: 2000 });
     expect(requests).toMatchObject([
       {
         path: "/api/offers-search",
@@ -434,17 +434,17 @@ describe("BofA portal operation boundaries", () => {
       activeReads++;
       peakReads = Math.max(peakReads, activeReads);
       try {
-        if (input === "1") await readGate;
+        if (Number(input) <= 8) await readGate;
         return await bridge?.(args);
       } finally { activeReads--; }
     });
     await send({ type: "BOFA_PORTAL_CHECK" });
     try {
-      await vi.waitFor(() => expect(reads).toContain("5"));
+      await vi.waitFor(() => expect(reads).toHaveLength(8));
       releaseRead();
       await vi.waitFor(() => expect(saves).toBe(1));
       await vi.waitFor(() => expect(reads).toContain("51"));
-      expect(peakReads).toBeLessThanOrEqual(4);
+      expect(peakReads).toBe(8);
       expect((await send({ type: "BOFA_PORTAL_STATUS" })).state?.phase).toBe("checking");
     } finally {
       releaseRead();
@@ -455,6 +455,39 @@ describe("BofA portal operation boundaries", () => {
     expect(reads).toHaveLength(55);
     expect((await send({ type: "BOFA_PORTAL_STATUS" })).state?.offers).toHaveLength(55);
     expect(saves).toBe(2);
+  });
+
+  it("backs off a rate-limited read and does not silently skip it", async () => {
+    vi.useFakeTimers();
+    const bridge = execute.getMockImplementation();
+    let attempts = 0;
+    execute.mockImplementation(async args => {
+      if (args.args[0] === "details" && args.args[2] === "1" && ++attempts < 3)
+        return [{ result: { portalId, status: 429, data: null, retryAfterMs: 2000 } }];
+      return bridge?.(args);
+    });
+    try {
+      await send({ type: "BOFA_PORTAL_CHECK" });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(attempts).toBe(1);
+      await vi.advanceTimersByTimeAsync(1999);
+      expect(attempts).toBe(1);
+      await vi.advanceTimersByTimeAsync(2001);
+      expect(attempts).toBe(3);
+      expect((await send({ type: "BOFA_PORTAL_STATUS" })).state?.phase).toBe("ready");
+      expect((await send({ type: "BOFA_PORTAL_STATUS" })).state?.offers).toHaveLength(2);
+    } finally { vi.useRealTimers(); }
+  });
+
+  it("does not automatically retry an activation rejected by BofA", async () => {
+    const state = await ready();
+    const bridge = execute.getMockImplementation();
+    execute.mockImplementation(async args => args.args[0] === "activate"
+      ? [{ result: { portalId, status: 429, data: null, retryAfterMs: 1000 } }]
+      : bridge?.(args));
+    await send({ type: "BOFA_PORTAL_ACTIVATE", runId: state.runId, ids: ["2"] });
+    await vi.waitFor(async () => expect((await send({ type: "BOFA_PORTAL_STATUS" })).state?.phase).toBe("failed"));
+    expect(execute.mock.calls.filter(([args]) => args.args[0] === "activate")).toHaveLength(1);
   });
 
   it("does not activate from a previous nextcard account", async () => {
