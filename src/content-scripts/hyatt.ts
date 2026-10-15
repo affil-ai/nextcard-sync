@@ -10,25 +10,25 @@
 import type { HyattLoyaltyData, LoginState } from "../lib/types";
 import { createContentScriptRunControl } from "../lib/content-script-run-control";
 import { showOverlay, updateOverlay, updateOverlayProgress } from "../lib/overlay";
-import { createLoginStateMonitor } from "../lib/login-state-monitor";
+import { createLoginStateMonitor, isMfaPage } from "../lib/login-state-monitor";
 
 const runControl = createContentScriptRunControl("hyatt");
 
 // ── Login detection ──────────────────────────────────────────
 
-function detectLoginState(): LoginState {
-  const url = window.location.href.toLowerCase();
+export function detectLoginState(): LoginState {
+  const path = window.location.pathname.toLowerCase();
+  if (/\/(sign-in|login|signin)(?:\/|$)/.test(path)) return "logged_out";
+  if (isMfaPage()) return "mfa_challenge";
 
-  // Sign-in pages
-  if (url.includes("/sign-in") || url.includes("/login") || url.includes("/signin")) {
-    return "logged_out";
+  const signIn = document.querySelector('input[type="email"], input[type="password"]');
+  if (signIn && signIn.getClientRects().length > 0) return "logged_out";
+  if (path.startsWith("/profile/") || path.startsWith("/loyalty/")) {
+    const balance = document.querySelector('[data-locator="points-balance"]');
+    if (balance && balance.getClientRects().length > 0 && parseIntSafe(balance.textContent ?? "") !== null) {
+      return "logged_in";
+    }
   }
-
-  // Account/profile pages indicate logged in
-  if (url.includes("/profile/") || url.includes("/loyalty/")) {
-    return "logged_in";
-  }
-
   return "unknown";
 }
 
@@ -249,7 +249,7 @@ async function runExtraction(attemptId: string) {
   const loginState = detectLoginState();
   await runControl.sendMessage(attemptId, { type: "LOGIN_STATE", state: loginState });
 
-  if (loginState === "logged_out" || loginState === "mfa_challenge") {
+  if (loginState !== "logged_in") {
     showOverlay("waiting_for_login", "hyatt");
     await runControl.sendMessage(attemptId, {
       type: "STATUS_UPDATE",
@@ -266,6 +266,11 @@ async function runExtraction(attemptId: string) {
   await runControl.sleep(3000, attemptId);
 
   runControl.throwIfCancelled(attemptId);
+  if (detectLoginState() !== "logged_in") {
+    showOverlay("waiting_for_login", "hyatt");
+    await runControl.sendMessage(attemptId, { type: "STATUS_UPDATE", status: "waiting_for_login", data: null, error: null });
+    return;
+  }
   const data = scrapeAccountPage();
   await runControl.sendMessage(attemptId, { type: "EXTRACTION_DONE", data });
 }
@@ -337,11 +342,11 @@ monitor.start();
 const initialState = monitor.getState();
 chrome.runtime.sendMessage({ type: "GET_PROVIDER_STATUS", provider: "hyatt" }, (r) => {
   const s = r?.status;
-  if (s === "extracting" || (s === "detecting_login" && initialState === "logged_in")) {
+  if ((s === "extracting" || s === "detecting_login") && initialState === "logged_in") {
     syncActive = true;
     showOverlay("extracting", "hyatt");
     if (typeof r?.progressMessage === "string") updateOverlayProgress(r.progressMessage);
-  } else if ((s === "waiting_for_login" || s === "detecting_login") && initialState !== "logged_in") {
+  } else if ((s === "extracting" || s === "waiting_for_login" || s === "detecting_login") && initialState !== "logged_in") {
     syncActive = true;
     showOverlay("waiting_for_login", "hyatt");
   }

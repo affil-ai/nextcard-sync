@@ -4,7 +4,6 @@ import type { createRuntimeStateStore } from "../core/runtime-state";
 import {
   navigateAndWait,
   sendRunMessageToTab,
-  triggerExtraction,
   waitForTabLoad,
 } from "../core/tab-utils";
 
@@ -75,72 +74,11 @@ export function createHyattSync(options: HyattSyncDeps) {
       await waitForTabLoad(tabId, 30000);
       setHyattProgress("Checking Hyatt sign-in...", "detecting_login");
 
-      const firstMessage = await new Promise<Record<string, unknown>>((resolve) => {
-        const timeout = setTimeout(() => {
-          chrome.runtime.onMessage.removeListener(listener);
-          resolve({
-            type: "ERROR",
-            provider: "hyatt",
-            error: "Extraction timed out",
-          });
-        }, 60000);
-
-        function listener(
-          message: Record<string, unknown>,
-          _sender: chrome.runtime.MessageSender,
-          sendResponse: (response?: unknown) => void,
-        ) {
-          if (
-            (message.type === "EXTRACTION_DONE" || message.type === "STATUS_UPDATE")
-            && options.isProviderAttemptMessage(message, "hyatt", attemptId)
-          ) {
-            chrome.runtime.onMessage.removeListener(listener);
-            clearTimeout(timeout);
-            sendResponse({ ok: true });
-            resolve(message);
-            return true;
-          }
-        }
-
-        chrome.runtime.onMessage.addListener(listener);
-        setHyattProgress("Reading Hyatt points and tier...");
-        void triggerExtraction({
-          providerId: "hyatt",
-          attemptId,
-          tabId,
-          assertRunActive: options.stateStore.assertRunActive,
-        }).catch(() => {
-          chrome.runtime.onMessage.removeListener(listener);
-          clearTimeout(timeout);
-          resolve({
-            type: "ERROR",
-            provider: "hyatt",
-            error: "Content script not available",
-          });
-        });
-      });
-
-      let overviewResult: Record<string, unknown>;
-      if (
-        firstMessage.type === "STATUS_UPDATE"
-        && firstMessage.status === "waiting_for_login"
-      ) {
-        setHyattProgress("Waiting for Hyatt sign-in...", "waiting_for_login");
-        overviewResult = await options.waitForGenericLoginAndExtract(
-          "hyatt",
-          attemptId,
-          tabId,
-        );
-      } else if (firstMessage.type === "EXTRACTION_DONE") {
-        overviewResult = firstMessage;
-      } else {
-        setHyattProgress("Waiting for Hyatt sign-in...", "waiting_for_login");
-        overviewResult = await options.waitForGenericLoginAndExtract(
-          "hyatt",
-          attemptId,
-          tabId,
-        );
-      }
+      setHyattProgress("Waiting for Hyatt sign-in...", "waiting_for_login");
+      const overviewResult = await options.waitForGenericLoginAndExtract(
+        "hyatt", attemptId, tabId, 600000,
+      );
+      options.stateStore.assertRunActive("hyatt", attemptId);
 
       setHyattProgress("Reading Hyatt points and tier...");
       if (overviewResult.type !== "EXTRACTION_DONE" || !overviewResult.data) {
