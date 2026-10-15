@@ -156,12 +156,30 @@ export function normalizeBofaOffer(offer: BofaOffer): PortalOffer {
   };
 }
 
+const bofaOfferSummarySchema = z.object({offer_id:bofaOfferSchema.shape.offer_id}).passthrough();
+const bofaOfferRevisionSchema = z.object({
+  offer_version:z.union([z.string().min(1),z.number()]),
+  updated_at:z.union([z.string().min(1),z.number()]),
+  is_activated:z.boolean(),
+}).passthrough();
+const bofaOfferRevisionFields = ["offer_version","updated_at","is_activated","activation_expires_at",
+  "activation_required","activation_type","activation_triggers","type","headline",
+  "description","reward_type","reward_rate","reward_value","reward_tiers","offer_mode",
+  "redemption_coupon_code","display_currency","category"];
+
+export function getBofaOfferSummaryKey(value: unknown) {
+  const summary = bofaOfferRevisionSchema.safeParse(value);
+  if (!summary.success) return null;
+  // Exclude location-dependent ranking fields. Keep issuer revisions and action state.
+  return JSON.stringify(bofaOfferRevisionFields.map(key=>summary.data[key] ?? null));
+}
+
 export async function collectBofaOfferIds(
   fetchPage: (offset: number) => Promise<unknown>,
-  onPage?: (discovered: number, total: number, skippedPages: number) => Promise<void>,
+  onPage?: (discovered: number, total: number, skippedPages: number, offers: z.infer<typeof bofaOfferSummarySchema>[]) => Promise<void>,
 ) {
   const schema = z.object({
-    offers: z.array(z.object({ offer_id: z.string().regex(/^\d+$/) })),
+    offers: z.array(bofaOfferSummarySchema),
     total: z.number().int().nonnegative(),
   });
   const ids = new Set<string>();
@@ -174,7 +192,7 @@ export async function collectBofaOfferIds(
     page.offers.forEach((o) => ids.add(o.offer_id));
     if (page.offers.length !== Math.min(24, Math.max(0, total - offset))
       || ids.size - before !== page.offers.length) skippedPages++;
-    await onPage?.(ids.size, total, skippedPages);
+    await onPage?.(ids.size, total, skippedPages, page.offers);
     // Advance by the requested page size even when the issuer leaves a gap.
     if (offset + 24 >= total) return [...ids];
   }
@@ -202,6 +220,7 @@ export const bofaPortalStateSchema = z.object({
   saveStatus: z.enum(["saving", "saved", "queued_for_retry", "failed"]),
   retryAt: z.number().optional(),
   skippedPages: z.number().optional(),
+  offerCacheMeta: z.record(z.string(),z.object({signature:z.string(),readAt:z.number()})).optional(),
 });
 export type BofaPortalState = z.infer<typeof bofaPortalStateSchema>;
 export const bofaPortalBatchSchema = z.object({

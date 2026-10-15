@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import { registerBofaOffers } from "./bofa-offers";
 import { bofaPortalRequest } from "./bofa-portal-api";
+import { bofaPortalStateSchema } from "../providers/bofa-offers";
 import { runInNewContext } from "node:vm";
 import { createMessageRouter } from "./core/message-router";
 import { createRuntimeStateStore } from "./core/runtime-state";
@@ -184,6 +185,86 @@ async function ready() {
   return state;
 }
 describe("BofA portal operation boundaries", () => {
+  it("reuses persisted details after a worker restart and only reads or saves new and changed offers", async () => {
+    const bridge = execute.getMockImplementation();
+    let revision = 1;
+    let includeNew = false;
+    execute.mockImplementation(async args => {
+      const [kind,,id] = args.args;
+      if (kind==="search") return [{result:{portalId,status:200,data:{
+        total:includeNew ? 3 : 2,
+        offers:(includeNew ? ["1","2","3"] : ["1","2"]).map(id=>({
+          ...issuerOffer(id),offer_version:id==="1" ? revision : 1,updated_at:id==="1" ? revision : 1,
+        })),
+      }}}];
+      if (kind==="details" && id==="1") return [{result:{portalId,status:200,data:{offer:{...issuerOffer(id),reward_rate:revision===1 ? 5 : 6}}}}];
+      return bridge?.(args);
+    });
+    await ready();
+    expect(execute.mock.calls.filter(([a])=>a.args[0]==="details")).toHaveLength(2);
+    execute.mockClear();
+    vi.mocked(fetch).mockClear();
+    registerBofaOffers();
+    await ready();
+    expect(execute.mock.calls.some(([a])=>a.args[0]==="search")).toBe(true);
+    expect(execute.mock.calls.filter(([a])=>a.args[0]==="details")).toHaveLength(0);
+    expect(fetch).not.toHaveBeenCalled();
+    revision = 2;
+    includeNew = true;
+    execute.mockClear();
+    const state = await ready();
+    expect(state.offers).toHaveLength(3);
+    expect(execute.mock.calls.filter(([a])=>a.args[0]==="details").map(([a])=>a.args[2]).sort()).toEqual(["1","3"]);
+    expect(fetch).toHaveBeenCalledTimes(1);
+    const uploaded = z.object({batch:z.object({offers:z.array(z.object({issuerOfferId:z.string()}))})})
+      .parse(JSON.parse(String(vi.mocked(fetch).mock.calls[0]?.[1]?.body)));
+    expect(uploaded.batch.offers.map(o=>o.issuerOfferId).sort()).toEqual(["1","3"]);
+  });
+
+  it.each(["portal", "profile", "sign-in", "age"])("does not reuse cached details across a changed %s", async boundary => {
+    const bridge = execute.getMockImplementation();
+    execute.mockImplementation(async args => args.args[0]==="search"
+      ? [{result:{portalId,status:200,data:{total:2,offers:["1","2"].map(id=>({...issuerOffer(id),offer_version:1,updated_at:1}))}}}]
+      : bridge?.(args));
+    await ready();
+    const previous = z.object({bofa_portal_operation:z.object({
+      state:bofaPortalStateSchema,scope:z.unknown(),authFingerprint:z.string(),portalId:z.string(),
+    })}).parse(await chrome.storage.local.get("bofa_portal_operation")).bofa_portal_operation;
+    if (boundary==="portal") previous.portalId=`v1:${"b".repeat(64)}`;
+    if (boundary==="profile") previous.scope={memberId:"different-profile"};
+    if (boundary==="sign-in") previous.authFingerprint="different-sign-in";
+    if (boundary==="age") for (const meta of Object.values(previous.state.offerCacheMeta ?? {})) meta.readAt-=25*60*60*1000;
+    await chrome.storage.local.set({bofa_portal_operation:previous});
+    registerBofaOffers();
+    execute.mockClear();
+    await ready();
+    expect(execute.mock.calls.filter(([a])=>a.args[0]==="details")).toHaveLength(2);
+  });
+
+  it("keeps acknowledged cache data if a later refresh is stopped before discovering offers", async () => {
+    const bridge = execute.getMockImplementation();
+    let limited = false;
+    execute.mockImplementation(async args => args.args[0]==="search"
+      ? [{result:limited ? {portalId,status:429,data:null} : {portalId,status:200,data:{total:2,offers:["1","2"].map(id=>({...issuerOffer(id),offer_version:1,updated_at:1}))}}}]
+      : bridge?.(args));
+    await ready();
+    vi.useFakeTimers();
+    try {
+      limited=true;
+      await send({type:"BOFA_PORTAL_CHECK"});
+      await vi.advanceTimersByTimeAsync(0);
+      await send({type:"BOFA_PORTAL_CANCEL"});
+      await vi.advanceTimersByTimeAsync(5000);
+    } finally {vi.useRealTimers();}
+    limited=false;
+    registerBofaOffers();
+    execute.mockClear();
+    vi.mocked(fetch).mockClear();
+    await ready();
+    expect(execute.mock.calls.filter(([a])=>a.args[0]==="details")).toHaveLength(0);
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
   it("returns BofA progress and saves offers when the general message listener is also registered", async()=>{
     const unused=async()=>{throw new Error("Unexpected unrelated handler call");};
     const store=createOfferOperationStore();
@@ -439,17 +520,17 @@ describe("BofA portal operation boundaries", () => {
       activeReads++;
       peakReads = Math.max(peakReads, activeReads);
       try {
-        if (Number(input) <= 4) await readGate;
+        if (Number(input) <= 8) await readGate;
         return await bridge?.(args);
       } finally { activeReads--; }
     });
     await send({ type: "BOFA_PORTAL_CHECK" });
     try {
-      await vi.waitFor(() => expect(reads).toHaveLength(4));
+      await vi.waitFor(() => expect(reads).toHaveLength(8));
       releaseRead();
       await vi.waitFor(() => expect(saves).toBe(1));
       await vi.waitFor(() => expect(reads).toContain("51"));
-      expect(peakReads).toBe(4);
+      expect(peakReads).toBe(8);
       expect((await send({ type: "BOFA_PORTAL_STATUS" })).state?.phase).toBe("checking");
     } finally {
       releaseRead();
@@ -475,9 +556,9 @@ describe("BofA portal operation boundaries", () => {
       await send({ type: "BOFA_PORTAL_CHECK" });
       await vi.advanceTimersByTimeAsync(0);
       expect(attempts).toBe(1);
-      await vi.advanceTimersByTimeAsync(1999);
+      await vi.advanceTimersByTimeAsync(4999);
       expect(attempts).toBe(1);
-      await vi.advanceTimersByTimeAsync(4001);
+      await vi.advanceTimersByTimeAsync(5001);
       expect(attempts).toBe(3);
       expect((await send({ type: "BOFA_PORTAL_STATUS" })).state?.phase).toBe("ready");
       expect((await send({ type: "BOFA_PORTAL_STATUS" })).state?.offers).toHaveLength(2);
@@ -500,10 +581,6 @@ describe("BofA portal operation boundaries", () => {
     try {
       await send({type:"BOFA_PORTAL_CHECK"});
       await vi.advanceTimersByTimeAsync(0);
-      expect(limitedAttempts).toBe(0);
-      await vi.advanceTimersByTimeAsync(199);
-      expect(limitedAttempts).toBe(0);
-      await vi.advanceTimersByTimeAsync(1);
       const paused = (await send({type:"BOFA_PORTAL_STATUS"})).state;
       expect(paused).toMatchObject({phase:"checking",discovered:24,retryAt:Date.now()+45000});
       const runId = paused?.runId;
@@ -586,7 +663,7 @@ describe("BofA portal operation boundaries", () => {
       : bridge?.(args));
     try {
       await send({type:"BOFA_PORTAL_CHECK"});
-      await vi.advanceTimersByTimeAsync(62000);
+      await vi.advanceTimersByTimeAsync(25000);
       const state = (await send({type:"BOFA_PORTAL_STATUS"})).state;
       expect(state?.phase).toBe("failed");
       expect(state?.retryAt).toBeUndefined();

@@ -22,6 +22,7 @@ import {
   type BofaPortalState,
   collectBofaOfferIds,
   normalizeBofaOffer,
+  getBofaOfferSummaryKey,
   type PortalOffer,
 } from "../providers/bofa-offers";
 import { bofaPortalRequest } from "./bofa-portal-api";
@@ -38,9 +39,18 @@ type Operation = {
   cancelled: boolean;
   readConcurrency: number;
   readPausedUntil: number;
+  cachedOffers: Map<string, PortalOffer>;
+  cachedMeta: NonNullable<BofaPortalState["offerCacheMeta"]>;
 };
 
 class BofaRequestError extends Error {}
+
+const storedOperationSchema = z.object({
+  state: bofaPortalStateSchema,
+  scope: z.unknown(),
+  authFingerprint: z.string(),
+  portalId: z.string().optional(),
+});
 
 export function registerBofaOffers(options: { isOtherBusy?: () => Promise<boolean>; canWriteOffers?: () => Promise<boolean> } = {}) {
   let operation: Operation | null = null;
@@ -84,9 +94,16 @@ export function registerBofaOffers(options: { isOtherBusy?: () => Promise<boolea
     if (!(await scopeCurrent(op.scope, op.generation)) || operation !== op) return;
     await chrome.storage.local.set({
       [STATE_KEY]: {
-        state: op.state,
+        state: {
+          ...op.state,
+          // A stopped refresh must retain the last acknowledged details, not pending writes.
+          offers: op.state.saveStatus === "saved" && (op.state.phase === "ready" || op.state.phase === "completed")
+            ? op.state.offers : [...op.cachedOffers.values()],
+          offerCacheMeta: op.cachedMeta,
+        },
         scope: op.scope,
         authFingerprint: op.authFingerprint,
+        portalId: op.portalId,
       },
     });
   }
@@ -136,11 +153,10 @@ export function registerBofaOffers(options: { isOtherBusy?: () => Promise<boolea
       if (result.portalId !== op.portalId)
         throw new BofaRequestError("Your BofA portal account changed. Check offers again.");
       if (kind !== "activate" && [408, 429, 500, 502, 503, 504].includes(result.status)) {
-        op.readConcurrency = Math.max(1, Math.floor(op.readConcurrency / 2));
         if (attempt < 5 && (result.retryAfterMs ?? 0) <= 60000) {
           op.readPausedUntil = Math.max(
             op.readPausedUntil,
-            Date.now() + Math.max(result.retryAfterMs ?? 0, 2000 * 2 ** attempt),
+            Date.now() + Math.max(result.retryAfterMs ?? 0, 5000),
           );
           op.state.retryAt = op.readPausedUntil;
           await persist(op);
@@ -300,15 +316,18 @@ export function registerBofaOffers(options: { isOtherBusy?: () => Promise<boolea
         await chrome.storage.local.set({
           [getHouseholdScopedStorageKey(PENDING_KEY, op.scope)]: remaining,
         });
+      const summaries = new Map<string,string>();
       const ids = await collectBofaOfferIds(
-        async (offset) => {
-          if (offset > 0) await new Promise<void>(resolve => setTimeout(resolve, 200));
-          return request(op, "search", offset);
-        },
-        async (discovered, total, skippedPages) => {
+        offset => request(op, "search", offset),
+        async (discovered, total, skippedPages, offers) => {
           op.state.discovered = discovered;
           op.state.total = total;
           op.state.skippedPages = skippedPages;
+          for (const offer of offers) {
+            const signature = getBofaOfferSummaryKey(offer);
+            if (signature !== null) summaries.set(offer.offer_id,signature);
+            else summaries.delete(offer.offer_id);
+          }
           await persist(op);
         },
       );
@@ -317,14 +336,30 @@ export function registerBofaOffers(options: { isOtherBusy?: () => Promise<boolea
       for (let offset = 0; offset < ids.length; offset += 50) {
         const chunk = ids.slice(offset, offset + 50);
         const readOffers = new Map<string, PortalOffer>();
+        const changedOffers: PortalOffer[] = [];
         let next = 0;
         const failures: unknown[] = [];
-        // Keep a bounded pool of reads, reducing concurrency after issuer backoff.
+        // Keep reads bounded. Issuer cooldowns pause the whole pool before resuming.
         const workers = await Promise.allSettled(Array.from({ length: Math.min(op.readConcurrency, chunk.length) }, async (_, worker) => {
           while (next < chunk.length && !failures.length && worker < op.readConcurrency) {
             const id = chunk[next++];
             try {
-              readOffers.set(id, await detail(op, id));
+              const cached = op.cachedOffers.get(id);
+              const metadata = op.state.offerCacheMeta?.[id];
+              const signature = summaries.get(id);
+              const activationCurrent = cached?.action !== "activated" || !cached.activationExpiresAt || Date.parse(cached.activationExpiresAt)>Date.now();
+              if (cached && signature && metadata?.signature===signature
+                && metadata.readAt<=Date.now() && Date.now()-metadata.readAt<24*60*60*1000 && activationCurrent) {
+                readOffers.set(id,cached);
+              } else {
+                const offer = await detail(op,id);
+                readOffers.set(id,offer);
+                changedOffers.push(offer);
+                if (signature) {
+                  op.state.offerCacheMeta ??= {};
+                  op.state.offerCacheMeta[id]={signature,readAt:Date.now()};
+                } else if (op.state.offerCacheMeta) delete op.state.offerCacheMeta[id];
+              }
             } catch (error) {
               if (error instanceof BofaRequestError) {
                 failures.push(error);
@@ -349,7 +384,15 @@ export function registerBofaOffers(options: { isOtherBusy?: () => Promise<boolea
         if (pendingSave) await pendingSave;
         await requireCurrent(op);
         op.state.offers.push(...offers);
-        pendingSave = save(op, offers);
+        pendingSave = save(op, changedOffers).then(() => {
+          if (op.state.saveStatus === "queued_for_retry") return;
+          for (const offer of offers) {
+            op.cachedOffers.set(offer.issuerOfferId,offer);
+            const metadata = op.state.offerCacheMeta?.[offer.issuerOfferId];
+            if (metadata) op.cachedMeta[offer.issuerOfferId]=metadata;
+            else delete op.cachedMeta[offer.issuerOfferId];
+          }
+        });
         void pendingSave.catch(() => {});
         await persist(op);
       }
@@ -526,6 +569,15 @@ export function registerBofaOffers(options: { isOtherBusy?: () => Promise<boolea
           "Choose a location in the BofA search page, then check offers again.",
         );
       assertOpening();
+      const stored = await chrome.storage.local.get(STATE_KEY);
+      const previous = storedOperationSchema.safeParse(stored[STATE_KEY]);
+      const previousScope = previous.success
+        ? previous.data.scope === null ? null : parseHouseholdOperationScope(previous.data.scope)
+        : undefined;
+      const canReuse = previous.success && previous.data.portalId===session.portalId
+        && previous.data.authFingerprint===fingerprint
+        && (scope===null ? previousScope===null : previousScope!=null && householdOperationScopesMatch(scope,previousScope));
+      assertOpening();
       const op: Operation = {
         authFingerprint: fingerprint,
         scope,
@@ -533,8 +585,10 @@ export function registerBofaOffers(options: { isOtherBusy?: () => Promise<boolea
         portalId: session.portalId,
         tabId: owned.id,
         cancelled: false,
-        readConcurrency: 4,
+        readConcurrency: 8,
         readPausedUntil: 0,
+        cachedOffers: new Map(canReuse && previous.success ? previous.data.state.offers.map(offer=>[offer.issuerOfferId,offer]) : []),
+        cachedMeta: canReuse && previous.success ? {...previous.data.state.offerCacheMeta} : {},
         state: {
           runId: crypto.randomUUID(),
           phase: "checking",
@@ -546,6 +600,7 @@ export function registerBofaOffers(options: { isOtherBusy?: () => Promise<boolea
           offers: [],
           error: null,
           saveStatus: "saving",
+          offerCacheMeta: canReuse && previous.success ? previous.data.state.offerCacheMeta : undefined,
         },
       };
       operation = op;
@@ -628,7 +683,10 @@ export function registerBofaOffers(options: { isOtherBusy?: () => Promise<boolea
             op.state.offers = op.state.offers.map((o) =>
               o.issuerOfferId === id ? verified : o,
             );
+            if (op.state.offerCacheMeta) delete op.state.offerCacheMeta[id];
+            delete op.cachedMeta[id];
             await save(op, [verified]);
+            if (op.state.saveStatus !== "queued_for_retry") op.cachedOffers.set(id,verified);
             await persist(op);
           }
           op.state.phase = "completed";
@@ -702,13 +760,7 @@ export function registerBofaOffers(options: { isOtherBusy?: () => Promise<boolea
         // A worker restart loses the bound issuer session. Preserve the result,
         // but require a fresh check before issuing any more activation writes.
         const stored = await chrome.storage.local.get(STATE_KEY);
-        const result = z
-          .object({
-            state: bofaPortalStateSchema,
-            scope: z.unknown(),
-            authFingerprint: z.string(),
-          })
-          .safeParse(stored[STATE_KEY]);
+        const result = storedOperationSchema.safeParse(stored[STATE_KEY]);
         if (!result.success) return respond({ ok: true, state: null });
         const storedScope =
           result.data.scope === null
