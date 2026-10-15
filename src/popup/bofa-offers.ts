@@ -186,7 +186,7 @@ export function mountBofaOffers(options: { onStateChange?: (state: BofaOffersSet
         ? "Sign in to continue checking your offers."
       : state?.phase === "checking"
         ? state.retryAt && state.retryAt > Date.now()
-          ? `BofA is busy. Continuing automatically in ${Math.ceil((state.retryAt - Date.now()) / 1000)}s…`
+          ? `Retrying BofA request in ${Math.ceil((state.retryAt - Date.now()) / 1000)}s…`
           : state.checked
           ? `Reading ${current.toLocaleString()} of ${state.total.toLocaleString()} offers…`
           : `Finding offers${current ? ` · ${current.toLocaleString()} found` : ""}…`

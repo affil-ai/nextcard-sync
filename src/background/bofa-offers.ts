@@ -38,7 +38,6 @@ type Operation = {
   authFingerprint: string;
   cancelled: boolean;
   readConcurrency: number;
-  readPausedUntil: number;
   cachedOffers: Map<string, PortalOffer>;
   cachedMeta: NonNullable<BofaPortalState["offerCacheMeta"]>;
 };
@@ -112,14 +111,15 @@ export function registerBofaOffers(options: { isOtherBusy?: () => Promise<boolea
     kind: "search" | "details" | "activate",
     input: number | string,
   ) {
+    let retryAt = 0;
     for (let attempt = 0; attempt < 6; attempt++) {
       await requireCurrent(op);
       if (kind !== "activate") {
-        while (op.readPausedUntil > Date.now()) {
-          await new Promise<void>(resolve => setTimeout(resolve, op.readPausedUntil - Date.now()));
+        if (retryAt > Date.now()) {
+          await new Promise<void>(resolve => setTimeout(resolve, retryAt - Date.now()));
           await requireCurrent(op);
         }
-        if (op.state.retryAt !== undefined) {
+        if (kind === "search" && op.state.retryAt !== undefined) {
           delete op.state.retryAt;
           await persist(op);
           await requireCurrent(op);
@@ -154,12 +154,12 @@ export function registerBofaOffers(options: { isOtherBusy?: () => Promise<boolea
         throw new BofaRequestError("Your BofA portal account changed. Check offers again.");
       if (kind !== "activate" && [408, 429, 500, 502, 503, 504].includes(result.status)) {
         if (attempt < 5 && (result.retryAfterMs ?? 0) <= 60000) {
-          op.readPausedUntil = Math.max(
-            op.readPausedUntil,
-            Date.now() + Math.max(result.retryAfterMs ?? 0, 5000),
-          );
-          op.state.retryAt = op.readPausedUntil;
-          await persist(op);
+          retryAt = Date.now() + Math.max(result.retryAfterMs ?? 0, 5000);
+          // Discovery is sequential. Detail retries leave the other workers running.
+          if (kind === "search") {
+            op.state.retryAt = retryAt;
+            await persist(op);
+          }
           continue;
         }
         throw new BofaRequestError(result.status === 429
@@ -339,7 +339,7 @@ export function registerBofaOffers(options: { isOtherBusy?: () => Promise<boolea
         const changedOffers: PortalOffer[] = [];
         let next = 0;
         const failures: unknown[] = [];
-        // Keep reads bounded. Issuer cooldowns pause the whole pool before resuming.
+        // Each worker waits only for its own retries, keeping other read slots busy.
         const workers = await Promise.allSettled(Array.from({ length: Math.min(op.readConcurrency, chunk.length) }, async (_, worker) => {
           while (next < chunk.length && !failures.length && worker < op.readConcurrency) {
             const id = chunk[next++];
@@ -586,7 +586,6 @@ export function registerBofaOffers(options: { isOtherBusy?: () => Promise<boolea
         tabId: owned.id,
         cancelled: false,
         readConcurrency: 8,
-        readPausedUntil: 0,
         cachedOffers: new Map(canReuse && previous.success ? previous.data.state.offers.map(offer=>[offer.issuerOfferId,offer]) : []),
         cachedMeta: canReuse && previous.success ? {...previous.data.state.offerCacheMeta} : {},
         state: {

@@ -179,7 +179,7 @@ it("shows automatic cooldown progress and keeps cancellation available", async (
   vi.stubGlobal("chrome",{runtime:{sendMessage:send}});
   mountBofaOffers();
   await vi.advanceTimersByTimeAsync(0);
-  expect(document.querySelector('[aria-live="polite"]')?.textContent).toBe("BofA is busy. Continuing automatically in 45s…");
+  expect(document.querySelector('[aria-live="polite"]')?.textContent).toBe("Retrying BofA request in 45s…");
   expect(document.querySelector<HTMLButtonElement>("#bofaOffersDiscoverBtn")?.disabled).toBe(true);
   await vi.advanceTimersByTimeAsync(3000);
   expect(document.querySelector('[aria-live="polite"]')?.textContent).toContain("42s");

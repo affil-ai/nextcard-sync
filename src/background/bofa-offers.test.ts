@@ -59,6 +59,7 @@ const replySchema = z.object({
       reviewFinished: z.boolean().optional(),
       added: z.number(),
       discovered: z.number().optional(),
+      checked: z.number().optional(),
       retryAt: z.number().optional(),
       skippedPages: z.number().optional(),
       error: z.string().nullable().optional(),
@@ -541,6 +542,42 @@ describe("BofA portal operation boundaries", () => {
     expect(reads).toHaveLength(55);
     expect((await send({ type: "BOFA_PORTAL_STATUS" })).state?.offers).toHaveLength(55);
     expect(saves).toBe(2);
+  });
+
+  it("keeps other read workers moving while one rate-limited offer waits five seconds", async () => {
+    vi.useFakeTimers();
+    const bridge = execute.getMockImplementation();
+    const reads: Array<{id:string;time:number}> = [];
+    let limited = false;
+    execute.mockImplementation(async args => {
+      const [kind,,id] = args.args;
+      if (kind === "search") return [{result:{portalId,status:200,data:{
+        total:12,offers:Array.from({length:12},(_,i)=>({offer_id:String(i+1)})),
+      }}}];
+      if (kind === "details" && typeof id === "string") {
+        reads.push({id,time:Date.now()});
+        if (id === "1" && !limited) {
+          limited = true;
+          return [{result:{portalId,status:429,data:null}}];
+        }
+      }
+      return bridge?.(args);
+    });
+    try {
+      const startedAt = Date.now();
+      await send({type:"BOFA_PORTAL_CHECK"});
+      await vi.advanceTimersByTimeAsync(0);
+      expect(reads.map(r=>r.id)).toContain("12");
+      expect(reads).toHaveLength(12);
+      expect((await send({type:"BOFA_PORTAL_STATUS"})).state).toMatchObject({phase:"checking",checked:11});
+      expect((await send({type:"BOFA_PORTAL_STATUS"})).state?.retryAt).toBeUndefined();
+      await vi.advanceTimersByTimeAsync(4999);
+      expect(reads.filter(r=>r.id==="1")).toHaveLength(1);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(reads.filter(r=>r.id==="1").map(r=>r.time-startedAt)).toEqual([0,5000]);
+      expect((await send({type:"BOFA_PORTAL_STATUS"})).state?.phase).toBe("ready");
+      expect((await send({type:"BOFA_PORTAL_STATUS"})).state?.offers).toHaveLength(12);
+    } finally {vi.useRealTimers();}
   });
 
   it("backs off a rate-limited read and does not silently skip it", async () => {
