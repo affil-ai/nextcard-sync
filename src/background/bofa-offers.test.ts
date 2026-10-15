@@ -407,6 +407,56 @@ describe("BofA portal operation boundaries", () => {
     expect((await send({ type: "BOFA_PORTAL_ACTIVATE", runId: state.runId, ids: ["2"] })).ok).toBe(false);
   });
 
+  it("keeps read slots busy and reads the next batch while the previous save is pending", async () => {
+    let releaseRead = () => {};
+    let releaseSave = () => {};
+    const readGate = new Promise<void>(resolve => { releaseRead = resolve; });
+    const saveGate = new Promise<void>(resolve => { releaseSave = resolve; });
+    const reads: string[] = [];
+    let activeReads = 0;
+    let peakReads = 0;
+    let saves = 0;
+    const bridge = execute.getMockImplementation();
+    const saveFetch = fetch;
+    vi.stubGlobal("fetch", vi.fn(async (url: string, init: RequestInit) => {
+      if (++saves === 1) await saveGate;
+      return saveFetch(url, init);
+    }));
+    execute.mockImplementation(async (args) => {
+      const [kind, , input] = args.args;
+      if (kind === "search" && typeof input === "number") return [{ result: {
+        portalId, status: 200, data: { total: 55, offers: Array.from(
+          { length: Math.min(24, 55 - input) }, (_, i) => ({ offer_id: String(input + i + 1) }),
+        ) },
+      } }];
+      if (kind !== "details") return bridge?.(args);
+      reads.push(input);
+      activeReads++;
+      peakReads = Math.max(peakReads, activeReads);
+      try {
+        if (input === "1") await readGate;
+        return await bridge?.(args);
+      } finally { activeReads--; }
+    });
+    await send({ type: "BOFA_PORTAL_CHECK" });
+    try {
+      await vi.waitFor(() => expect(reads).toContain("5"));
+      releaseRead();
+      await vi.waitFor(() => expect(saves).toBe(1));
+      await vi.waitFor(() => expect(reads).toContain("51"));
+      expect(peakReads).toBeLessThanOrEqual(4);
+      expect((await send({ type: "BOFA_PORTAL_STATUS" })).state?.phase).toBe("checking");
+    } finally {
+      releaseRead();
+      releaseSave();
+      await vi.waitFor(async () => expect((await send({ type: "BOFA_PORTAL_STATUS" })).state?.phase).toBe("ready"));
+    }
+    expect(new Set(reads).size).toBe(55);
+    expect(reads).toHaveLength(55);
+    expect((await send({ type: "BOFA_PORTAL_STATUS" })).state?.offers).toHaveLength(55);
+    expect(saves).toBe(2);
+  });
+
   it("does not activate from a previous nextcard account", async () => {
     const state = await ready();
     mocks.generation++;

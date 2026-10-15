@@ -243,6 +243,7 @@ export function registerBofaOffers() {
     await task;
   }
   async function discover(op: Operation) {
+    let pendingSave: Promise<void> | null = null;
     try {
       // Retry only the current portal's account- and household-scoped queue.
       const stored = await chrome.storage.local.get(
@@ -273,24 +274,41 @@ export function registerBofaOffers() {
       await persist(op);
       for (let offset = 0; offset < ids.length; offset += 50) {
         const chunk = ids.slice(offset, offset + 50);
-        const offers: PortalOffer[] = [];
-        for (let start = 0; start < chunk.length; start += 4) {
-          const results = await Promise.allSettled(
-            chunk.slice(start, start + 4).map((id) => detail(op, id)),
-          );
-          await requireCurrent(op);
-          for (const result of results) {
+        const readOffers = new Map<string, PortalOffer>();
+        let next = 0;
+        const failures: unknown[] = [];
+        // Replace each completed read immediately, without raising issuer concurrency.
+        await Promise.all(Array.from({ length: Math.min(4, chunk.length) }, async () => {
+          while (next < chunk.length && !failures.length) {
+            const id = chunk[next++];
+            try {
+              readOffers.set(id, await detail(op, id));
+            } catch (error) {
+              if (error instanceof BofaRequestError) {
+                failures.push(error);
+                return;
+              }
+              op.state.failed++;
+            }
             op.state.checked++;
-            if (result.status === "fulfilled") offers.push(result.value);
-            else if (result.reason instanceof BofaRequestError)
-              throw result.reason;
-            else op.state.failed++;
           }
-        }
+        }));
+        await requireCurrent(op);
+        if (failures.length) throw failures[0];
+        const offers = chunk.flatMap(id => {
+          const offer = readOffers.get(id);
+          return offer ? [offer] : [];
+        });
+        // At most one upload overlaps the next read batch. Drain it before
+        // starting another upload or reporting completion.
+        if (pendingSave) await pendingSave;
+        await requireCurrent(op);
         op.state.offers.push(...offers);
-        await save(op, offers);
+        pendingSave = save(op, offers);
+        void pendingSave.catch(() => {});
         await persist(op);
       }
+      if (pendingSave) await pendingSave;
       await requireCurrent(op);
       op.state.phase = "ready";
       if (op.state.saveStatus !== "queued_for_retry")
@@ -300,6 +318,7 @@ export function registerBofaOffers() {
       await persist(op);
       await pullOfferUrlCache(op.scope);
     } catch (error) {
+      if (pendingSave) await pendingSave.catch(() => {});
       op.state.phase = op.cancelled ? "cancelled" : "failed";
       op.state.error =
         error instanceof Error ? error.message : "Could not check BofA offers.";
