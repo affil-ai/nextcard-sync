@@ -86,10 +86,13 @@ const PENDING_HOUSEHOLD_CONFIRMATION_KEY =
 
 const stateStore = createRuntimeStateStore();
 const offerOperations = createOfferOperationStore();
+let bofaOffers: ReturnType<typeof registerBofaOffers> | null = null;
+let legacyOfferStarting = false;
 const offerCoordinator = createOfferOperationCoordinator(
   offerOperations,
   getCurrentHouseholdOperationScope,
   isLegacyHouseholdOperationMode,
+  () => bofaOffers?.isBusy() ?? false,
 );
 const extensionNavigatingTabs = createExtensionNavigationState();
 
@@ -1223,7 +1226,14 @@ async function canCurrentMemberWriteOffers() {
 }
 
 registerInstallWelcome();
-registerBofaOffers();
+bofaOffers = registerBofaOffers({
+  canWriteOffers: canCurrentMemberWriteOffers,
+  isOtherBusy: async () => {
+    if (offerCoordinator.isStarting() || legacyOfferStarting) return true;
+    const active = (await offerOperations.getSnapshot()).active;
+    return Boolean(active && active.phase !== "ready_to_add");
+  },
+});
 
 chrome.action.onClicked.addListener((tab) => {
   if (tab.windowId) {
@@ -1274,11 +1284,15 @@ chrome.runtime.onMessage.addListener(
     offerCoordinator,
     retryOfferSaves: retryQueuedOfferSyncs,
     startLegacyOfferOperation: async (issuer) => {
-      const scope = await getCurrentHouseholdOperationScope();
-      if (scope || await isLegacyHouseholdOperationMode()) {
-        return offerOperations.start(issuer, scope);
-      }
-      return { ok: false as const, error: "account_scope_unavailable" };
+      if (bofaOffers?.isBusy()) return { ok: false, error: "another_offer_run_active" };
+      legacyOfferStarting = true;
+      try {
+        const scope = await getCurrentHouseholdOperationScope();
+        if (scope || await isLegacyHouseholdOperationMode()) {
+          return await offerOperations.start(issuer, scope);
+        }
+        return { ok: false, error: "account_scope_unavailable" };
+      } finally { legacyOfferStarting = false; }
     },
     travelSyncCoordinator,
     syncEnrolledOffers: async (issuer, message) => {

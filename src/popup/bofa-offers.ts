@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { bofaPortalStateSchema } from "../providers/bofa-offers";
 import type { OfferOperationCard } from "../lib/offer-operation";
+import type { BofaOffersSetupState } from "./offers-setup";
 import { OfferReview } from "./offer-review";
 
 const responseSchema = z.discriminatedUnion("ok", [
@@ -8,7 +9,7 @@ const responseSchema = z.discriminatedUnion("ok", [
   z.object({ ok: z.literal(false), error: z.string().optional() }),
 ]);
 
-export function mountBofaOffers() {
+export function mountBofaOffers(options: { onStateChange?: (state: BofaOffersSetupState) => void; requestCheck?: (start: () => void) => void; otherToolsBusy?: () => boolean } = {}) {
   const container = document.getElementById("bofaOffersCard");
   if (!container) return;
   const root = container;
@@ -115,6 +116,7 @@ export function mountBofaOffers() {
   let expanded = false;
   let reviewingRemaining = false;
   let actionPending = false;
+  let actionRevision = 0;
   let actionError: string | null = null;
   let activationTotal = 0;
   let pendingLabel = "Opening Bank of America deals…";
@@ -153,7 +155,7 @@ export function mountBofaOffers() {
   }
   function render() {
     body.hidden = !expanded;
-    root.classList.toggle("guided-active-issuer", expanded);
+
     document
       .getElementById("toolsTabPanel")
       ?.classList.toggle("bofa-operation-open", expanded);
@@ -164,7 +166,7 @@ export function mountBofaOffers() {
         actionError ?? state?.error ?? "",
       );
     signIn.hidden = !needsSignIn || running || actionPending;
-    const ready = !needsSignIn && canReview() && !actionPending;
+    const ready = !needsSignIn && canReview() && !actionPending && !options.otherToolsBusy?.();
     const card = reviewCard();
     const count = card.offers?.length ?? 0;
     const selected = state ? review.selected(state.runId, card).length : 0;
@@ -175,7 +177,7 @@ export function mountBofaOffers() {
         : "Not checked · Check for offers";
     check.textContent =
       running || actionPending ? "Working" : state ? "Refresh" : "Check";
-    check.disabled = running || actionPending;
+    check.disabled = running || actionPending || Boolean(options.otherToolsBusy?.());
     const current = state?.phase === "activating" ? state.added : state?.checked || state?.discovered || 0;
     const progressTotal = state?.phase === "activating" ? activationTotal : state?.total;
     status.textContent = actionPending
@@ -219,7 +221,7 @@ export function mountBofaOffers() {
       progress.removeAttribute("aria-valuenow");
       fill.style.width = "35%";
     }
-    cancel.hidden = !running;
+    cancel.hidden = !running && !actionPending;
     cancel.textContent =
       state?.phase === "activating" ? "Stop after current offer" : "Cancel";
     reviewHost.hidden = !ready || !count;
@@ -236,6 +238,7 @@ export function mountBofaOffers() {
     view.hidden = !state?.offers.length;
     if (pending && (pending.runId !== state?.runId || !canReview()))
       closeConfirmation();
+    options.onStateChange?.({ state, pending: actionPending, error: actionError });
   }
   async function send(message: object) {
     const raw: unknown = await chrome.runtime.sendMessage(message);
@@ -251,9 +254,11 @@ export function mountBofaOffers() {
     if (next?.runId !== state?.runId || next?.phase !== "completed")
       reviewingRemaining = false;
     state = next;
+    if (state?.reviewFinished) expanded = false;
     render();
   }
   async function action(message: object) {
+    const revision = ++actionRevision;
     expanded = true;
     actionError = null;
     actionPending = true;
@@ -265,17 +270,18 @@ export function mountBofaOffers() {
     render();
     try {
       const result = await send(message);
+      if (revision !== actionRevision) return;
       if (result.ok) apply(result.state);
       else
         actionError = result.error ?? "Could not check Bank of America offers.";
     } catch (error) {
+      if (revision !== actionRevision) return;
       actionError =
         error instanceof Error
           ? error.message
           : "Could not contact the extension.";
     } finally {
-      actionPending = false;
-      render();
+      if (revision === actionRevision) { actionPending = false; render(); }
     }
   }
   function showConfirmation(all: boolean) {
@@ -301,11 +307,9 @@ export function mountBofaOffers() {
     void action({ type: "BOFA_PORTAL_SIGN_IN" });
   };
   check.onclick = () => {
-    void action({ type: "BOFA_PORTAL_CHECK" });
+    const start = () => { void action({ type: "BOFA_PORTAL_CHECK" }); };
+    if (options.requestCheck) options.requestCheck(start); else start();
   };
-  document
-    .getElementById("bofaOffersStartBtn")
-    ?.addEventListener("click", () => check.click());
   cancel.onclick = () => {
     void action({ type: "BOFA_PORTAL_CANCEL" });
   };
@@ -327,11 +331,11 @@ export function mountBofaOffers() {
   addMore.onclick = () => {
     reviewingRemaining = true;
     review = new OfferReview();
-    render();
+    void action({ type: "BOFA_PORTAL_REVIEW", runId: state?.runId });
   };
   done.onclick = () => {
-    expanded = false;
-    render();
+    if (state?.phase === "completed") { expanded = false; render(); return; }
+    void action({ type: "BOFA_PORTAL_FINISH", runId: state?.runId });
   };
   modal.addEventListener("keydown", (event) => {
     if (event.key === "Escape") {

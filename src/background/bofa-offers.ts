@@ -42,9 +42,11 @@ type Operation = {
 
 class BofaRequestError extends Error {}
 
-export function registerBofaOffers() {
+export function registerBofaOffers(options: { isOtherBusy?: () => Promise<boolean>; canWriteOffers?: () => Promise<boolean> } = {}) {
   let operation: Operation | null = null;
   let starting = false;
+  let activating = false;
+  let openingRevision = 0;
   let queue = Promise.resolve();
 
   async function authFingerprint() {
@@ -363,7 +365,11 @@ export function registerBofaOffers() {
     )
       throw new Error("A BofA operation is already running.");
     starting = true;
+    const revision = ++openingRevision;
+    const assertOpening = () => { if (revision !== openingRevision) throw new Error("BofA check cancelled."); };
     try {
+      if (await options.isOtherBusy?.()) throw new Error("Finish or stop the current offer check first.");
+      if (options.canWriteOffers && !await options.canWriteOffers()) throw new Error("Offers sync is unavailable for this profile.");
       const generation = getAuthGeneration();
       const scope = await getCurrentHouseholdOperationScope();
       if (!(await scopeCurrent(scope, generation)))
@@ -373,6 +379,7 @@ export function registerBofaOffers() {
       });
       let tab = reconnect ? undefined : tabs.find((t) => t.active) ?? tabs[0];
       if (tab?.id === undefined) {
+        assertOpening();
         // BofA's own View all deals link establishes the separate portal session.
         const dealsUrl =
           "https://secure.bankofamerica.com/myaccounts/brain/redirect.go?request_locale=en-us&target=offers&source=rewardDeals&location=myRewards";
@@ -380,6 +387,7 @@ export function registerBofaOffers() {
           url: "https://secure.bankofamerica.com/*",
         });
         const bankingTab = bankingTabs.find((t) => t.active) ?? bankingTabs[0];
+        assertOpening();
         const opened =
           !reconnect && bankingTab?.id !== undefined
             ? await chrome.tabs.update(bankingTab.id, {
@@ -389,7 +397,8 @@ export function registerBofaOffers() {
             : await chrome.tabs.create({ url: dealsUrl, active: true });
         if (opened?.id !== undefined) {
           let redirectedAfterLogin = false;
-          for (let attempt = 0; attempt < (reconnect ? 480 : 40); attempt++) {
+          for (let attempt = 0; attempt < 480; attempt++) {
+            assertOpening();
             if (!(await scopeCurrent(scope, generation)))
               throw new Error(
                 "The selected nextcard account changed. Check again.",
@@ -403,7 +412,6 @@ export function registerBofaOffers() {
               break;
             }
             if (
-              reconnect &&
               !redirectedAfterLogin &&
               attempt % 4 === 0 &&
               current.status === "complete" &&
@@ -443,7 +451,14 @@ export function registerBofaOffers() {
       const failure = z
         .object({ error: z.string() })
         .safeParse(result[0]?.result);
-      if (failure.success) throw new BofaRequestError(failure.data.error);
+      if (failure.success) {
+        if (!reconnect && /session.*(?:expired|unavailable)|not signed in/i.test(failure.data.error)) {
+          assertOpening();
+          starting = false;
+          return await start(true);
+        }
+        throw new BofaRequestError(failure.data.error);
+      }
       const session = z
         .object({ portalId: z.string().regex(/^v1:[a-f0-9]{64}$/) })
         .parse(result[0]?.result);
@@ -453,6 +468,7 @@ export function registerBofaOffers() {
       // A fresh owned search page lets the issuer resolve its saved or estimated
       // location normally. The MAIN-world listener captures only its read-request
       // coordinates, without asking for GPS or sending them to Nextcard.
+      assertOpening();
       const owned = await chrome.tabs.create({
         url: "https://deals.merchant-rewards.com/search",
         active: true,
@@ -461,6 +477,7 @@ export function registerBofaOffers() {
         throw new Error("Could not open the BofA deals portal.");
       let locationReady = false;
       for (let attempt = 0; attempt < 40; attempt++) {
+        assertOpening();
         if (!(await scopeCurrent(scope, generation)))
           throw new Error("The selected account changed. Check again.");
         let ready: chrome.scripting.InjectionResult<unknown>[] = [];
@@ -491,6 +508,7 @@ export function registerBofaOffers() {
         throw new Error(
           "Choose a location in the BofA search page, then check offers again.",
         );
+      assertOpening();
       const op: Operation = {
         authFingerprint: fingerprint,
         scope,
@@ -522,91 +540,97 @@ export function registerBofaOffers() {
     }
   }
   async function activate(ids: string[], runId: string) {
-    const op = operation;
-    if (
-      !op ||
-      op.state.runId !== runId ||
-      (op.state.phase !== "ready" && op.state.phase !== "completed") ||
-      !ids.length ||
-      new Set(ids).size !== ids.length ||
-      ids.some(
-        (id) =>
-          !op.state.offers.some(
-            (o) => o.issuerOfferId === id && o.action === "activate",
-          ),
-      )
-    )
-      throw new Error("Check offers again before activating.");
-    await requireCurrent(op);
-    const auth = await getAuth();
-    const profile = await getStoredExtensionProfile();
-    const activationRunId = crypto.randomUUID();
-    const reservation = await reserveOfferActivations(
-      auth?.email,
-      profile?.accountLevel === "pro",
-      activationRunId,
-      ids.length,
-    );
-    if (!reservation.ok || reservation.granted < ids.length) {
-      await recordOfferActivations(auth?.email, activationRunId, 0);
-      throw new Error(
-        "Your monthly activation limit does not cover this selection. Select fewer offers.",
-      );
-    }
+    if (activating) throw new Error("A BofA activation is already starting.");
+    activating = true;
     try {
+      if (await options.isOtherBusy?.()) throw new Error("Finish or stop the current offer check first.");
+      if (options.canWriteOffers && !await options.canWriteOffers()) throw new Error("Offers sync is unavailable for this profile.");
+      const op = operation;
+      if (
+        !op ||
+        op.state.runId !== runId ||
+        (op.state.phase !== "ready" && op.state.phase !== "completed") ||
+        !ids.length ||
+        new Set(ids).size !== ids.length ||
+        ids.some(
+          (id) =>
+            !op.state.offers.some(
+              (o) => o.issuerOfferId === id && o.action === "activate",
+            ),
+        )
+      )
+        throw new Error("Check offers again before activating.");
       await requireCurrent(op);
-    } catch (error) {
-      await recordOfferActivations(auth?.email, activationRunId, 0);
-      throw error;
-    }
-    op.state.phase = "activating";
-    op.state.added = 0;
-    op.state.error = null;
-    await persist(op);
-    void (async () => {
-      let issued = 0;
+      const auth = await getAuth();
+      const profile = await getStoredExtensionProfile();
+      const activationRunId = crypto.randomUUID();
+      const reservation = await reserveOfferActivations(
+        auth?.email,
+        profile?.accountLevel === "pro",
+        activationRunId,
+        ids.length,
+      );
+      if (!reservation.ok || reservation.granted < ids.length) {
+        await recordOfferActivations(auth?.email, activationRunId, 0);
+        throw new Error(
+          "Your monthly activation limit does not cover this selection. Select fewer offers.",
+        );
+      }
       try {
-        for (const id of ids) {
-          await requireCurrent(op);
-          const before = await detail(op, id);
-          if (before.action !== "activate") continue;
-          // Once a PUT has been issued, do not automatically repeat it after an uncertain response.
-          const response = z
-            .object({ ok: z.boolean() })
-            .parse(await request(op, "activate", id));
-          if (!response.ok) {
-            op.state.failed++;
-            continue;
-          }
-          issued++;
-          const verified = await detail(op, id);
-          if (verified.action !== "activated")
-            throw new Error(
-              "BofA accepted activation but has not confirmed it. Check again before retrying.",
+        await requireCurrent(op);
+      } catch (error) {
+        await recordOfferActivations(auth?.email, activationRunId, 0);
+        throw error;
+      }
+      op.state.phase = "activating";
+      op.state.added = 0;
+      op.state.error = null;
+      await persist(op);
+      void (async () => {
+        let issued = 0;
+        try {
+          for (const id of ids) {
+            await requireCurrent(op);
+            const before = await detail(op, id);
+            if (before.action !== "activate") continue;
+            // Once a PUT has been issued, do not automatically repeat it after an uncertain response.
+            const response = z
+              .object({ ok: z.boolean() })
+              .parse(await request(op, "activate", id));
+            if (!response.ok) {
+              op.state.failed++;
+              continue;
+            }
+            issued++;
+            const verified = await detail(op, id);
+            if (verified.action !== "activated")
+              throw new Error(
+                "BofA accepted activation but has not confirmed it. Check again before retrying.",
+              );
+            op.state.added++;
+            op.state.offers = op.state.offers.map((o) =>
+              o.issuerOfferId === id ? verified : o,
             );
-          op.state.added++;
-          op.state.offers = op.state.offers.map((o) =>
-            o.issuerOfferId === id ? verified : o,
-          );
-          await save(op, [verified]);
+            await save(op, [verified]);
+            await persist(op);
+          }
+          op.state.phase = "completed";
+          if (op.state.saveStatus !== "queued_for_retry")
+            op.state.saveStatus = "saved";
+          await pullOfferUrlCache(op.scope);
+        } catch (error) {
+          op.state.phase = op.cancelled ? "cancelled" : "failed";
+          op.state.error =
+            error instanceof Error
+              ? error.message
+              : "Activation could not be verified.";
+        } finally {
+          await recordOfferActivations(auth?.email, activationRunId, issued);
           await persist(op);
         }
-        op.state.phase = "completed";
-        if (op.state.saveStatus !== "queued_for_retry")
-          op.state.saveStatus = "saved";
-        await pullOfferUrlCache(op.scope);
-      } catch (error) {
-        op.state.phase = op.cancelled ? "cancelled" : "failed";
-        op.state.error =
-          error instanceof Error
-            ? error.message
-            : "Activation could not be verified.";
-      } finally {
-        await recordOfferActivations(auth?.email, activationRunId, issued);
-        await persist(op);
-      }
-    })();
-    return op.state;
+      })();
+      return op.state;
+    } finally { activating = false; }
   }
   chrome.runtime.onMessage.addListener((message: unknown, sender, respond) => {
     const envelope = z
@@ -636,6 +660,17 @@ export function registerBofaOffers() {
             ok: true,
             state: await activate(ids ?? [], runId ?? ""),
           });
+        if (type === "BOFA_PORTAL_FINISH" || type === "BOFA_PORTAL_REVIEW") {
+          if (!operation || operation.state.runId !== runId ||
+              (operation.state.phase !== "ready" && operation.state.phase !== "completed")) {
+            throw new Error("Check offers again before continuing this review.");
+          }
+          await requireCurrent(operation);
+          operation.state.reviewFinished = type === "BOFA_PORTAL_FINISH";
+          if (type === "BOFA_PORTAL_REVIEW") operation.state.phase = "ready";
+          await persist(operation);
+        }
+        if (type === "BOFA_PORTAL_CANCEL") openingRevision++;
         if (type === "BOFA_PORTAL_CANCEL" && operation) {
           operation.cancelled = true;
           operation.state.phase = "cancelled";
@@ -671,7 +706,7 @@ export function registerBofaOffers() {
         if (
           state.phase === "checking" ||
           state.phase === "activating" ||
-          state.phase === "ready"
+          (state.phase === "ready" && !state.reviewFinished)
         ) {
           state.phase = "failed";
           state.error =
@@ -688,4 +723,5 @@ export function registerBofaOffers() {
     })();
     return true;
   });
+  return { isBusy: () => starting || activating || operation?.state.phase === "checking" || operation?.state.phase === "activating" };
 }

@@ -170,7 +170,7 @@
               <span class="provider-info"><span class="provider-name">Citi</span></span>
               <svg class="issuer-choice-arrow" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" aria-hidden="true"><path d="m9 5 7 7-7 7" stroke-linecap="round" stroke-linejoin="round" /></svg>
             </button>
-            <button class="provider-card" type="button" id="bofaOffersStartBtn">
+            <button class="provider-card" type="button" id="bofaOffersStartBtn" data-offer-issuer="bofa">
               <span class="provider-icon"><img src="../icons/bofa.jpg" alt="" width="40" height="40" /></span>
               <span class="provider-info"><span class="provider-name">Bank of America</span></span>
               <svg class="issuer-choice-arrow" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" aria-hidden="true"><path d="m9 5 7 7-7 7" stroke-linecap="round" stroke-linejoin="round" /></svg>
@@ -463,6 +463,13 @@
       </div>
       <div class="version-footer" id="versionFooter"></div>
       <div class="changelog" id="changelog">
+        <h4>v0.8.7</h4>
+        <ul>
+          <li>Bank of America offers with guided sign-in, review, activation, and saved offers. Upside is excluded.</li>
+          <li>Correct household profile mismatches before saving a rewards sync.</li>
+          <li>Capital One waits for security verification, with Stop controls for active syncs.</li>
+          <li>Clearer setup instructions and a dismissible pin reminder after activation.</li>
+        </ul>
         <h4>v0.8.6</h4>
         <ul>
           <li>A focused setup guide with automatic pin detection and a return to setup after sign-in</li>

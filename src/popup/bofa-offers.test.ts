@@ -148,6 +148,7 @@ it.each([true, false])(
       const more = Array.from(document.querySelectorAll("button")).find(b => b.textContent === "Add more offers");
       expect(more?.hidden).toBe(false);
       more?.click();
+      await vi.advanceTimersByTimeAsync(0);
       expect(document.querySelector<HTMLElement>(".offer-review")?.hidden).toBe(false);
       expect(document.querySelectorAll(".offer-review-row")).toHaveLength(1);
       expect(document.body.textContent).toContain("0 of 1 selected");

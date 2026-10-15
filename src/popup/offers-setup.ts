@@ -1,9 +1,15 @@
+import { getOfferOperationStatusText, isOfferIssuer } from "../lib/offer-operation";
+import type { BofaPortalState } from "../providers/bofa-offers";
 import type {
   OfferIssuer,
   OfferOperationSnapshot,
   OfferOperationState,
 } from "../lib/offer-operation";
 import type { NextCardAuth } from "../lib/types";
+
+export type OffersSetupIssuer = OfferIssuer | "bofa";
+export interface BofaOffersSetupState { state: BofaPortalState | null; pending: boolean; error: string | null; }
+export function isOffersSetupIssuer(value: unknown): value is OffersSetupIssuer { return value === "bofa" || isOfferIssuer(value); }
 
 export type OffersSetupStage =
   | "choose_issuer"
@@ -37,13 +43,24 @@ function getLatestHistoryState(snapshot: OfferOperationSnapshot) {
 export function getOffersSetupState(
   snapshot: OfferOperationSnapshot,
   firstRewardsSyncCompleted: boolean,
-  preferredIssuer: OfferIssuer | null = null,
+  preferredIssuer: OffersSetupIssuer | null = null,
+  bofa: BofaOffersSetupState = { state: null, pending: false, error: null },
 ) {
-  const operation =
-    snapshot.active
-    ?? (preferredIssuer ? snapshot.history[preferredIssuer] ?? null : null)
-    ?? getLatestHistoryState(snapshot);
-  const issuer = operation?.issuer ?? preferredIssuer;
+  const sharedOperation = snapshot.active
+    ?? (preferredIssuer && preferredIssuer !== "bofa" ? snapshot.history[preferredIssuer] ?? null : null)
+    ?? (preferredIssuer === "bofa" ? null : getLatestHistoryState(snapshot));
+  const bofaSelected = preferredIssuer === "bofa" && (!snapshot.active || snapshot.active.phase === "ready_to_add");
+  const bofaPhase = bofa.error ? "failed"
+    : bofa.pending && bofa.state?.phase !== "checking" && bofa.state?.phase !== "activating" ? "opening"
+    : bofa.state?.phase === "checking" ? "checking"
+    : bofa.state?.phase === "activating" ? "adding"
+    : bofa.state?.reviewFinished || bofa.state?.phase === "completed" ? "completed"
+    : bofa.state?.phase === "ready" ? "ready_to_add"
+    : bofa.state?.phase;
+  const operation = bofaSelected && bofaPhase
+    ? { issuer: "bofa", phase: bofaPhase, statusText: bofaPhase === "adding" ? "Activating Bank of America offers…" : "Checking Bank of America offers…" }
+    : sharedOperation ? { ...sharedOperation, statusText: getOfferOperationStatusText(sharedOperation) } : null;
+  const issuer: OffersSetupIssuer | null = bofaSelected ? "bofa" : sharedOperation?.issuer ?? preferredIssuer;
 
   if (!operation) {
     return {

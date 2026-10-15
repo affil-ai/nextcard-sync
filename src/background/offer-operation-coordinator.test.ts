@@ -387,3 +387,14 @@ describe("explicit offer selection", () => {
     }), expect.any(Function));
   });
 });
+
+it("blocks another bank's checks and activation while the portal engine owns a run", async () => {
+  const { store, runId } = await readyChase();
+  const coordinator = createOfferOperationCoordinator(store, undefined, undefined, () => true);
+  expect(await coordinator.startCheck("amex")).toMatchObject({ ok: false, error: "another_offer_run_active" });
+  expect(await coordinator.startEnrollment(runId, ["card-id-1"], 1)).toMatchObject({ ok: false, error: "another_offer_run_active" });
+  expect(await coordinator.refreshCheck(runId)).toMatchObject({ ok: false, error: "another_offer_run_active" });
+  expect((await store.getSnapshot()).active?.phase).toBe("ready_to_add");
+  expect(createTab).not.toHaveBeenCalled();
+  expect(sendMessage).not.toHaveBeenCalled();
+});

@@ -55,6 +55,7 @@ const replySchema = z.object({
     .object({
       runId: z.string(),
       phase: z.string(),
+      reviewFinished: z.boolean().optional(),
       added: z.number(),
       offers: z.array(
         z.object({ issuerOfferId: z.string(), action: z.string() }),
@@ -505,4 +506,36 @@ describe("BofA portal operation boundaries", () => {
     ).toBe(false);
     expect((await send({ type: "BOFA_PORTAL_STATUS" })).state).toBeNull();
   });
+});
+
+
+it("persists Done without activation and can reopen the remaining offers", async () => {
+  const state = await ready();
+  expect(await send({ type: "BOFA_PORTAL_FINISH", runId: "stale" })).toMatchObject({ ok: false });
+  expect(await send({ type: "BOFA_PORTAL_FINISH", runId: state.runId })).toMatchObject({ ok: true, state: { reviewFinished: true } });
+  expect(await send({ type: "BOFA_PORTAL_STATUS" })).toMatchObject({ state: { reviewFinished: true } });
+  expect(await send({ type: "BOFA_PORTAL_REVIEW", runId: state.runId })).toMatchObject({ ok: true, state: { phase: "ready", reviewFinished: false } });
+  expect(mocks.reserve).not.toHaveBeenCalled();
+  expect(execute.mock.calls.some(call => call[0].args[0] === "activate")).toBe(false);
+  await send({ type: "BOFA_PORTAL_FINISH", runId: state.runId });
+  registerBofaOffers();
+  expect(await send({ type: "BOFA_PORTAL_STATUS" })).toMatchObject({ state: { phase: "ready", reviewFinished: true } });
+});
+it("does not open or read BofA while a different offer engine is running", async () => {
+  registerBofaOffers({ isOtherBusy: async () => true });
+  expect(await send({ type: "BOFA_PORTAL_CHECK" })).toMatchObject({ ok: false, error: "Finish or stop the current offer check first." });
+  expect(execute).not.toHaveBeenCalled();
+});
+
+it("can stop the opening check before it starts scanning", async () => {
+  let release: ((busy: boolean) => void) | undefined;
+  const gate = new Promise<boolean>((resolve) => { release = resolve; });
+  const engine = registerBofaOffers({ isOtherBusy: () => gate });
+  const opening = send({ type: "BOFA_PORTAL_CHECK" });
+  expect(engine.isBusy()).toBe(true);
+  await send({ type: "BOFA_PORTAL_CANCEL" });
+  release?.(false);
+  expect(await opening).toMatchObject({ ok: false, error: "BofA check cancelled." });
+  expect(engine.isBusy()).toBe(false);
+  expect(execute.mock.calls.some(call => call[0].args?.[0] === "search")).toBe(false);
 });

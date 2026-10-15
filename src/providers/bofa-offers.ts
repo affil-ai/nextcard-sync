@@ -189,6 +189,7 @@ export async function collectBofaOfferIds(
 
 export const bofaPortalStateSchema = z.object({
   runId: z.string(),
+  reviewFinished: z.boolean().optional(),
   phase: z.enum([
     "checking",
     "ready",

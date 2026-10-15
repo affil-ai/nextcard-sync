@@ -1,3 +1,5 @@
+import type { BofaOffersSetupState, OffersSetupIssuer } from "./offers-setup";
+import { isOffersSetupIssuer } from "./offers-setup";
 import { OfferReview } from "./offer-review";
 const offerReview = new OfferReview();
 import { WELCOME_PAGE_PATH } from "../lib/welcome";
@@ -689,14 +691,23 @@ async function beginTrackedOfferCheck(
   void refreshOfferOperationUi();
 }
 
-function requestOfferCheck(issuer: OfferIssuer, action: () => void) {
-  const execute = () => void beginTrackedOfferCheck(issuer, action);
+function requestOfferCheck(issuer: OffersSetupIssuer, action: () => void) {
+  const execute = () => {
+    if (!householdOfferWritesEnabled) { renderOfferWritesUnavailable(); return; }
+    const bofaBusy = bofaOffersSetup.pending || bofaOffersSetup.state?.phase === "checking" || bofaOffersSetup.state?.phase === "activating";
+    const sharedBusy = latestOfferSnapshot.active && latestOfferSnapshot.active.phase !== "ready_to_add";
+    if ((issuer === "bofa" && sharedBusy) || (issuer !== "bofa" && bofaBusy)) {
+      renderOfferActivityMessage("Finish or stop the current check first", "Only one offer check can run at a time.");
+      return;
+    }
+    if (issuer === "bofa") action(); else void beginTrackedOfferCheck(issuer, action);
+  };
   if (offerConsentVersion >= CURRENT_OFFER_CONSENT_VERSION) {
     execute();
     return;
   }
 
-  const issuerName = offerIssuerNames[issuer];
+  const issuerName = issuer === "bofa" ? "Bank of America" : offerIssuerNames[issuer];
   consentController.requestAction(
     () => {
       void recordOfferConsent().then((recorded) => {
@@ -717,7 +728,7 @@ function requestOfferCheck(issuer: OfferIssuer, action: () => void) {
     {
       title: `Check ${issuerName} offers?`,
       body: `
-        <p><strong>nextcard will read card names and offers visible in your signed-in ${issuerName} account.</strong></p>
+        <p><strong>${issuer === "bofa" ? "nextcard will read offers available in your signed-in Bank of America deals portal." : `nextcard will read card names and offers visible in your signed-in ${issuerName} account.`}</strong></p>
         <p>Detected offer details are saved to your nextcard account so they can be tracked and used for shopping reminders. Nothing will be added to ${issuerName} until you confirm.</p>
         <p>We never store your ${issuerName} password or verification codes.</p>
         <p><a href="https://www.nextcard.com/privacy/nextcard-sync" target="_blank" rel="noopener noreferrer">Privacy Policy</a></p>
@@ -2768,7 +2779,9 @@ let rewardsSyncAllState: RewardsSyncAllState = {
 let extensionProfile: ExtensionProfile | null = null;
 let offersSetupCompleted = false;
 let offersSetupCompletedStorageKey: string | null = null;
-let guidedOfferIssuer: OfferIssuer | null = null;
+let guidedOfferIssuer: OffersSetupIssuer | null = null;
+let bofaOffersSetup: BofaOffersSetupState = { state: null, pending: false, error: null };
+let restoredBofaRunId: string | null = null;
 let offersCoachmarkSeen = false;
 let offersIntroVersion = 0;
 let replayingOnboarding = false;
@@ -3210,6 +3223,8 @@ function resetOfferAccountUi() {
   offerActivationUsageFetchedAt = 0;
   offerActivationUsageRequest = null;
   guidedOfferIssuer = null;
+  bofaOffersSetup = { state: null, pending: false, error: null };
+  restoredBofaRunId = null;
   renderOfferActivationUsage();
   const activity = document.getElementById("offerActivity");
   if (activity) activity.hidden = true;
@@ -3272,6 +3287,7 @@ function renderOffersSetupHierarchy(snapshot: OfferOperationSnapshot) {
     snapshot,
     firstSyncCompleted,
     guidedOfferIssuer,
+    bofaOffersSetup,
   );
   if (setup.issuer) guidedOfferIssuer = setup.issuer;
 
@@ -3281,10 +3297,8 @@ function renderOffersSetupHierarchy(snapshot: OfferOperationSnapshot) {
     offersFirstUiEnabled
     && !offersSetupCompleted
     && setup.stage !== "complete";
-  const operationIsRunning = Boolean(
-    snapshot.active
-    && snapshot.active.phase !== "ready_to_add",
-  );
+  const operationIsRunning = Boolean(setup.operation &&
+    ["opening", "waiting_for_login", "checking", "adding"].includes(setup.operation.phase));
   if (recommendation) {
     const showRecommendation =
       guidedSetupActive
@@ -3309,19 +3323,9 @@ function renderOffersSetupHierarchy(snapshot: OfferOperationSnapshot) {
   if (setupActions) setupActions.hidden = setup.stage !== "choose_issuer";
   const rewardsActions = document.getElementById("offersSetupRewardsActions");
   if (rewardsActions) rewardsActions.hidden = setup.stage !== "sync_rewards";
-  for (const issuer of ["chase", "amex", "citi"] as const) {
-    const showGuidedIssuer = (
-      setup.stage === "check_offers" && !snapshot.active
-    ) || (
-      setup.stage === "review_offers"
-      && setup.operation?.phase === "ready_to_add"
-    ) || (
-      snapshot.active?.issuer === issuer
-      && (
-        setup.stage === "check_offers"
-        || setup.stage === "review_offers"
-      )
-    );
+  for (const issuer of ["chase", "amex", "citi", "bofa"] as const) {
+    const showGuidedIssuer = setup.issuer === issuer &&
+      (setup.stage === "check_offers" || setup.stage === "review_offers");
     document
       .getElementById(`${issuer}OffersCard`)
       ?.classList.toggle(
@@ -3333,7 +3337,7 @@ function renderOffersSetupHierarchy(snapshot: OfferOperationSnapshot) {
   const title = document.getElementById("offersRecommendationTitle");
   const text = document.getElementById("offersRecommendationText");
   const eyebrow = document.getElementById("offersRecommendationEyebrow");
-  const issuerName = setup.issuer === "amex"
+  const issuerName = setup.issuer === "bofa" ? "Bank of America" : setup.issuer === "amex"
     ? "Amex"
     : setup.issuer === "citi"
       ? "Citi"
@@ -3348,19 +3352,19 @@ function renderOffersSetupHierarchy(snapshot: OfferOperationSnapshot) {
     title.textContent = needsRetry
       ? `Try ${issuerName} again`
       : setup.operation && operationIsRunning
-        ? getOfferOperationStatusText(setup.operation)
-        : `Check your ${issuerName} card`;
+        ? setup.operation.statusText
+        : setup.issuer === "bofa" ? "Check your Bank of America offers" : `Check your ${issuerName} card`;
     text.textContent = needsRetry
       ? "The check didn’t finish. Use the card below to try again."
-      : "We’ll find the offers currently available on your card.";
+      : setup.issuer === "bofa" ? "We’ll find the offers available in your Bank of America deals portal." : "We’ll find the offers currently available on your card.";
   } else if (setup.stage === "review_offers") {
     if (eyebrow) eyebrow.textContent = "Step 3 of 3";
     title.textContent = setup.operation?.phase === "adding"
-      ? getOfferOperationStatusText(setup.operation)
+      ? setup.operation.statusText
       : `Review your ${issuerName} offers`;
     text.textContent = setup.operation?.phase === "adding"
       ? "We’re activating your selections securely in the background."
-      : "Choose your card and select the offers you want to activate.";
+      : setup.issuer === "bofa" ? "Select the offers you want to activate. Use an eligible Bank of America card at checkout." : "Choose your card and select the offers you want to activate.";
   } else if (setup.stage === "sync_rewards") {
     if (eyebrow) eyebrow.textContent = "Offers are ready";
     title.textContent = "Connect your rewards";
@@ -3432,7 +3436,7 @@ async function refreshOfferOperationUi() {
     cancelButton.textContent = active?.phase === "ready_to_add" ? "Done" : active?.phase === "adding" ? "Stop" : "Cancel";
   }
 
-  const setup = getOffersSetupState(snapshot, firstSyncCompleted, guidedOfferIssuer);
+  const setup = getOffersSetupState(snapshot, firstSyncCompleted, guidedOfferIssuer, bofaOffersSetup);
   if (isOffersSetupComplete(setup.stage) && !offersSetupCompleted) {
     offersSetupCompleted = true;
     if (offersSetupCompletedStorageKey) {
@@ -3442,15 +3446,15 @@ async function refreshOfferOperationUi() {
 
   renderOffersSetupHierarchy(snapshot);
   document.querySelectorAll<HTMLButtonElement>("[data-offer-issuer], #bofaOffersStartBtn").forEach((button) => {
-    button.disabled = Boolean(active && active.phase !== "ready_to_add");
+    button.disabled = Boolean(active && active.phase !== "ready_to_add") || isBofaOffersBusy();
   });
   for (const issuer of ["chase", "amex", "citi", "capitalone"] as OfferIssuer[]) {
     const card = document.getElementById(`${issuer}OffersCard`);
-    const shouldLockCard = Boolean(active && active.phase !== "ready_to_add" && active.issuer !== issuer);
+    const shouldLockCard = Boolean(active && active.phase !== "ready_to_add" && active.issuer !== issuer) || isBofaOffersBusy();
     card?.classList.toggle("offer-operation-locked", shouldLockCard);
     const action = document.getElementById(`${issuer}OffersDiscoverBtn`) as HTMLButtonElement | null;
     if (action) {
-      action.disabled = Boolean(active && active.phase !== "ready_to_add");
+      action.disabled = Boolean(active && active.phase !== "ready_to_add") || isBofaOffersBusy();
       action.textContent =
         active?.phase === "ready_to_add" ? "Check" : active?.issuer === issuer
           ? "Working"
@@ -3492,12 +3496,33 @@ document
 
 document.querySelectorAll<HTMLButtonElement>("[data-offer-issuer]").forEach((button) => {
   button.addEventListener("click", () => {
-    const issuer = button.dataset.offerIssuer as OfferIssuer;
+    const issuer = button.dataset.offerIssuer;
+    if (!isOffersSetupIssuer(issuer)) return;
     guidedOfferIssuer = issuer;
     renderOffersSetupHierarchy(latestOfferSnapshot);
     document.getElementById(`${issuer}OffersDiscoverBtn`)?.click();
   });
 });
+
+function isBofaOffersBusy() { return bofaOffersSetup.pending || bofaOffersSetup.state?.phase === "checking" || bofaOffersSetup.state?.phase === "activating"; }
+export function areOtherOfferToolsBusy() { return Boolean(latestOfferSnapshot.active && latestOfferSnapshot.active.phase !== "ready_to_add"); }
+export function updateBofaOffersSetup(state: BofaOffersSetupState) {
+  bofaOffersSetup = state;
+  const unfinished = state.state && !state.state.reviewFinished &&
+    ["checking", "ready", "activating"].includes(state.state.phase);
+  if (isBofaOffersBusy() || (unfinished && state.state?.runId !== restoredBofaRunId) || (!guidedOfferIssuer && state.state)) guidedOfferIssuer = "bofa";
+  restoredBofaRunId = state.state?.runId ?? null;
+  renderOffersSetupHierarchy(latestOfferSnapshot);
+  for (const issuer of ["chase", "amex", "citi", "capitalone"]) {
+    document.querySelectorAll<HTMLButtonElement>(`#${issuer}OffersCard .sync-btn`).forEach((button) => {
+      if (isBofaOffersBusy()) button.disabled = true;
+    });
+  }
+}
+export function requestBofaOfferCheck(start: () => void) {
+  guidedOfferIssuer = "bofa";
+  requestOfferCheck("bofa", start);
+}
 
 function completeOffersSetup() {
   offersSetupCompleted = true;

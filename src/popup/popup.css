@@ -2903,7 +2903,7 @@
 #loadingView.guided-setup .popup-loading-detail { display: none; }
 
 
-#toolsTabPanel.bofa-operation-open > #offersRecommendation { display: none; }
+#toolsTabPanel.bofa-operation-open:not(.offers-guided-setup) > #offersRecommendation { display: none; }
 
 #bofaOffersCard .offer-enrollment-actions[hidden] { display: none; }
 

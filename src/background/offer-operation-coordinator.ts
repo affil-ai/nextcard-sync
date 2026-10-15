@@ -168,8 +168,10 @@ export function createOfferOperationCoordinator(
   store: OfferOperationStore,
   getCurrentScope?: () => Promise<HouseholdOperationScope | null>,
   isLegacyScopeCurrent?: () => Promise<boolean>,
+  hasExternalRun?: () => boolean,
 ) {
   const runningDiscoveries = new Set<string>();
+  let startingRequests = 0;
 
   async function operationScopeIsCurrent(
     scope: HouseholdOperationScope | null,
@@ -274,34 +276,38 @@ export function createOfferOperationCoordinator(
   }
 
   async function startCheck(issuer: OfferIssuer) {
-    const scope = await getCurrentScope?.() ?? null;
-    if (!scope && getCurrentScope && !await isLegacyScopeCurrent?.()) {
-      return { ok: false as const, error: "account_scope_unavailable" };
-    }
-    const result = await store.start(issuer, scope);
-    if (!result.ok) return result;
+    if (hasExternalRun?.()) return { ok: false, error: "another_offer_run_active" };
+    startingRequests++;
     try {
-      const tab = await chrome.tabs.create({
-        url: ISSUER_CONFIG[issuer].url,
-        active: true,
-      });
-      if (tab.id == null) throw new Error("Issuer tab did not open");
-      await store.patch(result.state.runId, {
-        phase: "waiting_for_login",
-        ownedTabId: tab.id,
-      });
-      void discover(issuer, result.state.runId, tab.id);
-      return {
-        ok: true as const,
-        state: (await store.getSnapshot()).active ?? result.state,
-      };
-    } catch {
-      await store.patch(result.state.runId, {
-        phase: "failed",
-        error: "Couldn’t open the issuer. Try again.",
-      });
-      return { ok: false as const, error: "open_failed" };
-    }
+      const scope = await getCurrentScope?.() ?? null;
+      if (!scope && getCurrentScope && !await isLegacyScopeCurrent?.()) {
+        return { ok: false as const, error: "account_scope_unavailable" };
+      }
+      const result = await store.start(issuer, scope);
+      if (!result.ok) return result;
+      try {
+        const tab = await chrome.tabs.create({
+          url: ISSUER_CONFIG[issuer].url,
+          active: true,
+        });
+        if (tab.id == null) throw new Error("Issuer tab did not open");
+        await store.patch(result.state.runId, {
+          phase: "waiting_for_login",
+          ownedTabId: tab.id,
+        });
+        void discover(issuer, result.state.runId, tab.id);
+        return {
+          ok: true as const,
+          state: (await store.getSnapshot()).active ?? result.state,
+        };
+      } catch {
+        await store.patch(result.state.runId, {
+          phase: "failed",
+          error: "Couldn’t open the issuer. Try again.",
+        });
+        return { ok: false as const, error: "open_failed" };
+      }
+    } finally { startingRequests--; }
   }
 
   async function startEnrollment(
@@ -314,140 +320,148 @@ export function createOfferOperationCoordinator(
       selectedOfferIdsByCard?: Record<string, string[]> | null;
     } = {},
   ) {
-    const snapshot = await store.getSnapshot();
-    const active = snapshot.active;
-    if (!active || active.runId !== runId || active.ownedTabId == null) {
-      return { ok: false as const, error: "run_not_active" };
-    }
-    if (!await operationScopeIsCurrent(active.scope)) {
-      await store.patch(runId, {
-        phase: "interrupted",
-        error: "The selected household profile changed. Check offers again.",
-      });
-      return { ok: false as const, error: "stale_offer_operation" };
-    }
-    const tab = await chrome.tabs.get(active.ownedTabId).catch(() => null);
-    if (!tab || !tabMatchesIssuer(tab.url, active.issuer)) {
-      return { ok: false as const, error: "issuer_session_unavailable" };
-    }
-    const selectedKey = selectedCardKeys[0];
-    const selectedCard = active.cards.find((card) => card.key === selectedKey);
-    if (!selectedCard) return { ok: false as const, error: "invalid_card_selection" };
-    if (
-      active.issuer === "amex"
-      && selectedCardKeys.length > 1
-      && options.addMatchingOffersAcrossCards !== true
-    ) {
-      return { ok: false as const, error: "multi_card_enrollment_not_supported" };
-    }
-    const selection = options.selectedOfferIdsByCard;
-    if (selection) {
-      const keys = Object.keys(selection);
-      const valid = keys.length === selectedCardKeys.length && keys.every((key) => selectedCardKeys.includes(key))
-        && keys.every((key) => {
-          const card = active.cards.find((candidate) => candidate.key === key);
-          return card?.offers != null && selection[key].length > 0
-            && selection[key].every((id) => card.offers?.some((offer) => offer.id === id));
+    if (hasExternalRun?.()) return { ok: false, error: "another_offer_run_active" };
+    startingRequests++;
+    try {
+      const snapshot = await store.getSnapshot();
+      const active = snapshot.active;
+      if (!active || active.runId !== runId || active.ownedTabId == null) {
+        return { ok: false as const, error: "run_not_active" };
+      }
+      if (!await operationScopeIsCurrent(active.scope)) {
+        await store.patch(runId, {
+          phase: "interrupted",
+          error: "The selected household profile changed. Check offers again.",
         });
-      const selectedCount = Object.values(selection).reduce((sum, ids) => sum + ids.length, 0);
-      if (!valid || total == null || total <= 0 || total > selectedCount || options.addMatchingOffersAcrossCards) return { ok: false as const, error: "invalid_offer_selection" };
-    }
-    let sharedPreflightId: string | null = null;
-    const addMatchingOffersAcrossCards =
-      active.issuer === "amex" && options.addMatchingOffersAcrossCards === true;
-    if (addMatchingOffersAcrossCards) {
-      const preflight = await sendTabMessage(active.ownedTabId, {
-        type: "AMEX_OFFERS_SHARED_PREFLIGHT",
+        return { ok: false as const, error: "stale_offer_operation" };
+      }
+      const tab = await chrome.tabs.get(active.ownedTabId).catch(() => null);
+      if (!tab || !tabMatchesIssuer(tab.url, active.issuer)) {
+        return { ok: false as const, error: "issuer_session_unavailable" };
+      }
+      const selectedKey = selectedCardKeys[0];
+      const selectedCard = active.cards.find((card) => card.key === selectedKey);
+      if (!selectedCard) return { ok: false as const, error: "invalid_card_selection" };
+      if (
+        active.issuer === "amex"
+        && selectedCardKeys.length > 1
+        && options.addMatchingOffersAcrossCards !== true
+      ) {
+        return { ok: false as const, error: "multi_card_enrollment_not_supported" };
+      }
+      const selection = options.selectedOfferIdsByCard;
+      if (selection) {
+        const keys = Object.keys(selection);
+        const valid = keys.length === selectedCardKeys.length && keys.every((key) => selectedCardKeys.includes(key))
+          && keys.every((key) => {
+            const card = active.cards.find((candidate) => candidate.key === key);
+            return card?.offers != null && selection[key].length > 0
+              && selection[key].every((id) => card.offers?.some((offer) => offer.id === id));
+          });
+        const selectedCount = Object.values(selection).reduce((sum, ids) => sum + ids.length, 0);
+        if (!valid || total == null || total <= 0 || total > selectedCount || options.addMatchingOffersAcrossCards) return { ok: false as const, error: "invalid_offer_selection" };
+      }
+      let sharedPreflightId: string | null = null;
+      const addMatchingOffersAcrossCards =
+        active.issuer === "amex" && options.addMatchingOffersAcrossCards === true;
+      if (addMatchingOffersAcrossCards) {
+        const preflight = await sendTabMessage(active.ownedTabId, {
+          type: "AMEX_OFFERS_SHARED_PREFLIGHT",
+          cardId: selectedKey,
+          locale: "en-US",
+          cards: active.cards.map((card) => ({
+            id: card.key,
+            name: card.name,
+            lastDigits: card.lastDigits,
+          })),
+        });
+        if (
+          preflight?.ok !== true
+          || typeof preflight.preflightId !== "string"
+          || typeof preflight.matchingOfferCount !== "number"
+          || preflight.matchingOfferCount <= 0
+        ) {
+          return { ok: false as const, error: "no_matching_offers" };
+        }
+        sharedPreflightId = preflight.preflightId;
+      }
+      const transitioned = await store.beginEnrollment(runId, selectedCardKeys, total);
+      if (!transitioned.ok) return transitioned;
+
+      if (!await operationScopeIsCurrent(active.scope)) {
+        await store.patch(runId, {
+          phase: "interrupted",
+          error: "The selected household profile changed. Check offers again.",
+        });
+        return { ok: false as const, error: "stale_offer_operation" };
+      }
+
+      const config = ISSUER_CONFIG[active.issuer];
+      if (!config.runMessage) return { ok: false as const, error: "enrollment_not_supported" };
+      const response = await sendTabMessage(active.ownedTabId, {
+        type: config.runMessage,
+        runId,
         cardId: selectedKey,
+        accountId: selectedKey,
+        selectedCardKeys,
+        selectedOfferIdsByCard: selection,
+        allCardIds: active.cards.map((card) => card.key),
+        expectedTotal: total,
         locale: "en-US",
+        cardName: selectedCard.name,
+        cardLastDigits: selectedCard.lastDigits,
+        addMatchingOffersAcrossCards,
+        sharedPreflightId,
+        maxOffers:
+          typeof options.maxOffers === "number"
+            ? Math.max(0, Math.floor(options.maxOffers))
+            : null,
         cards: active.cards.map((card) => ({
           id: card.key,
           name: card.name,
           lastDigits: card.lastDigits,
+          locale: "en-US",
         })),
       });
-      if (
-        preflight?.ok !== true
-        || typeof preflight.preflightId !== "string"
-        || typeof preflight.matchingOfferCount !== "number"
-        || preflight.matchingOfferCount <= 0
-      ) {
-        return { ok: false as const, error: "no_matching_offers" };
+      if (response?.ok !== true) {
+        await store.patch(runId, {
+          phase: "failed",
+          error: safeText(response?.error, "Couldn’t start adding offers. Check again."),
+        });
+        return { ok: false as const, error: "content_script_rejected" };
       }
-      sharedPreflightId = preflight.preflightId;
-    }
-    const transitioned = await store.beginEnrollment(runId, selectedCardKeys, total);
-    if (!transitioned.ok) return transitioned;
-
-    if (!await operationScopeIsCurrent(active.scope)) {
-      await store.patch(runId, {
-        phase: "interrupted",
-        error: "The selected household profile changed. Check offers again.",
-      });
-      return { ok: false as const, error: "stale_offer_operation" };
-    }
-
-    const config = ISSUER_CONFIG[active.issuer];
-    if (!config.runMessage) return { ok: false as const, error: "enrollment_not_supported" };
-    const response = await sendTabMessage(active.ownedTabId, {
-      type: config.runMessage,
-      runId,
-      cardId: selectedKey,
-      accountId: selectedKey,
-      selectedCardKeys,
-      selectedOfferIdsByCard: selection,
-      allCardIds: active.cards.map((card) => card.key),
-      expectedTotal: total,
-      locale: "en-US",
-      cardName: selectedCard.name,
-      cardLastDigits: selectedCard.lastDigits,
-      addMatchingOffersAcrossCards,
-      sharedPreflightId,
-      maxOffers:
-        typeof options.maxOffers === "number"
-          ? Math.max(0, Math.floor(options.maxOffers))
-          : null,
-      cards: active.cards.map((card) => ({
-        id: card.key,
-        name: card.name,
-        lastDigits: card.lastDigits,
-        locale: "en-US",
-      })),
-    });
-    if (response?.ok !== true) {
-      await store.patch(runId, {
-        phase: "failed",
-        error: safeText(response?.error, "Couldn’t start adding offers. Check again."),
-      });
-      return { ok: false as const, error: "content_script_rejected" };
-    }
-    return transitioned;
+      return transitioned;
+    } finally { startingRequests--; }
   }
 
   async function refreshCheck(runId: string) {
-    const snapshot = await store.getSnapshot();
-    const active = snapshot.active;
-    if (
-      !active
-      || active.runId !== runId
-      || active.phase !== "ready_to_add"
-      || active.ownedTabId == null
-    ) {
-      return { ok: false as const, error: "run_not_refreshable" };
-    }
-    const tab = await chrome.tabs.get(active.ownedTabId).catch(() => null);
-    if (!tab || !tabMatchesIssuer(tab.url, active.issuer)) {
-      return { ok: false as const, error: "issuer_session_unavailable" };
-    }
-    await store.patch(runId, {
-      phase: "checking",
-      error: null,
-    });
-    void discover(active.issuer, runId, active.ownedTabId);
-    return {
-      ok: true as const,
-      state: (await store.getSnapshot()).active,
-    };
+    if (hasExternalRun?.()) return { ok: false, error: "another_offer_run_active" };
+    startingRequests++;
+    try {
+      const snapshot = await store.getSnapshot();
+      const active = snapshot.active;
+      if (
+        !active
+        || active.runId !== runId
+        || active.phase !== "ready_to_add"
+        || active.ownedTabId == null
+      ) {
+        return { ok: false as const, error: "run_not_refreshable" };
+      }
+      const tab = await chrome.tabs.get(active.ownedTabId).catch(() => null);
+      if (!tab || !tabMatchesIssuer(tab.url, active.issuer)) {
+        return { ok: false as const, error: "issuer_session_unavailable" };
+      }
+      await store.patch(runId, {
+        phase: "checking",
+        error: null,
+      });
+      void discover(active.issuer, runId, active.ownedTabId);
+      return {
+        ok: true as const,
+        state: (await store.getSnapshot()).active,
+      };
+    } finally { startingRequests--; }
   }
 
   async function cancel(runId?: string) {
@@ -484,6 +498,7 @@ export function createOfferOperationCoordinator(
   }
 
   return {
+    isStarting: () => startingRequests > 0,
     startCheck,
     refreshCheck,
     startEnrollment,
