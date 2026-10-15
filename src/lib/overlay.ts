@@ -617,6 +617,9 @@ function startPollIfNeeded() {
         updateOverlay("extracting");
       } else if (s === "waiting_for_login" && currentStatus !== "waiting_for_login" && currentStatus !== "mfa_challenge") {
         updateOverlay("waiting_for_login");
+      } else if (s === "awaiting_confirmation") {
+        // Reading is complete. The sidebar owns profile confirmation.
+        removeOverlay();
       } else if (s === "done") {
         hideOverlay("done");
       } else if (s === "error" || s === "cancelled") {
@@ -717,6 +720,17 @@ export function updateOverlayProgress(message: string): void {
   }, 200);
 }
 
+function removeOverlay(): void {
+  stopOverlayPoll();
+  hostEl?.remove();
+  hostEl = null;
+  shadowRoot = null;
+  currentStatus = null;
+  knownProvider = null;
+  lastProgressMessage = null;
+  isMinimized = false;
+}
+
 /**
  * Hide the overlay with a brief "Done" flash, then remove from DOM.
  * Pass `"error"` to show the error state instead.
@@ -731,13 +745,7 @@ export function hideOverlay(finalStatus: "done" | "error" | "cancelled" = "done"
     if (hostEl) {
       hostEl.classList.add("nc-fade-out");
       setTimeout(() => {
-        hostEl?.remove();
-        hostEl = null;
-        shadowRoot = null;
-        currentStatus = null;
-        knownProvider = null;
-        lastProgressMessage = null;
-        isMinimized = false;
+        removeOverlay();
       }, 350);
     }
   }, finalStatus === "done" ? 1500 : 800);
