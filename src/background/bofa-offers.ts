@@ -305,9 +305,10 @@ export function registerBofaOffers(options: { isOtherBusy?: () => Promise<boolea
           if (offset > 0) await new Promise<void>(resolve => setTimeout(resolve, 200));
           return request(op, "search", offset);
         },
-        async (discovered, total) => {
+        async (discovered, total, skippedPages) => {
           op.state.discovered = discovered;
           op.state.total = total;
+          op.state.skippedPages = skippedPages;
           await persist(op);
         },
       );
@@ -360,6 +361,8 @@ export function registerBofaOffers(options: { isOtherBusy?: () => Promise<boolea
         op.state.saveStatus = "saved";
       if (op.state.failed)
         op.state.error = `${op.state.failed} offer${op.state.failed === 1 ? "" : "s"} could not be read. Your saved offers are still available.`;
+      else if (op.state.skippedPages)
+        op.state.error = "Some offers couldn't be checked. Your saved offers are still available.";
       await persist(op);
       await pullOfferUrlCache(op.scope);
     } catch (error) {

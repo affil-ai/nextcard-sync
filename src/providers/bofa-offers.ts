@@ -158,7 +158,7 @@ export function normalizeBofaOffer(offer: BofaOffer): PortalOffer {
 
 export async function collectBofaOfferIds(
   fetchPage: (offset: number) => Promise<unknown>,
-  onPage?: (discovered: number, total: number) => Promise<void>,
+  onPage?: (discovered: number, total: number, skippedPages: number) => Promise<void>,
 ) {
   const schema = z.object({
     offers: z.array(z.object({ offer_id: z.string().regex(/^\d+$/) })),
@@ -166,25 +166,17 @@ export async function collectBofaOfferIds(
   });
   const ids = new Set<string>();
   let total: number | undefined;
-  let inventoryChanged = false;
+  let skippedPages = 0;
   for (let offset = 0; offset < 10000; offset += 24) {
     const page = schema.parse(await fetchPage(offset));
-    if (total !== undefined && total !== page.total) inventoryChanged = true;
     total = page.total;
-    if (page.offers.length > 24 || (!page.offers.length && offset < total))
-      throw new Error("BofA returned an incomplete offer page.");
     const before = ids.size;
     page.offers.forEach((o) => ids.add(o.offer_id));
-    if (offset > 0 && page.offers.length && ids.size === before)
-      throw new Error("BofA repeated offers between pages. Check again.");
-    await onPage?.(ids.size, total);
-    if (offset + page.offers.length >= total) {
-      if (!inventoryChanged && ids.size !== total)
-        throw new Error("BofA repeated offers between pages. Check again.");
-      return [...ids];
-    }
-    if (ids.size === before || page.offers.length !== 24)
-      throw new Error("BofA returned an incomplete offer page.");
+    if (page.offers.length !== Math.min(24, Math.max(0, total - offset))
+      || ids.size - before !== page.offers.length) skippedPages++;
+    await onPage?.(ids.size, total, skippedPages);
+    // Advance by the requested page size even when the issuer leaves a gap.
+    if (offset + 24 >= total) return [...ids];
   }
   throw new Error("BofA's offer inventory exceeded the supported scan size.");
 }
@@ -209,6 +201,7 @@ export const bofaPortalStateSchema = z.object({
   error: z.string().nullable(),
   saveStatus: z.enum(["saving", "saved", "queued_for_retry", "failed"]),
   retryAt: z.number().optional(),
+  skippedPages: z.number().optional(),
 });
 export type BofaPortalState = z.infer<typeof bofaPortalStateSchema>;
 export const bofaPortalBatchSchema = z.object({

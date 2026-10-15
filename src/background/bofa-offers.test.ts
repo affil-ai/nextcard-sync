@@ -59,6 +59,8 @@ const replySchema = z.object({
       added: z.number(),
       discovered: z.number().optional(),
       retryAt: z.number().optional(),
+      skippedPages: z.number().optional(),
+      error: z.string().nullable().optional(),
       offers: z.array(
         z.object({ issuerOfferId: z.string(), action: z.string() }),
       ),
@@ -553,6 +555,27 @@ describe("BofA portal operation boundaries", () => {
         .parse(await chrome.storage.local.get("bofa_portal_operation"));
       expect(saved.bofa_portal_operation.state).toMatchObject({runId:next.state?.runId,phase:"ready"});
     } finally { vi.useRealTimers(); }
+  });
+
+  it("saves readable offers after an incomplete discovery page instead of failing the run", async () => {
+    vi.useFakeTimers();
+    const bridge = execute.getMockImplementation();
+    execute.mockImplementation(async args => {
+      const [kind,,offset] = args.args;
+      if (kind!=="search" || typeof offset!=="number") return bridge?.(args);
+      return [{result:{portalId,status:200,data:{total:72,
+        offers:Array.from({length:offset===24 ? 0 : 24},(_,i)=>({offer_id:String(offset+i+1)})),
+      }}}];
+    });
+    try {
+      await send({type:"BOFA_PORTAL_CHECK"});
+      await vi.advanceTimersByTimeAsync(400);
+      const state = (await send({type:"BOFA_PORTAL_STATUS"})).state;
+      expect(state).toMatchObject({phase:"ready",skippedPages:1,error:"Some offers couldn't be checked. Your saved offers are still available."});
+      expect(state?.offers).toHaveLength(48);
+      expect(state?.offers.at(-1)?.issuerOfferId).toBe("72");
+      expect(fetch).toHaveBeenCalled();
+    } finally {vi.useRealTimers();}
   });
 
   it("bounds automatic retries if the issuer remains unavailable", async () => {

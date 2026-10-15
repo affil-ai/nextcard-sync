@@ -110,22 +110,20 @@ describe("BofA redemption and discovery", () => {
     expect(found).toHaveLength(48);
     expect(pages).toEqual([24, 49, 48, 48]);
   });
-  it("does not call a repeated or interrupted inventory complete", async () => {
-    await expect(
-      collectBofaOfferIds(async (offset) => ({
-        total: 48,
-        offers: Array.from({ length: 24 }, (_, i) => ({
-          offer_id: String(i + 1),
-        })),
-      })),
-    ).rejects.toThrow("repeated");
-    await expect(
-      collectBofaOfferIds(async (offset) => ({
-        total: 48,
-        offers: offset
-          ? []
-          : Array.from({ length: 24 }, (_, i) => ({ offer_id: String(i + 1) })),
-      })),
-    ).rejects.toThrow("incomplete");
+  it.each(["short", "empty", "repeated"])("continues past a %s page and reports partial discovery", async kind => {
+    const offsets: number[] = [];
+    let skipped = 0;
+    const found = await collectBofaOfferIds(async offset => {
+      offsets.push(offset);
+      return {
+        total:72,
+        offers:Array.from({length:offset===24 ? kind==="short" ? 5 : kind==="empty" ? 0 : 24 : 24},
+          (_,i)=>({offer_id:String((offset===24 && kind==="repeated" ? 0 : offset)+i+1)})),
+      };
+    }, async (_count,_total,skippedPages) => {skipped=skippedPages;});
+    expect(offsets).toEqual([0,24,48]);
+    expect(found).toHaveLength(kind==="short" ? 53 : 48);
+    expect(found.at(-1)).toBe("72");
+    expect(skipped).toBe(1);
   });
 });
