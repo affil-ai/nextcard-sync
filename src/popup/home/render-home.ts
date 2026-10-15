@@ -230,7 +230,7 @@ export function createHomeRenderer(options: {
           </div>
           <div class="rewards-summary-actions">
             <button class="rewards-summary-primary" type="button">View details <span aria-hidden="true">→</span></button>
-            <button class="rewards-summary-secondary" type="button"${!isSyncing && isSyncAllRunning ? " disabled" : ""}>${isSyncing ? "Cancel" : hasError ? "Try again" : "Sync again"}</button>
+            ${!isSyncing ? `<button class="rewards-summary-secondary" type="button"${isSyncAllRunning ? " disabled" : ""}>${hasError ? "Try again" : "Sync again"}</button>` : ""}
           </div>
         `;
 
@@ -240,11 +240,7 @@ export function createHomeRenderer(options: {
           ?.addEventListener("click", () => options.onSummarySelected(summary));
         card
           .querySelector<HTMLButtonElement>(".rewards-summary-secondary")
-          ?.addEventListener("click", () =>
-            isSyncing
-              ? options.onSummaryCancelRequested(summary.provider)
-              : options.onSummarySyncRequested(summary.provider)
-          );
+          ?.addEventListener("click", () => options.onSummarySyncRequested(summary.provider));
         options.providerList.appendChild(card);
       }
     }

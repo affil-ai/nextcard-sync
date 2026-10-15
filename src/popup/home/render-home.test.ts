@@ -103,17 +103,14 @@ it("lets a saved program cancel its active sync directly from the summary card",
       onSyncAllRequested() {}, onSyncAllCancelRequested() {},
     });
     render(states);
-    const button = providerList.querySelector(".rewards-summary-secondary");
-    if (!(button instanceof HTMLButtonElement)) throw new Error("Missing summary action");
-    expect(button.disabled).toBe(false);
-    expect(button.textContent).toBe("Cancel");
+    expect(providerList.querySelector(".rewards-summary-secondary")).toBeNull();
+    expect(providerList.querySelectorAll(".rewards-sync-stop")).toHaveLength(1);
     const stop = providerList.querySelector(".rewards-summary-header .rewards-sync-stop");
     if (!(stop instanceof HTMLButtonElement)) throw new Error("Missing stop icon");
     expect(stop.getAttribute("aria-label")).toBe("Stop Capital One sync");
     stop.click();
     expect(onSummaryCancelRequested).toHaveBeenCalledWith("capitalone");
-    button.click();
-    expect(onSummaryCancelRequested).toHaveBeenCalledTimes(2);
+    expect(onSummaryCancelRequested).toHaveBeenCalledTimes(1);
     expect(onSummarySyncRequested).not.toHaveBeenCalled();
     states.capitalone.status = "done";
     render(states);
