@@ -437,17 +437,17 @@ describe("BofA portal operation boundaries", () => {
       activeReads++;
       peakReads = Math.max(peakReads, activeReads);
       try {
-        if (Number(input) <= 8) await readGate;
+        if (Number(input) <= 4) await readGate;
         return await bridge?.(args);
       } finally { activeReads--; }
     });
     await send({ type: "BOFA_PORTAL_CHECK" });
     try {
-      await vi.waitFor(() => expect(reads).toHaveLength(8));
+      await vi.waitFor(() => expect(reads).toHaveLength(4));
       releaseRead();
       await vi.waitFor(() => expect(saves).toBe(1));
       await vi.waitFor(() => expect(reads).toContain("51"));
-      expect(peakReads).toBe(8);
+      expect(peakReads).toBe(4);
       expect((await send({ type: "BOFA_PORTAL_STATUS" })).state?.phase).toBe("checking");
     } finally {
       releaseRead();
@@ -498,6 +498,10 @@ describe("BofA portal operation boundaries", () => {
     try {
       await send({type:"BOFA_PORTAL_CHECK"});
       await vi.advanceTimersByTimeAsync(0);
+      expect(limitedAttempts).toBe(0);
+      await vi.advanceTimersByTimeAsync(199);
+      expect(limitedAttempts).toBe(0);
+      await vi.advanceTimersByTimeAsync(1);
       const paused = (await send({type:"BOFA_PORTAL_STATUS"})).state;
       expect(paused).toMatchObject({phase:"checking",discovered:24,retryAt:Date.now()+45000});
       const runId = paused?.runId;

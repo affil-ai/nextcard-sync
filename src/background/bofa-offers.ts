@@ -301,7 +301,10 @@ export function registerBofaOffers(options: { isOtherBusy?: () => Promise<boolea
           [getHouseholdScopedStorageKey(PENDING_KEY, op.scope)]: remaining,
         });
       const ids = await collectBofaOfferIds(
-        (offset) => request(op, "search", offset),
+        async (offset) => {
+          if (offset > 0) await new Promise<void>(resolve => setTimeout(resolve, 200));
+          return request(op, "search", offset);
+        },
         async (discovered, total) => {
           op.state.discovered = discovered;
           op.state.total = total;
@@ -527,7 +530,7 @@ export function registerBofaOffers(options: { isOtherBusy?: () => Promise<boolea
         portalId: session.portalId,
         tabId: owned.id,
         cancelled: false,
-        readConcurrency: 8,
+        readConcurrency: 4,
         readPausedUntil: 0,
         state: {
           runId: crypto.randomUUID(),
