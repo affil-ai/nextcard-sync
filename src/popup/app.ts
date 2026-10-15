@@ -123,12 +123,19 @@ const householdSyncConfirmationConfirm = householdSyncConfirmationConfirmElement
   : null;
 let householdConfirmationWasVisible = false;
 
+const correctionElement = document.getElementById("householdSyncCorrection");
+const householdSyncCorrection = correctionElement instanceof HTMLButtonElement ? correctionElement : null;
+let correctionReviewOperationId: string | null = null;
+let householdConfirmationBusy = false;
+let displayedConfirmation: HouseholdPopupState["pendingConfirmation"] = null;
+
 type HouseholdPopupState = {
   context: HouseholdExtensionContext;
   selectedMemberId: string | null;
   pendingConfirmation: {
     memberDisplayName: string;
     provider: string;
+    operationId: string | null;
     manualConversionRequired: boolean;
     collisionMemberDisplayName: string | null;
   } | null;
@@ -253,7 +260,7 @@ async function refreshHouseholdUi() {
       option.selected = member.id === response.selectedMemberId;
       householdMemberSelect.appendChild(option);
     }
-    householdMemberSelect.disabled = false;
+    householdMemberSelect.disabled = householdConfirmationBusy;
   }
   const help = document.getElementById("householdSyncTargetHelp");
   const selected = response.context.members.find(
@@ -304,27 +311,40 @@ async function refreshHouseholdUi() {
   }
 
   const confirmation = response.pendingConfirmation;
+  displayedConfirmation = confirmation;
+  if (correctionReviewOperationId !== confirmation?.operationId) correctionReviewOperationId = null;
+  const reviewingCorrection = Boolean(correctionReviewOperationId && confirmation?.collisionMemberDisplayName);
+  if (householdSyncCorrection) {
+    householdSyncCorrection.hidden = !confirmation?.collisionMemberDisplayName || reviewingCorrection;
+    householdSyncCorrection.textContent = confirmation ? `Use ${confirmation.memberDisplayName} instead` : "Use selected profile";
+  }
   if (householdSyncConfirmation) {
     householdSyncConfirmation.hidden = !confirmation;
   }
   if (confirmation) {
     const providerName = getProviderDisplayName(confirmation.provider);
     if (householdSyncConfirmationTitle) {
-      householdSyncConfirmationTitle.textContent = confirmation.collisionMemberDisplayName
+      householdSyncConfirmationTitle.textContent = reviewingCorrection
+        ? "Correct this profile?"
+        : confirmation.collisionMemberDisplayName
         ? "Possible profile mismatch"
         : confirmation.manualConversionRequired
           ? "Review saved balance"
           : "Ready to confirm";
     }
     if (householdSyncConfirmationText) {
-      householdSyncConfirmationText.textContent = confirmation.collisionMemberDisplayName
+      householdSyncConfirmationText.textContent = reviewingCorrection
+        ? `Clear ${!["chase", "amex", "capitalone", "bilt", "discover", "citi"].includes(confirmation.provider) ? "saved sync data and balance history" : "synced rewards, cards, offers, and history"} for ${providerName} from ${confirmation.collisionMemberDisplayName}, then sync this login to ${confirmation.memberDisplayName}? Manually saved rewards are kept. Your account with the provider is unchanged.`
+        : confirmation.collisionMemberDisplayName
         ? `This ${providerName} account looks like ${confirmation.collisionMemberDisplayName}'s account, not ${confirmation.memberDisplayName}. Nothing was saved.`
         : confirmation.manualConversionRequired
           ? `Convert the manual balance and sync ${providerName} for ${confirmation.memberDisplayName}?`
           : `Does this ${providerName} account belong to ${confirmation.memberDisplayName}? Nothing is saved until you confirm.`;
     }
     if (householdSyncConfirmationConfirm) {
-      householdSyncConfirmationConfirm.textContent = confirmation.collisionMemberDisplayName
+      householdSyncConfirmationConfirm.textContent = reviewingCorrection
+        ? "Clear and sync"
+        : confirmation.collisionMemberDisplayName
         ? `Sync to ${confirmation.collisionMemberDisplayName}`
         : "Confirm and save";
     }
@@ -349,7 +369,7 @@ householdMemberSelect?.addEventListener("change", async () => {
     console.error("[NextCard Popup] Household wallet switch failed:", error);
     await refreshHouseholdUi();
   } finally {
-    householdMemberSelect.disabled = false;
+    householdMemberSelect.disabled = householdConfirmationBusy;
   }
 });
 
@@ -359,7 +379,18 @@ manageHouseholdBtn?.addEventListener("click", () => {
   });
 });
 
+householdSyncCorrection?.addEventListener("click", async () => {
+  correctionReviewOperationId = displayedConfirmation?.operationId ?? null;
+  await refreshHouseholdUi();
+  householdSyncConfirmation?.focus();
+});
+
 householdSyncConfirmationCancel?.addEventListener("click", async () => {
+  if (correctionReviewOperationId) {
+    correctionReviewOperationId = null;
+    await refreshHouseholdUi();
+    return;
+  }
   householdSyncConfirmationCancel.disabled = true;
   try {
     await chrome.runtime.sendMessage({
@@ -374,14 +405,19 @@ householdSyncConfirmationCancel?.addEventListener("click", async () => {
 
 householdSyncConfirmationConfirm?.addEventListener("click", async () => {
   let keepConfirmDisabled = false;
+  householdConfirmationBusy = true;
   householdSyncConfirmationConfirm.disabled = true;
   if (householdSyncConfirmationCancel) {
     householdSyncConfirmationCancel.disabled = true;
   }
+  if (householdSyncCorrection) householdSyncCorrection.disabled = true;
+  if (householdMemberSelect) householdMemberSelect.disabled = true;
   try {
     const result = await chrome.runtime.sendMessage({
       type: "CONFIRM_HOUSEHOLD_SYNC",
+      ...(correctionReviewOperationId ? { correctProfile: true, operationId: correctionReviewOperationId } : {}),
     });
+    await refreshHouseholdUi();
     if (result?.manualConversionRequired) {
       await refreshHouseholdUi();
       await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
@@ -408,7 +444,10 @@ householdSyncConfirmationConfirm?.addEventListener("click", async () => {
         : "Could not save this sync. Please try again.";
     }
   } finally {
+    householdConfirmationBusy = false;
     householdSyncConfirmationConfirm.disabled = keepConfirmDisabled;
+    if (householdSyncCorrection) householdSyncCorrection.disabled = false;
+    if (householdMemberSelect) householdMemberSelect.disabled = false;
     if (householdSyncConfirmationCancel) {
       householdSyncConfirmationCancel.disabled = false;
     }

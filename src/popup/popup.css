@@ -2683,9 +2683,9 @@
 .household-sync-confirmation span {
   display: block;
   margin-top: 3px;
-  color: var(--text-secondary, #6b6b73);
-  font-size: 11px;
-  line-height: 1.35;
+  color: var(--text-primary, #352b25);
+  font-size: 12px;
+  line-height: 1.45;
 }
 
 .household-sync-confirmation button {
@@ -2796,6 +2796,7 @@
 .household-sync-confirmation-actions {
   display: flex;
   justify-content: flex-end;
+  flex-wrap: wrap;
   gap: 8px;
   margin-top: 10px;
 }
@@ -2916,4 +2917,9 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
+}
+
+#householdSyncCorrection {
+  order: 3;
+  flex-basis: 100%;
 }

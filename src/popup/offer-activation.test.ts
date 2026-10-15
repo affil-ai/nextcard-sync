@@ -101,3 +101,73 @@ it("lets the install guide own sign-in and restores sidebar sign-in when the gui
   await vi.waitFor(() => expect(document.getElementById("authView")?.classList.contains("guided-setup")).toBe(false), { timeout: 3000 });
   expect(document.getElementById("authView")?.classList.contains("active")).toBe(true);
 });
+
+it("reviews the wrong profile's data removal before confirming a household correction", async () => {
+  vi.resetModules();
+  vi.useFakeTimers();
+  document.documentElement.innerHTML = readFileSync(`${process.cwd()}/src/popup/popup.html`, "utf8");
+  const confirmation = {
+    memberDisplayName: "Vishal", provider: "atmos", operationId: "atmos-vishal-run",
+    manualConversionRequired: false, collisionMemberDisplayName: "Jordan",
+  };
+  let pending: typeof confirmation | null = confirmation;
+  let finishCorrection: ((value: { ok: boolean }) => void) | undefined;
+  const correctionFinished = new Promise<{ ok: boolean }>((resolve) => { finishCorrection = resolve; });
+  let correctionAttempts = 0;
+  const sendMessage = vi.fn(async (message: Record<string, unknown>) => {
+    switch (message.type) {
+      case "GET_AUTH_STATE": return { token: "token", email: "owner@example.com", signedInAt: "test" };
+      case "GET_EXTENSION_PROFILE": return { accountLevel: "pro", offersFirstUiEnabled: true };
+      case "GET_HOUSEHOLD_STATE": return {
+        context: {
+          protocolVersion: 2, accountScopeId: "owner", contextRevision: "revision-1",
+          primaryMemberId: "vishal", householdActivated: true,
+          capabilities: { householdReads: true, householdWrites: true, loyaltyReads: true,
+            loyaltyWrites: true, memberIssuerCardSync: true, memberOfferReads: true,
+            memberOfferWrites: true, combinedReads: true },
+          members: [{ id: "vishal", displayName: "Vishal", isPrimary: true, lifecycleVersion: 1 },
+            { id: "jordan", displayName: "Jordan", isPrimary: false, lifecycleVersion: 1 }],
+        }, selectedMemberId: "vishal", pendingConfirmation: pending,
+      };
+      case "CONFIRM_HOUSEHOLD_SYNC":
+        correctionAttempts++;
+        return correctionAttempts === 1 ? { ok: false, error: "Temporary network error" } : correctionFinished;
+      default: return null;
+    }
+  });
+  vi.stubGlobal("chrome", {
+    runtime: { sendMessage, onMessage: { addListener: () => {} }, getManifest: () => ({ version: "0.8.6" }), getURL: (path: string) => path },
+    storage: { local: { get: async () => ({ disclosureAccepted: true, consentGiven: true, firstSyncCompleted: true }), set: async () => {}, remove: async () => {} },
+      onChanged: { addListener: () => {}, removeListener: () => {} } },
+    tabs: { create: vi.fn() }, windows: { getCurrent: async () => ({ id: 1 }) },
+  });
+  await import("./app");
+  const correct = document.getElementById("householdSyncCorrection");
+  const confirm = document.getElementById("householdSyncConfirmationConfirm");
+  const memberSelect = document.getElementById("householdMemberSelect");
+  if (!(correct instanceof HTMLButtonElement) || !(confirm instanceof HTMLButtonElement) || !(memberSelect instanceof HTMLSelectElement)) throw new Error("Missing profile controls");
+  await vi.waitFor(() => expect(correct.textContent).toBe("Use Vishal instead"));
+  correct.click();
+  await vi.waitFor(() => expect(confirm.textContent).toBe("Clear and sync"));
+  expect(document.getElementById("householdSyncConfirmationText")?.textContent).toContain("from Jordan, then sync this login to Vishal");
+  expect(sendMessage.mock.calls.some(([message]) => message.type === "CONFIRM_HOUSEHOLD_SYNC")).toBe(false);
+  document.getElementById("householdSyncConfirmationCancel")?.click();
+  await vi.waitFor(() => expect(confirm.textContent).toBe("Sync to Jordan"));
+  correct.click();
+  await vi.waitFor(() => expect(confirm.textContent).toBe("Clear and sync"));
+  confirm.click();
+  await vi.waitFor(() => expect(sendMessage).toHaveBeenCalledWith({
+    type: "CONFIRM_HOUSEHOLD_SYNC", correctProfile: true, operationId: "atmos-vishal-run",
+  }));
+  await vi.waitFor(() => expect(confirm.disabled).toBe(false));
+  expect(confirm.textContent).toBe("Clear and sync");
+  confirm.click();
+  await vi.waitFor(() => expect(correctionAttempts).toBe(2));
+  expect(sendMessage.mock.calls.filter(([message]) => message.type === "CONFIRM_HOUSEHOLD_SYNC")
+    .every(([message]) => message.correctProfile === true)).toBe(true);
+  expect(confirm.disabled).toBe(true);
+  expect(memberSelect.disabled).toBe(true);
+  pending = null;
+  finishCorrection?.({ ok: true });
+  await vi.waitFor(() => expect(document.getElementById("householdSyncConfirmation")?.hidden).toBe(true));
+});

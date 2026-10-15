@@ -341,6 +341,7 @@ async function getHouseholdPopupState() {
       ? {
           memberDisplayName: pendingTarget.memberDisplayName,
           provider: pendingTarget.provider,
+          operationId: "operationId" in pendingTarget && typeof pendingTarget.operationId === "string" ? pendingTarget.operationId : null,
           manualConversionRequired:
             "manualConversionRequired" in pendingValue
             && pendingValue.manualConversionRequired === true,
@@ -429,7 +430,9 @@ async function cancelPendingHouseholdSync() {
   return { ok: true };
 }
 
-async function confirmPendingHouseholdSync() {
+let householdConfirmationInFlight: Promise<{ ok: boolean; error?: string }> | null = null;
+
+async function confirmPendingHouseholdSync(correction?: { operationId: string }) {
   const stored = await chrome.storage.local.get(
     PENDING_HOUSEHOLD_CONFIRMATION_KEY,
   );
@@ -469,6 +472,43 @@ async function confirmPendingHouseholdSync() {
   };
   const validated = validateProviderData(target.provider, pending.data);
   if (!validated.ok) return { ok: false, error: validated.error };
+  // Confirm the profile the user reviewed is still selected before any write.
+  if (!await createHouseholdSyncTarget(target.provider, target)) {
+    return { ok: false, error: "household_scope_changed" };
+  }
+  if (correction) {
+    if (correction.operationId !== target.operationId ||
+        !("collisionMemberId" in pending) || typeof pending.collisionMemberId !== "string" ||
+        !("collisionMemberLifecycleVersion" in pending) || typeof pending.collisionMemberLifecycleVersion !== "number" ||
+        !("correctionDeleteOperationId" in pending) || typeof pending.correctionDeleteOperationId !== "string") {
+      return { ok: false, error: "Scan again to review the profile correction." };
+    }
+    const authGeneration = getAuthGeneration();
+    const currentTarget = await createHouseholdSyncTarget(target.provider, target);
+    const context = await getStoredHouseholdContext();
+    const source = context?.members.find((member) => member.id === pending.collisionMemberId);
+    if (!currentTarget || !context || !source ||
+        source.lifecycleVersion !== pending.collisionMemberLifecycleVersion ||
+        context.accountScopeId !== target.accountScopeId ||
+        context.contextRevision !== target.contextRevision || getAuthGeneration() !== authGeneration) {
+      return { ok: false, error: "household_scope_changed" };
+    }
+    const deleted = await deleteHouseholdProviderFromNextCard({
+      ...currentTarget,
+      memberId: source.id,
+      memberDisplayName: source.displayName,
+      memberLifecycleVersion: source.lifecycleVersion,
+      operationId: pending.correctionDeleteOperationId,
+    });
+    if (!deleted.ok) return deleted;
+    if (getAuthGeneration() !== authGeneration) return { ok: false, error: "household_scope_changed" };
+    // Save the cleared state before retrying, including when a balance conversion
+    // requires another confirmation or the save must be retried after a failure.
+    await chrome.storage.local.set({
+      [PENDING_HOUSEHOLD_CONFIRMATION_KEY]: { target: currentTarget, data: validated.data },
+    });
+    return confirmPendingHouseholdSync();
+  }
   if (
     "collisionMemberId" in pending
     && typeof pending.collisionMemberId === "string"
@@ -835,6 +875,8 @@ async function pushScrapedData(providerId: ProviderId, data: unknown) {
           data: validated.data,
           collisionMemberId: collisionMember.id,
           collisionMemberDisplayName: collisionMember.displayName,
+          collisionMemberLifecycleVersion: collisionMember.lifecycleVersion,
+          correctionDeleteOperationId: crypto.randomUUID(),
         },
       });
       stateStore.updateProvider(providerId, {
@@ -1215,7 +1257,12 @@ chrome.runtime.onMessage.addListener(
     isProviderLocked: providerIsLocked,
     prepareSyncTarget: async (providerId, expectedScope) =>
       Boolean(await prepareHouseholdSyncTarget(providerId, expectedScope)),
-    confirmHouseholdSync: confirmPendingHouseholdSync,
+    confirmHouseholdSync: (correction) => {
+      if (householdConfirmationInFlight) return householdConfirmationInFlight;
+      householdConfirmationInFlight = confirmPendingHouseholdSync(correction)
+        .finally(() => { householdConfirmationInFlight = null; });
+      return householdConfirmationInFlight;
+    },
     cancelHouseholdSyncConfirmation: cancelPendingHouseholdSync,
     switchHouseholdMember,
     getHouseholdState: getHouseholdPopupState,

@@ -258,7 +258,7 @@ export function createMessageRouter(options: {
   pushToNextCard: (providerId: ProviderId, data: unknown) => Promise<unknown>;
   deleteFromNextCard: (providerId: ProviderId, expectedScope?: HouseholdOperationScope) => Promise<{ ok: boolean; error?: string }>;
   prepareSyncTarget?: (providerId: ProviderId, expectedScope?: HouseholdOperationScope) => Promise<boolean>;
-  confirmHouseholdSync?: () => Promise<{ ok: boolean; error?: string }>;
+  confirmHouseholdSync?: (correction?: { operationId: string }) => Promise<{ ok: boolean; error?: string }>;
   cancelHouseholdSyncConfirmation?: () => Promise<{ ok: boolean }>;
   switchHouseholdMember?: (memberId: string) => Promise<{ ok: boolean; error?: string }>;
   getHouseholdState?: () => Promise<unknown>;
@@ -828,7 +828,12 @@ export function createMessageRouter(options: {
           sendResponse({ ok: false, error: "household_sync_unavailable" });
           return true;
         }
-        void options.confirmHouseholdSync()
+        if (message.correctProfile === true && typeof message.operationId !== "string") {
+          sendResponse({ ok: false, error: "confirmation_not_found" });
+          return true;
+        }
+        void options.confirmHouseholdSync(message.correctProfile === true && typeof message.operationId === "string"
+          ? { operationId: message.operationId } : undefined)
           .then(sendResponse)
           .catch((error) => sendResponse({
             ok: false,
