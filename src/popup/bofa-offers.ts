@@ -56,7 +56,7 @@ export function mountBofaOffers() {
   cancel.textContent = "Stop";
   const reviewHost = document.createElement("div");
   reviewHost.className = "offer-review";
-  const review = new OfferReview();
+  let review = new OfferReview();
   const actions = document.createElement("div");
   actions.className = "offer-enrollment-actions";
   const activateAll = document.createElement("button");
@@ -66,6 +66,10 @@ export function mountBofaOffers() {
   activateSelected.type = "button";
   activateSelected.className = "sync-btn sync-btn--secondary";
   actions.append(activateAll, activateSelected);
+  const addMore = document.createElement("button");
+  addMore.type = "button";
+  addMore.className = "sync-btn sync-btn--secondary";
+  addMore.textContent = "Add more offers";
   const links = document.createElement("div");
   links.className = "offer-done-actions";
   const done = document.createElement("button");
@@ -79,7 +83,7 @@ export function mountBofaOffers() {
   view.rel = "noopener noreferrer";
   view.textContent = "View offers →";
   links.append(done, view);
-  body.append(status, notice, signIn, progress, cancel, reviewHost, actions, links);
+  body.append(status, notice, signIn, progress, cancel, reviewHost, actions, addMore, links);
 
   const modal = document.createElement("div");
   modal.className = "consent-modal-backdrop";
@@ -109,6 +113,7 @@ export function mountBofaOffers() {
 
   let state: z.infer<typeof bofaPortalStateSchema> | null = null;
   let expanded = false;
+  let reviewingRemaining = false;
   let actionPending = false;
   let actionError: string | null = null;
   let activationTotal = 0;
@@ -142,6 +147,10 @@ export function mountBofaOffers() {
     pending?.trigger.focus();
     pending = null;
   }
+  function canReview() {
+    return state?.phase === "ready" ||
+      (state?.phase === "completed" && reviewingRemaining);
+  }
   function render() {
     body.hidden = !expanded;
     root.classList.toggle("guided-active-issuer", expanded);
@@ -155,7 +164,7 @@ export function mountBofaOffers() {
         actionError ?? state?.error ?? "",
       );
     signIn.hidden = !needsSignIn || running || actionPending;
-    const ready = !needsSignIn && state?.phase === "ready" && !actionPending;
+    const ready = !needsSignIn && canReview() && !actionPending;
     const card = reviewCard();
     const count = card.offers?.length ?? 0;
     const selected = state ? review.selected(state.runId, card).length : 0;
@@ -179,7 +188,7 @@ export function mountBofaOffers() {
           : `Finding offers${current ? ` · ${current.toLocaleString()} found` : ""}…`
         : state?.phase === "activating"
           ? activationTotal ? `Activating offers · ${state.added} of ${activationTotal} activated` : `Activating offers · ${state.added} activated`
-          : state?.phase === "completed"
+          : state?.phase === "completed" && !reviewingRemaining
             ? `${state.added} offer${state.added === 1 ? "" : "s"} activated`
             : state?.phase === "failed" ? "The check couldn't finish. Refresh to try again."
           : state?.phase === "cancelled" ? "Check stopped. Refresh to continue."
@@ -222,9 +231,10 @@ export function mountBofaOffers() {
     activateSelected.textContent = `Activate ${selected} selected offer${selected === 1 ? "" : "s"}`;
     activateSelected.hidden = !selected;
     activateSelected.disabled = !ready || !selected;
+    addMore.hidden = state?.phase !== "completed" || reviewingRemaining || !count || needsSignIn || actionPending;
     links.hidden = running || actionPending;
     view.hidden = !state?.offers.length;
-    if (pending && (pending.runId !== state?.runId || state.phase !== "ready"))
+    if (pending && (pending.runId !== state?.runId || !canReview()))
       closeConfirmation();
   }
   async function send(message: object) {
@@ -238,6 +248,8 @@ export function mountBofaOffers() {
   }
   function apply(next: z.infer<typeof bofaPortalStateSchema> | null) {
     if (next && next.runId !== state?.runId) expanded = true;
+    if (next?.runId !== state?.runId || next?.phase !== "completed")
+      reviewingRemaining = false;
     state = next;
     render();
   }
@@ -267,7 +279,7 @@ export function mountBofaOffers() {
     }
   }
   function showConfirmation(all: boolean) {
-    if (state?.phase !== "ready") return;
+    if (!state || !canReview()) return;
     const card = reviewCard();
     const ids = all
       ? (card.offers?.map((o) => o.id) ?? [])
@@ -311,6 +323,11 @@ export function mountBofaOffers() {
         ids: request.ids,
       });
     }
+  };
+  addMore.onclick = () => {
+    reviewingRemaining = true;
+    review = new OfferReview();
+    render();
   };
   done.onclick = () => {
     expanded = false;

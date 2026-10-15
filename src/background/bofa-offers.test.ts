@@ -379,6 +379,34 @@ describe("BofA portal operation boundaries", () => {
       1,
     );
   });
+  it("activates another subset after completion without rescanning or reactivating previous offers", async () => {
+    let thirdActivated = false;
+    const bridge = execute.getMockImplementation();
+    execute.mockImplementation(async (args) => {
+      const [kind, , input] = args.args;
+      if (kind === "search") return [{ result: { portalId, status: 200, data: {
+        total: 3, offers: [{ offer_id: "1" }, { offer_id: "2" }, { offer_id: "3" }],
+      } } }];
+      if (input === "3" && kind === "activate") {
+        thirdActivated = true;
+        return [{ result: { portalId, status: 200, data: { ok: true } } }];
+      }
+      if (input === "3" && kind === "details") return [{ result: { portalId, status: 200, data: {
+        offer: { ...issuerOffer("2"), offer_id: "3", is_activated: thirdActivated },
+      } } }];
+      return bridge?.(args);
+    });
+    const state = await ready();
+    for (const id of ["2", "3"]) {
+      const started = await send({ type: "BOFA_PORTAL_ACTIVATE", runId: state.runId, ids: [id] });
+      expect(started.ok).toBe(true);
+      await vi.waitFor(async () => expect((await send({ type: "BOFA_PORTAL_STATUS" })).state?.phase).toBe("completed"));
+      expect((await send({ type: "BOFA_PORTAL_STATUS" })).state?.added).toBe(1);
+    }
+    expect(execute.mock.calls.filter(([args]) => args.args[0] === "activate").map(([args]) => args.args[2])).toEqual(["2", "3"]);
+    expect((await send({ type: "BOFA_PORTAL_ACTIVATE", runId: state.runId, ids: ["2"] })).ok).toBe(false);
+  });
+
   it("does not activate from a previous nextcard account", async () => {
     const state = await ready();
     mocks.generation++;

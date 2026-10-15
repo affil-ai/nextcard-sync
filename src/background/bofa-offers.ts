@@ -475,7 +475,7 @@ export function registerBofaOffers() {
     if (
       !op ||
       op.state.runId !== runId ||
-      op.state.phase !== "ready" ||
+      (op.state.phase !== "ready" && op.state.phase !== "completed") ||
       !ids.length ||
       new Set(ids).size !== ids.length ||
       ids.some(
@@ -509,6 +509,7 @@ export function registerBofaOffers() {
       throw error;
     }
     op.state.phase = "activating";
+    op.state.added = 0;
     op.state.error = null;
     await persist(op);
     void (async () => {

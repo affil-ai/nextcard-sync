@@ -140,6 +140,30 @@ it.each([true, false])(
       ids: all ? ["1", "2"] : ["2"],
     });
     expect(document.querySelector('[role="progressbar"]')?.getAttribute("aria-valuemax")).toBe(all?"2":"1");
+    if (!all) {
+      state.phase = "completed";
+      state.added = 1;
+      state.offers = state.offers.map(o => o.issuerOfferId === "2" ? { ...o, action: "activated" } : o);
+      await vi.advanceTimersByTimeAsync(1500);
+      const more = Array.from(document.querySelectorAll("button")).find(b => b.textContent === "Add more offers");
+      expect(more?.hidden).toBe(false);
+      more?.click();
+      expect(document.querySelector<HTMLElement>(".offer-review")?.hidden).toBe(false);
+      expect(document.querySelectorAll(".offer-review-row")).toHaveLength(1);
+      expect(document.body.textContent).toContain("0 of 1 selected");
+      const activateRemaining = Array.from(document.querySelectorAll("button")).find(b => b.textContent === "Activate all 1 offer");
+      activateRemaining?.click();
+      const confirmRemaining = Array.from(document.querySelectorAll("button")).find(b => b.textContent === "Activate 1 offer");
+      confirmRemaining?.click();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(send).toHaveBeenLastCalledWith({ type: "BOFA_PORTAL_ACTIVATE", runId: "run", ids: ["1"] });
+    }
+    state.phase = "completed";
+    state.offers = state.offers.map(o => o.action === "activate" ? { ...o, action: "activated" } : o);
+    await vi.advanceTimersByTimeAsync(1500);
+    const finishedMore = Array.from(document.querySelectorAll("button")).find(b => b.textContent === "Add more offers");
+    expect(finishedMore?.hidden).toBe(true);
+
   },
 );
 
