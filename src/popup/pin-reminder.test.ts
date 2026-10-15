@@ -1,7 +1,6 @@
 // @vitest-environment jsdom
 import { readFileSync } from "node:fs";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { createOfferOperation, OFFER_OPERATION_STORAGE_KEY } from "../lib/offer-operation";
 import { initializePinReminder } from "./pin-reminder";
 
 let stored: Record<string, unknown>;
@@ -15,7 +14,7 @@ let removeListener: ReturnType<typeof vi.fn>;
 
 beforeEach(() => {
   pinned = false;
-  stored = { pinReminderEligible: true };
+  stored = {};
   storageChanged = undefined;
   changePin = undefined;
   getUserSettings = vi.fn(async () => ({ isOnToolbar: pinned }));
@@ -59,7 +58,7 @@ function reminder() {
   return element;
 }
 
-it("shows while unpinned, hides immediately on pin, and returns on unpin", async () => {
+it("shows before the first sync, hides immediately on pin, and returns on unpin", async () => {
   initializePinReminder();
   expect(reminder().hidden).toBe(true);
   await vi.waitFor(() => expect(reminder().hidden).toBe(false));
@@ -124,25 +123,12 @@ it("stays quiet on API errors and checks again on focus without the change-event
   await vi.waitFor(() => expect(reminder().hidden).toBe(false));
 });
 
-it("waits until offers have been activated before showing a reminder", async () => {
-  stored = {};
+it("honors permanent dismissal on first open before any offers sync", async () => {
+  stored = { pinReminderDismissed: true };
   initializePinReminder();
   await vi.waitFor(() => expect(getUserSettings).toHaveBeenCalled());
   await Promise.resolve();
   expect(reminder().hidden).toBe(true);
-  const operation = { ...createOfferOperation("chase", "pin-run"), phase: "completed", added: 2, saveStatus: "saved" };
-  storageChanged?.({ [OFFER_OPERATION_STORAGE_KEY]: { newValue: { active: null, history: { chase: operation } } } }, "local");
-  await vi.waitFor(() => expect(reminder().hidden).toBe(false));
-  expect(stored.pinReminderEligible).toBe(true);
-});
-
-it("recognizes BofA activation and ignores checks with no activations", async () => {
-  stored = {};
-  initializePinReminder();
-  await Promise.resolve();
-  storageChanged?.({ bofa_portal_operation: { newValue: { state: { phase: "ready", added: 0 } } } }, "local");
-  await Promise.resolve();
+  changePin?.({ isOnToolbar: false });
   expect(reminder().hidden).toBe(true);
-  storageChanged?.({ bofa_portal_operation: { newValue: { state: { phase: "completed", added: 1 } } } }, "local");
-  await vi.waitFor(() => expect(reminder().hidden).toBe(false));
 });
