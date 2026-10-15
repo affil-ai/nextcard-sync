@@ -15,39 +15,45 @@ const skipButton = document.getElementById("skip-pin");
 const backButton = document.getElementById("previous-step");
 const offersLink = document.getElementById("view-offers");
 const progress = document.querySelectorAll(".progress li");
+const animationToggle = document.getElementById("animation-toggle");
+let animationPaused = false;
+animationToggle?.addEventListener("click", () => {
+  animationPaused = !animationPaused;
+  setup?.classList.toggle("animation-paused", animationPaused);
+  animationToggle.textContent = animationPaused ? "Play animation" : "Pause animation";
+  animationToggle.setAttribute("aria-pressed", String(animationPaused));
+});
 const guideStartedAt = Date.now();
 const steps = [
   {
     name: "open",
     title: "Open nextcard sync",
-    description:
-      "Click the button below to open the extension beside this page.",
-    detail: "You can also find nextcard sync in Chrome’s puzzle-piece menu.",
+    description: "Open the extension beside this page to get started.",
+    detail: "",
     action: "Open nextcard sync",
   },
   {
     name: "pin",
-    title: "Keep nextcard sync handy",
+    title: "Find and pin nextcard sync",
     description:
-      "Click Chrome’s puzzle-piece menu, then the pin beside nextcard sync.",
-    detail: "We’ll continue automatically when you pin it. You can also skip this step.",
+      "Open Extensions, then pin nextcard sync for next time.",
+    detail: "Choose nextcard sync in the menu to open it anytime.",
     action: "Check pin status",
   },
   {
     name: "sign-in",
     title: "Connect your nextcard account",
     description:
-      "Sign in with the same account you use on the nextcard website.",
-    detail: "When you’re signed in, we’ll move to the next step automatically.",
+      "Use the account you use on nextcard.com.",
+    detail: "We’ll continue once you’re signed in.",
     action: "Sign in to nextcard",
   },
   {
     name: "activate",
     title: "Activate your first offers",
     description:
-      "Choose Chase, Amex, or Citi in the sidebar to check the offers on your cards.",
-    detail:
-      "The sidebar will guide you through issuer sign-in, choosing a card, and confirming activation. Checking alone doesn’t activate offers.",
+      "Choose your bank in the sidebar to find your offers.",
+    detail: "Select offers, then confirm to activate them.",
     action: "Open nextcard sync",
   },
 ];
@@ -74,10 +80,12 @@ function renderStep(focus = false) {
     description.textContent = completed
       ? "Your activated offers were saved to nextcard."
       : current.description;
-  if (detail)
+  if (detail) {
     detail.textContent = completed
       ? "Use an activated offer with its matching card, and check its terms before you spend."
       : current.detail;
+    detail.hidden = !detail.textContent;
+  }
   if (count)
     count.textContent = completed
       ? "Setup complete"

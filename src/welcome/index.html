@@ -83,16 +83,21 @@
                 <div class="preview-action">Check for offers</div>
               </div>
             </div>
+            <svg class="tutorial-cursor" viewBox="0 0 24 24" fill="currentColor"><path d="M5 2v17l4-4 3 7 3-1-3-7h6Z" /></svg>
+          </div>
+          <div class="tutorial-captions">
+            <span class="tutorial-caption tutorial-caption--menu">1. Extensions</span>
+            <span class="tutorial-caption tutorial-caption--pin">2. Pin</span>
+            <span class="tutorial-caption tutorial-caption--open">3. Open</span>
           </div>
         </div>
+        <button id="animation-toggle" class="text-button tutorial-toggle" type="button" aria-pressed="false">Pause animation</button>
         <p id="step-count" class="step-count">Step 1 of 4</p>
         <h1 id="step-title" tabindex="-1">Open nextcard sync</h1>
         <p id="step-description" class="description">
-          Click the button below to open the extension beside this page.
+          Open the extension beside this page to get started.
         </p>
-        <p id="step-detail" class="detail">
-          You can also find nextcard sync in Chrome’s puzzle-piece menu.
-        </p>
+        <p id="step-detail" class="detail" hidden></p>
         <div class="setup-actions">
         <button id="open-extension" type="button" disabled>
           Open nextcard sync <span aria-hidden="true">→</span>
@@ -127,9 +132,6 @@
       </section>
     </main>
     <footer class="page-width">
-      <p>
-        Reopen this guide from <strong>Setup guide</strong> in the extension.
-      </p>
       <a
         href="https://www.nextcard.com/privacy/nextcard-sync"
         target="_blank"

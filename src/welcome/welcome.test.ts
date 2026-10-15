@@ -74,10 +74,19 @@ describe("guided install setup", () => {
   it("opens the panel in the user gesture and advances only on success", async () => {
     await load();
     expect(open).not.toHaveBeenCalled();
+    expect(document.getElementById("step-detail")?.textContent).toBe("");
+    expect(document.body.textContent).not.toContain("Reopen this guide");
     primaryButton().click();
     expect(open).toHaveBeenCalledWith({ windowId: 42 });
     await vi.waitFor(() => expectStep("pin"));
     expect(document.getElementById("skip-pin")?.hidden).toBe(false);
+    const pause = document.getElementById("animation-toggle");
+    pause?.click();
+    expect(document.querySelector(".setup")?.classList.contains("animation-paused")).toBe(true);
+    expect(pause?.textContent).toBe("Play animation");
+    pause?.click();
+    expect(document.querySelector(".setup")?.classList.contains("animation-paused")).toBe(false);
+
     expect(document.querySelectorAll('[aria-current="step"]').length).toBe(1);
   });
 

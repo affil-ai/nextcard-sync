@@ -1,8 +1,11 @@
 // @vitest-environment jsdom
 import { readFileSync } from "node:fs";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { createOfferOperation, OFFER_OPERATION_STORAGE_KEY } from "../lib/offer-operation";
 import { initializePinReminder } from "./pin-reminder";
 
+let stored: Record<string, unknown>;
+let storageChanged: ((changes: Record<string, chrome.storage.StorageChange>, area: string) => void) | undefined;
 let pinned = false;
 let changePin:
   | ((change: Partial<chrome.action.UserSettings>) => void)
@@ -12,6 +15,8 @@ let removeListener: ReturnType<typeof vi.fn>;
 
 beforeEach(() => {
   pinned = false;
+  stored = { pinReminderEligible: true };
+  storageChanged = undefined;
   changePin = undefined;
   getUserSettings = vi.fn(async () => ({ isOnToolbar: pinned }));
   removeListener = vi.fn();
@@ -23,6 +28,16 @@ beforeEach(() => {
   if (!reminder) throw new Error("Missing sidebar pin reminder");
   document.body.replaceChildren(reminder);
   vi.stubGlobal("chrome", {
+    storage: {
+      local: {
+        get: vi.fn(async () => stored),
+        set: vi.fn(async (values: Record<string, unknown>) => Object.assign(stored, values)),
+      },
+      onChanged: {
+        addListener: (listener: typeof storageChanged) => { storageChanged = listener; },
+        removeListener: vi.fn(),
+      },
+    },
     action: {
       getUserSettings,
       onUserSettingsChanged: {
@@ -62,7 +77,7 @@ it("stays hidden for a pinned extension on startup", async () => {
   expect(reminder().hidden).toBe(true);
 });
 
-it("keeps dismissal until the next pin/unpin transition", async () => {
+it("keeps explicit dismissal across pin changes and sidebar reopening", async () => {
   initializePinReminder();
   await vi.waitFor(() => expect(reminder().hidden).toBe(false));
   document.getElementById("dismissPinReminder")?.click();
@@ -72,7 +87,12 @@ it("keeps dismissal until the next pin/unpin transition", async () => {
   expect(reminder().hidden).toBe(true);
   changePin?.({ isOnToolbar: true });
   changePin?.({ isOnToolbar: false });
-  expect(reminder().hidden).toBe(false);
+  expect(reminder().hidden).toBe(true);
+  await vi.waitFor(() => expect(stored.pinReminderDismissed).toBe(true));
+  window.dispatchEvent(new Event("pagehide"));
+  initializePinReminder();
+  await Promise.resolve();
+  expect(reminder().hidden).toBe(true);
 });
 
 it("ignores stale reads when a pin event arrives first and removes its listener on close", async () => {
@@ -95,11 +115,34 @@ it("ignores stale reads when a pin event arrives first and removes its listener 
 });
 
 it("stays quiet on API errors and checks again on focus without the change-event API", async () => {
-  vi.stubGlobal("chrome", { action: { getUserSettings } });
+  vi.stubGlobal("chrome", { ...chrome, action: { getUserSettings } });
   getUserSettings.mockRejectedValueOnce(new Error("Unavailable"));
   initializePinReminder();
   await Promise.resolve();
   expect(reminder().hidden).toBe(true);
   window.dispatchEvent(new Event("focus"));
+  await vi.waitFor(() => expect(reminder().hidden).toBe(false));
+});
+
+it("waits until offers have been activated before showing a reminder", async () => {
+  stored = {};
+  initializePinReminder();
+  await vi.waitFor(() => expect(getUserSettings).toHaveBeenCalled());
+  await Promise.resolve();
+  expect(reminder().hidden).toBe(true);
+  const operation = { ...createOfferOperation("chase", "pin-run"), phase: "completed", added: 2, saveStatus: "saved" };
+  storageChanged?.({ [OFFER_OPERATION_STORAGE_KEY]: { newValue: { active: null, history: { chase: operation } } } }, "local");
+  await vi.waitFor(() => expect(reminder().hidden).toBe(false));
+  expect(stored.pinReminderEligible).toBe(true);
+});
+
+it("recognizes BofA activation and ignores checks with no activations", async () => {
+  stored = {};
+  initializePinReminder();
+  await Promise.resolve();
+  storageChanged?.({ bofa_portal_operation: { newValue: { state: { phase: "ready", added: 0 } } } }, "local");
+  await Promise.resolve();
+  expect(reminder().hidden).toBe(true);
+  storageChanged?.({ bofa_portal_operation: { newValue: { state: { phase: "completed", added: 1 } } } }, "local");
   await vi.waitFor(() => expect(reminder().hidden).toBe(false));
 });
