@@ -1,4 +1,6 @@
 import { registerBofaOffers } from "./bofa-offers";
+import { registerDoorDashTest } from "./doordash";
+registerDoorDashTest();
 import { registerInstallWelcome } from "../lib/welcome";
 import type { NextCardAuth, ProviderId, PushToNextCardResult } from "../lib/types";
 import {
