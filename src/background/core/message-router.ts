@@ -332,6 +332,7 @@ export function createMessageRouter(options: {
     // The BofA listener owns these replies. A synchronous fallback here wins
     // Chrome's first-response race and hides its progress and errors.
     if (typeof message.type === "string" && message.type.startsWith("BOFA_PORTAL_")) return false;
+    if (typeof message.type === "string" && message.type.startsWith("DOORDASH_TEST_")) return false;
     switch (message.type) {
       case "REQUEST_SYNC": {
         const providerId = message.provider;

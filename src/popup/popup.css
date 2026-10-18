@@ -2958,3 +2958,13 @@
 .provider-card-row .provider-card { padding-right: 58px; }
 .provider-card-row > .rewards-sync-stop { position: absolute; right: 12px; top: 50%; transform: translateY(-50%); }
 .provider-card-row .provider-arrow { display: none; }
+      .doordash-test { margin: 12px 16px; padding: 14px; border: 1px solid var(--border, #d4d4d8); border-radius: 12px; color: var(--text, #18181b); background: var(--bg, #fff); font-size: 13px; line-height: 1.5; }
+      .doordash-test > summary { cursor: pointer; font-weight: 600; }
+      .doordash-test select { width: 100%; padding: 8px; margin: 8px 0; color: inherit; background: inherit; border: 1px solid var(--border, #d4d4d8); border-radius: 6px; }
+      .doordash-actions { display: flex; flex-wrap: wrap; gap: 8px; margin: 8px 0; }
+      .doordash-actions button { padding: 7px 10px; border: 1px solid var(--border, #d4d4d8); border-radius: 6px; color: inherit; background: inherit; cursor: pointer; }
+      .doordash-actions button:disabled { opacity: .6; cursor: wait; }
+      .doordash-campaign { padding: 12px 0; border-top: 1px solid var(--border, #d4d4d8); }
+      .doordash-test code { overflow-wrap: anywhere; font-size: 11px; }
+      .doordash-test p { margin: 8px 0; }
+      .doordash-test button:focus-visible, .doordash-test select:focus-visible, .doordash-test summary:focus-visible { outline: 2px solid #315cfd; outline-offset: 3px; }
