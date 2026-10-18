@@ -8,7 +8,7 @@ export const doorDashQueries = {
     } }
   }`,
   carts: `query listCarts($input: ListCartsInput!) {
-    listCarts(input: $input) { id subtotal creator { id } restaurant { id } }
+    listCarts(input: $input) { id subtotal isConvenienceCart creator { id } restaurant { id } }
   }`,
   placements: `query getPlacements($location: PlacementLocation!, $component: PlacementComponent!, $storeId: String, $subtotal: IAmountMonetaryFields) {
     getPlacements(location: $location, component: $component, storeId: $storeId, subtotal: $subtotal, isCardPayment: true) {
@@ -49,10 +49,41 @@ export const doorDashSnapshotSchema = z.object({
   campaigns: z.array(campaignSchema),
   checks: z.array(doorDashReadSchema.omit({ data: true })),
   checkoutContextsChecked: z.number().int().nonnegative(),
+  contexts: z
+    .array(
+      z.object({
+        source: z.string(),
+        nonRestaurant: z.boolean(),
+        validationPassed: z.boolean(),
+      }),
+    )
+    .optional(),
 });
 export type DoorDashSnapshot = z.infer<typeof doorDashSnapshotSchema>;
 export const doorDashReplySchema = z.discriminatedUnion("ok", [
   z.object({ ok: z.literal(true), snapshot: doorDashSnapshotSchema }),
+  z.object({ ok: z.literal(false), error: z.string() }),
+]);
+export const doorDashCardsReplySchema = z.discriminatedUnion("ok", [
+  z.object({
+    ok: z.literal(true),
+    cards: z.array(
+      z.object({
+        userCardId: z.string(),
+        name: z.string(),
+        lastFourDigits: z.string().nullable(),
+      }),
+    ),
+    connectedUserCardId: z.string().nullable().optional(),
+  }),
+  z.object({ ok: z.literal(false), error: z.string() }),
+]);
+export const doorDashSaveReplySchema = z.discriminatedUnion("ok", [
+  z.object({
+    ok: z.literal(true),
+    saved: z.number().int().nonnegative(),
+    snapshot: doorDashSnapshotSchema,
+  }),
   z.object({ ok: z.literal(false), error: z.string() }),
 ]);
 
@@ -74,17 +105,27 @@ export function normalizeDoorDashReads(
   checkedAt: string,
   accountKey: string | null,
 ): DoorDashSnapshot {
-  const active = record(reads.find((read) => read.source === "subscription" && read.status === "ok")?.data);
-  const infoRead = reads.find((read) => read.source === "membership" && read.status === "ok");
-  const info = record(record(record(infoRead?.data).subscriptionInformation).subscriptionInfo);
+  const active = record(
+    reads.find((read) => read.source === "subscription" && read.status === "ok")
+      ?.data,
+  );
+  const infoRead = reads.find(
+    (read) => read.source === "membership" && read.status === "ok",
+  );
+  const info = record(
+    record(record(infoRead?.data).subscriptionInformation).subscriptionInfo,
+  );
   const plan = record(info.subscriptionPlan);
   const membership = new Set<string>();
-  for (const section of list(record(info.manageSubscriptionDashboard).sectionsList)) {
+  for (const section of list(
+    record(info.manageSubscriptionDashboard).sectionsList,
+  )) {
     const row = record(section);
     if (row.name !== "subscription_state") continue;
     for (const description of list(row.descriptionList)) {
       const label = text(description);
-      if (label && !/enrollment|expiration|\d{1,2}\/\d{1,2}/i.test(label)) membership.add(label);
+      if (label && !/enrollment|expiration|\d{1,2}\/\d{1,2}/i.test(label))
+        membership.add(label);
     }
   }
   const messages = new Set<string>();
@@ -92,15 +133,23 @@ export function normalizeDoorDashReads(
   for (const read of reads.filter((item) => item.status === "ok")) {
     if (read.source.startsWith("validation:")) {
       const data = record(read.data);
-      const type = text(data.consumer_subscription_plan_benefit_membership_type);
+      const type = text(
+        data.consumer_subscription_plan_benefit_membership_type,
+      );
       if (type) membership.add(type);
-      for (const key of ["message", "checkout_page_error_message", "place_order_page_error_message"]) {
+      for (const key of [
+        "message",
+        "checkout_page_error_message",
+        "place_order_page_error_message",
+      ]) {
         const message = text(data[key]);
         if (message) messages.add(message);
       }
     }
     if (!read.source.startsWith("placements:")) continue;
-    const sections = record(record(record(read.data).getPlacements).placements).placementSections;
+    const sections = record(
+      record(record(read.data).getPlacements).placements,
+    ).placementSections;
     for (const section of list(sections)) {
       for (const value of list(record(section).placementModels)) {
         const model = record(value);
@@ -109,19 +158,42 @@ export function normalizeDoorDashReads(
         const title = text(record(model.title).copy) ?? "Chase benefit";
         const description = text(record(model.description).copy);
         const tags = text(logging.campaign_tags) ?? "";
-        const campaignId = text(custom.campaign_id) ?? text(logging.campaign_id);
-        if (!campaignId || !(custom.use_case === "chase" || /chase/i.test(`${title} ${description ?? ""} ${tags} ${text(logging.container) ?? ""}`))) continue;
+        const campaignId =
+          text(custom.campaign_id) ?? text(logging.campaign_id);
+        if (
+          !campaignId ||
+          !(
+            custom.use_case === "chase" ||
+            /chase/i.test(
+              `${title} ${description ?? ""} ${tags} ${text(logging.container) ?? ""}`,
+            )
+          )
+        )
+          continue;
         const previous = campaigns.get(campaignId);
-        const descriptions = [...new Set([...(previous?.descriptions ?? []), ...(description ? [description] : [])])];
+        const descriptions = [
+          ...new Set([
+            ...(previous?.descriptions ?? []),
+            ...(description ? [description] : []),
+          ]),
+        ];
         const labels = `${title} ${descriptions.join(" ")} ${tags}`;
-        const frequency = /quarter/i.test(labels) ? "quarterly" : /month/i.test(labels) ? "monthly" : previous?.frequency ?? "unknown";
-        const allowanceMatch = labels.match(/\b(\d+)\s+(?:times?\s+)?per\s+(?:month|quarter)\b/i);
+        const frequency = /quarter/i.test(labels)
+          ? "quarterly"
+          : /month/i.test(labels)
+            ? "monthly"
+            : (previous?.frequency ?? "unknown");
+        const allowanceMatch = labels.match(
+          /\b(\d+)\s+(?:times?\s+)?per\s+(?:month|quarter)\b/i,
+        );
         campaigns.set(campaignId, {
           campaignId,
           title: previous && !allowanceMatch ? previous.title : title,
           descriptions,
           frequency,
-          allowance: allowanceMatch ? Number(allowanceMatch[1]) : previous?.allowance ?? null,
+          allowance: allowanceMatch
+            ? Number(allowanceMatch[1])
+            : (previous?.allowance ?? null),
           remainingUses: null,
           availability: "offered",
           sources: [...new Set([...(previous?.sources ?? []), read.source])],
@@ -135,13 +207,45 @@ export function normalizeDoorDashReads(
     accountKey,
     planId: text(active.plan_id) ?? text(plan.id),
     subscriptionStatus: text(active.subscription_status),
-    eligibleForBenefits: typeof active.is_eligible_for_benefits === "boolean" ? active.is_eligible_for_benefits : null,
+    eligibleForBenefits:
+      typeof active.is_eligible_for_benefits === "boolean"
+        ? active.is_eligible_for_benefits
+        : null,
     activationDate: text(active.start_time),
     membership: [...membership],
     billingInterval: text(plan.recurrenceIntervalType),
     validationMessages: [...messages],
     campaigns: [...campaigns.values()],
-    checks: reads.map(({ source, status, error }) => ({ source, status, ...(error ? { error } : {}) })),
-    checkoutContextsChecked: reads.filter((read) => read.source.startsWith("placements:checkout:") && read.status === "ok").length,
+    checks: reads.map(({ source, status, error }) => ({
+      source,
+      status,
+      ...(error ? { error } : {}),
+    })),
+    checkoutContextsChecked: reads.filter(
+      (read) =>
+        read.source.startsWith("placements:checkout:") && read.status === "ok",
+    ).length,
+    contexts: reads
+      .filter((read) => read.source.startsWith("context:"))
+      .map((read) => {
+        const data = record(read.data);
+        const index = read.source.slice("context:".length);
+        const validation = record(
+          reads.find(
+            (item) =>
+              item.source === `validation:${index}` && item.status === "ok",
+          )?.data,
+        );
+        return {
+          source: `placements:checkout:${index}`,
+          nonRestaurant: data.nonRestaurant === true,
+          validationPassed:
+            /^The consumer has a valid default card for partner plan\.?$/i.test(
+              text(validation.message) ?? "",
+            ) &&
+            !text(validation.checkout_page_error_message) &&
+            !text(validation.place_order_page_error_message),
+        };
+      }),
   };
 }
