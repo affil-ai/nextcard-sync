@@ -2013,6 +2013,15 @@
 .offers-progress-bar-fill {
   display: none;
 }
+#chaseOffersRunning .offers-progress-bar {
+  background: #f0ece8;
+  animation: none;
+}
+#chaseOffersRunning .offers-progress-bar-fill {
+  display: block;
+  height: 100%;
+  background: #f6b156;
+}
 @keyframes offers-sweep {
   0% { background-position: 100% 0; }
   100% { background-position: -100% 0; }

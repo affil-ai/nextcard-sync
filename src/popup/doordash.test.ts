@@ -415,10 +415,13 @@ function eligibleSnapshot() {
   };
 }
 
-it("saves inferred single-use credit usage only after the backend acknowledges it", async () => {
+it("shows automatically saved inferred usage after the sync acknowledgement", async () => {
   let recordedUses = 0;
   sendMessage.mockImplementation(async (message: { type: string }) => {
-    if (message.type === "DOORDASH_BENEFITS") return expectedReply("likely_used");
+    if (message.type === "DOORDASH_BENEFITS") {
+      const reply = expectedReply("likely_used");
+      return { ...reply, benefits: reply.benefits.map((row) => ({ ...row, cardCreditId: "credit-a", recordedUses })) };
+    }
     if (message.type === "DOORDASH_TEST_CARDS")
       return {
         ok: true,
@@ -446,9 +449,9 @@ it("saves inferred single-use credit usage only after the backend acknowledges i
           },
         ],
       };
-    if (message.type === "DOORDASH_USAGE_CONFIRM") {
+    if (message.type === "DOORDASH_TEST_SAVE") {
       recordedUses = 1;
-      return { ok: true, amountUsed: 10 };
+      return { ok: true, saved: 1, snapshot: eligibleSnapshot() };
     }
     return { ok: true, snapshot: eligibleSnapshot() };
   });
@@ -463,24 +466,16 @@ it("saves inferred single-use credit usage only after the backend acknowledges i
   await vi.waitFor(() => expect(cards.options.length).toBe(2));
   cards.value = "card-a";
   cards.dispatchEvent(new Event("change"));
-  await vi.waitFor(() => expect(document.querySelector(".doordash-credit-row button")).not.toBeNull());
-  const mark = Array.from(document.querySelectorAll("button")).find(
-    (item) => item.textContent === "Save usage",
-  );
-  mark?.click();
+  expect(document.querySelector(".doordash-credit-row button")).toBeNull();
+  const save = document.getElementById("doorDashSave");
+  if (!(save instanceof HTMLButtonElement)) throw new Error("Missing save button");
+  await vi.waitFor(() => expect(save.disabled).toBe(false));
+  save.click();
   await vi.waitFor(() =>
     expect(document.querySelectorAll('.doordash-credit-use[data-source="recorded"]').length).toBe(1),
   );
-  expect(sendMessage).toHaveBeenCalledWith({
-    type: "DOORDASH_USAGE_CONFIRM",
-    userCardId: "card-a",
-    confirmation: {
-      cardCreditId: "credit-a",
-      periodStart: "2026-10-01",
-      periodEnd: "2026-12-31",
-      uses: 1,
-    },
-  });
+  expect(sendMessage).toHaveBeenCalledWith({ type: "DOORDASH_TEST_SAVE", userCardId: "card-a" });
+  expect(sendMessage).not.toHaveBeenCalledWith(expect.objectContaining({ type: "DOORDASH_USAGE_CONFIRM" }));
   expect(chrome.tabs.create).not.toHaveBeenCalled();
 });
 
@@ -728,6 +723,25 @@ function expectedReply(availability: "available" | "likely_used" | "unknown" = "
   return { ok: true, benefits: [{ key: "non-restaurant", label: "DoorDash grocery", frequency: maxUses === 2 ? "monthly" : "quarterly", periodStart: "2026-10-01", periodEnd: maxUses === 2 ? "2026-10-31" : "2026-12-31", maxUses, amountPerUse: 10, availability }] };
 }
 
+it.each([
+  { availability: "available", manualAction: false },
+  { availability: "unknown", manualAction: true },
+] satisfies { availability: "available" | "unknown"; manualAction: boolean }[])("shows single-use manual entry=$manualAction when availability=$availability", async ({ availability, manualAction }) => {
+  sendMessage.mockImplementation(async (message: { type: string }) => {
+    if (message.type === "DOORDASH_BENEFITS") {
+      const reply = expectedReply(availability);
+      return { ...reply, benefits: reply.benefits.map((benefit) => ({ ...benefit, cardCreditId: "credit-a", recordedUses: 0 })) };
+    }
+    if (message.type === "DOORDASH_TEST_CARDS") return { ok: true, cards: [] };
+    return { ok: true, snapshot: eligibleSnapshot() };
+  });
+  mountDoorDashProvider(); button().click();
+  await vi.waitFor(() => expect(document.getElementById("doorDashCreditRows")?.textContent).toContain(availability === "available" ? "○ Available" : "○ Usage unknown"));
+  const actions = document.getElementById("doorDashCreditRows")?.querySelectorAll("button");
+  expect(actions?.length).toBe(manualAction ? 1 : 0);
+  if (manualAction) expect(actions?.[0]?.textContent).toBe("Mark as used");
+});
+
 it("checks a missing single-use credit before wallet linkage and identifies it as inferred", async () => {
   sendMessage.mockImplementation(async (message: { type: string }) => {
     if (message.type === "DOORDASH_BENEFITS") return expectedReply("likely_used");
@@ -827,16 +841,17 @@ it("waits through DoorDash sign-in and resumes without a second Connect click", 
 
 
 it.each([
-  { availability: "available", recordedUses: 0, message: "At least 1 of 2 available.", used: 0 },
-  { availability: "available", recordedUses: 1, message: "At least 1 of 2 available.", used: 1 },
+  { availability: "available", recordedUses: 0, message: "1 or 2 credits remaining", used: 0 },
+  { availability: "available", recordedUses: 1, message: "1 credit remaining", used: 1 },
   { availability: "available", recordedUses: 2, message: "All 2 credits marked as used.", used: 2 },
-  { availability: "likely_used", recordedUses: 0, message: "All credits may have been used.", used: 0 },
+  { availability: "likely_used", recordedUses: 0, message: "2 of 2 credits used.", used: 2 },
+  { availability: "likely_used", recordedUses: 1, message: "2 of 2 credits used.", used: 2 },
   { availability: "unknown", recordedUses: 0, message: "Availability could not be confirmed.", used: 0 },
 ] satisfies { availability: "available" | "likely_used" | "unknown"; recordedUses: number; message: string; used: number }[])("groups the two credits with $recordedUses recorded and availability=$availability", async ({ availability, recordedUses, message, used }) => {
   sendMessage.mockImplementation(async (request: { type: string }) => {
     if (request.type === "DOORDASH_BENEFITS") {
       const reply = expectedReply(availability, 2);
-      return { ...reply, benefits: reply.benefits.map((benefit) => ({ ...benefit, recordedUses })) };
+      return { ...reply, benefits: reply.benefits.map((benefit) => ({ ...benefit, cardCreditId: "credit-a", recordedUses })) };
     }
     if (request.type === "DOORDASH_TEST_CARDS") return { ok: true, cards: [] };
     return { ok: true, snapshot: eligibleSnapshot() };
@@ -848,7 +863,11 @@ it.each([
   expect(rows?.textContent).not.toContain("Usage unknown");
   expect(rows?.querySelectorAll('.doordash-credit-use[data-used="true"]').length).toBe(used);
   expect(rows?.querySelectorAll('.doordash-credit-use[data-used="false"]').length).toBe(0);
-  if (recordedUses === 2) expect(rows?.textContent).not.toContain("At least 1");
+  if (availability === "available" && recordedUses < 2) {
+    expect(rows?.querySelector(".doordash-credit-status")?.textContent).toBe("○ Available");
+  } else expect(rows?.querySelector(".doordash-credit-status")).toBeNull();
+  expect(rows?.textContent).not.toContain("At least 1");
+  expect(rows?.querySelectorAll("button").length).toBe(recordedUses < 2 && availability !== "likely_used" ? 1 : 0);
 });
 
 

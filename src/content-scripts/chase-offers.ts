@@ -325,7 +325,9 @@ async function runEnrollment(
   if (!epi) throw new ChaseReadError("session_expired");
 
   let added = 0;
+  let processed = 0;
   let failed = 0;
+  sendProgress({ added, failed, total, processed, verifying: false });
   const enrolledByCard: Array<{ card: ChaseCard; offers: ChaseOffer[] }> = [];
   for (const entry of offersByCard) {
     const enrolledOffers: ChaseOffer[] = [];
@@ -334,11 +336,14 @@ async function runEnrollment(
       // Verify every attempted offer, including requests whose response was lost.
       enrolledOffers.push(offer);
       await enrollOffer(offer, epi).catch(() => false);
-      sendProgress({ added, failed, total });
+      processed++;
+      sendProgress({ added, failed, total, processed, verifying: false });
     }
     enrolledByCard.push({ card: entry.card, offers: enrolledOffers });
     if (cancelled) break;
   }
+
+  sendProgress({ added, failed, total, processed, verifying: true });
 
   // A successful enrollment HTTP response is not proof that Chase activated it.
   let unverified = 0;

@@ -13,6 +13,7 @@ import type {
 } from "../lib/types";
 import {
   getOfferOperationStatusText,
+  getChaseOfferProgressText,
   getOfferPostEnrollmentNextStep,
   getOfferSaveStatusText,
   isOfferCompletionContinuing,
@@ -1960,11 +1961,11 @@ function initChaseOffers() {
       && msg.runId !== activeOfferRunIds.get("chase")
     ) return;
     if (msg.type === "CHASE_OFFERS_PROGRESS") {
-      const added = msg.added ?? 0;
-      const total = msg.total ?? 0;
-      const pct = total > 0 ? Math.min(100, Math.round((added / total) * 100)) : 0;
+      const processed = typeof msg.processed === "number" ? msg.processed : 0;
+      const total = typeof msg.total === "number" ? msg.total : null;
+      const pct = total && total > 0 ? Math.min(100, Math.round((processed / total) * 100)) : 0;
       if (progressBar) progressBar.style.width = `${pct}%`;
-      if (progressDetail) progressDetail.textContent = total > 0 ? `${added} of ${total} activated` : `${added} activated`;
+      if (progressDetail) progressDetail.textContent = getChaseOfferProgressText(processed, total, msg.verifying === true);
     }
     if (msg.type === "CHASE_OFFERS_COMPLETE") {
       const cardLabel = formatCardDisplayName(chaseCards.find((c) => c.id === selectedCardId));
@@ -3203,9 +3204,13 @@ function renderBackgroundOwnedIssuerState(snapshot: OfferOperationSnapshot) {
     }
     const progress = document.getElementById(`${issuer}OffersProgressDetail`);
     if (progress && state.phase === "adding") {
-      progress.textContent = state.total == null
-        ? `${state.added} added`
-        : `${state.added} of ${state.total} added`;
+      progress.textContent = issuer === "chase"
+        ? getOfferOperationStatusText(state)
+        : state.total == null ? `${state.added} added` : `${state.added} of ${state.total} added`;
+      if (issuer === "chase") {
+        const bar = document.getElementById("chaseOffersProgressBar");
+        if (bar) bar.style.width = `${state.total ? Math.min(100, ((state.processed ?? 0) / state.total) * 100) : 0}%`;
+      }
     }
     const recentResult = document.getElementById(`${issuer}OffersRecentResult`);
     if (recentResult) {

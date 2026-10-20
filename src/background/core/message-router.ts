@@ -1471,6 +1471,8 @@ export function createMessageRouter(options: {
         }
         void options.offerOperations.patchActiveRun("chase", message.runId, {
           phase: "adding",
+          processed: typeof message.processed === "number" && Number.isFinite(message.processed) ? Math.max(0, Math.floor(message.processed)) : 0,
+          verifying: message.verifying === true,
           added: typeof message.added === "number" ? Math.max(0, message.added) : 0,
           total: typeof message.total === "number" ? Math.max(0, message.total) : null,
           remaining:

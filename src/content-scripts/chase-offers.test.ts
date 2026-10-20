@@ -51,6 +51,22 @@ describe("Chase discovery and activation boundary", () => {
     expect(enrollmentUrls).toHaveLength(1); expect(enrollmentUrls[0]).toContain("offer-identifier=chosen");
     expect(enrollmentUrls[0]).not.toContain("offer-identifier=other");
   });
+  it("advances submission progress before verifying actual activations", async () => {
+    fetchMock.mockResolvedValueOnce(response(offers()))
+      .mockResolvedValueOnce(response({})).mockResolvedValueOnce(response({}))
+      .mockResolvedValueOnce(response(offers(true)));
+    listener({ type: "CHASE_OFFERS_RUN", runId: "run", selectedCardKeys: ["one"], allCardIds: ["one"],
+      cards: [{ id: "one", name: "Card" }], selectedOfferIdsByCard: { one: ["chosen", "other"] } }, {}, () => {});
+    await vi.waitFor(() => expect(sendMessage).toHaveBeenCalledWith(expect.objectContaining({ type: "CHASE_OFFERS_COMPLETE", added: 1, failed: 1 })));
+    const progress = sendMessage.mock.calls.map(([message]) => message).filter((message) =>
+      typeof message === "object" && message !== null && "processed" in message);
+    expect(progress).toEqual([
+      expect.objectContaining({ processed: 0, total: 2, added: 0, verifying: false }),
+      expect.objectContaining({ processed: 1, total: 2, added: 0, verifying: false }),
+      expect.objectContaining({ processed: 2, total: 2, added: 0, verifying: false }),
+      expect.objectContaining({ processed: 2, total: 2, added: 0, verifying: true }),
+    ]);
+  });
   it("does not replace a selected offer that disappeared and does not call issuer activation", async () => {
     fetchMock.mockResolvedValueOnce(response(offers()));
     listener({ type: "CHASE_OFFERS_RUN", runId: "run", selectedCardKeys: ["one"], allCardIds: ["one"],

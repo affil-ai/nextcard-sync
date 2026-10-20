@@ -46,6 +46,7 @@ export async function readDoorDashSession(queries: typeof doorDashQueries) {
       operationName: string;
       variables: Record<string, unknown>;
     },
+    discoverStores = false,
   ) {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 15_000);
@@ -64,6 +65,19 @@ export async function readDoorDashSession(queries: typeof doorDashQueries) {
           status: "error",
           error: `HTTP ${response.status}. Sign in to DoorDash or finish its browser verification, then retry.`,
         };
+      if (discoverStores) {
+        const html = await response.text();
+        const storeIds = new Map<string, boolean>();
+        for (const match of html.matchAll(/href=["']([^"']+)["']/g)) {
+          const href = match[1];
+          if (!href) continue;
+          const url = new URL(href, "https://www.doordash.com");
+          if (url.origin !== "https://www.doordash.com") continue;
+          const store = url.pathname.match(/^\/(?:convenience\/)?store\/(?:[^/]*-)?(\d+)\/?$/);
+          if (store?.[1]) storeIds.set(store[1], storeIds.get(store[1]) === true || url.pathname.startsWith("/convenience/"));
+        }
+        return { source, status: "ok", data: { storeIds: [...storeIds].sort((left, right) => Number(right[1]) - Number(left[1])).slice(0, 3).map(([id]) => id) } };
+      }
       const json: unknown = await response.json();
       if (record(json).errors)
         return {
@@ -113,7 +127,12 @@ export async function readDoorDashSession(queries: typeof doorDashQueries) {
   const cartData = record(
     reads.find((item) => item.source === "carts" && item.status === "ok")?.data,
   ).listCarts;
-  const carts: unknown[] = Array.isArray(cartData) ? cartData.slice(0, 3) : [];
+  const carts: unknown[] = Array.isArray(cartData)
+    ? [...cartData].sort((left, right) =>
+        Number(record(right).isConvenienceCart === true) -
+        Number(record(left).isConvenienceCart === true),
+      ).slice(0, 3)
+    : [];
   for (const [index, value] of carts.entries()) {
     const cart = record(value);
     const storeId = text(record(cart.restaurant).id);
@@ -152,6 +171,21 @@ export async function readDoorDashSession(queries: typeof doorDashQueries) {
           : []),
       ])),
     );
+  }
+  // Store placements can expose account campaigns without creating a cart.
+  // Their absence is not checkout validation and must never imply usage.
+  if (!reads.some((item) => item.source.startsWith("context:"))) {
+    const stores = await read("stores", "/home", undefined, true);
+    reads.push(stores);
+    const storeIds = record(stores.data).storeIds;
+    if (Array.isArray(storeIds)) {
+      for (const [index, storeId] of storeIds.entries()) {
+        if (typeof storeId !== "string") continue;
+        reads.push(await gql(`placements:store:${index + 1}`, "getPlacements", queries.placements, {
+          location: "STORE", component: "CAROUSEL", storeId,
+        }));
+      }
+    }
   }
   // The export uses a fingerprint instead of the subscription identifier.
   const subscription = record(

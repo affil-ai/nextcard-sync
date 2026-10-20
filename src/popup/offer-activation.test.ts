@@ -75,6 +75,15 @@ it("keeps card-specific choices through confirmation and releases review with Do
   document.getElementById("offerConfirmContinue")?.click();
   await vi.waitFor(() => expect(sendMessage).toHaveBeenCalledWith(expect.objectContaining({ type: "START_OFFER_ENROLLMENT",
     runId: "run", selectedCardKeys: ["one"], selectedOfferIdsByCard: { one: ["one-offer"] }, total: 1 })));
+  const adding: OfferOperationState = { ...ready, phase: "adding", total: 119, processed: 34, added: 0 };
+  snapshot = { active: adding, history: { chase: adding } };
+  await vi.waitFor(() => expect(document.getElementById("chaseOffersProgressDetail")?.textContent).toBe("Processing 34 of 119"));
+  expect(document.getElementById("chaseOffersProgressBar")?.style.width).toBe(`${34 / 119 * 100}%`);
+  const verifying: OfferOperationState = { ...adding, processed: 119, verifying: true };
+  snapshot = { active: verifying, history: { chase: verifying } };
+  await vi.waitFor(() => expect(document.getElementById("chaseOffersProgressDetail")?.textContent).toBe("Verifying activations…"));
+  snapshot = { active: ready, history: { chase: ready } };
+  await vi.waitFor(() => expect(document.getElementById("chaseOffersReady")?.style.display).not.toBe("none"));
   const done = document.querySelector('[data-finish-offers="chase"]');
   if (!(done instanceof HTMLButtonElement)) throw new Error("Missing Done button"); done.click();
   await vi.waitFor(() => expect(document.getElementById("chaseOffersSummary")?.textContent).toContain("No offers activated"));

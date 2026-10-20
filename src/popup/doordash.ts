@@ -344,10 +344,11 @@ export function mountDoorDashProvider() {
         ? `Quarterly · Q${Math.floor(end.getUTCMonth() / 3) + 1} ${end.getUTCFullYear()}`
         : `Monthly · ${end.toLocaleDateString(undefined, { month: "long", year: "numeric", timeZone: "UTC" })}`;
       item.append(title, period);
-      const visibleUses = row.maxUses > 1 ? Math.min(row.recordedUses ?? 0, row.maxUses) : 1;
+      const exhausted = row.availability === "likely_used";
+      const visibleUses = exhausted ? row.maxUses : row.maxUses > 1 ? Math.min(row.recordedUses ?? 0, row.maxUses) : 1;
       for (let index = 0; index < visibleUses; index++) {
         const recorded = row.recordedUses !== null && row.recordedUses !== undefined && index < row.recordedUses;
-        const inferred = !recorded && row.maxUses === 1 && row.availability === "likely_used";
+        const inferred = !recorded && exhausted;
         const used = recorded || inferred;
         const state = used ? "Used" : row.availability === "likely_used" ? "Likely used" : row.availability === "available" && row.maxUses === 1 ? "Available" : "Usage unknown";
         const slot = document.createElement("div");
@@ -360,14 +361,21 @@ export function mountDoorDashProvider() {
         item.append(slot);
       }
       if (row.maxUses > 1) {
+        const remaining = row.maxUses - (row.recordedUses ?? 0);
+        if (row.availability === "available" && remaining > 0) {
+          const status = document.createElement("div");
+          status.className = "doordash-credit-use doordash-credit-status";
+          status.textContent = "○ Available";
+          item.append(status);
+        }
         const note = document.createElement("p");
         note.className = "doordash-credit-availability";
         note.textContent = (row.recordedUses ?? 0) >= row.maxUses
           ? `All ${row.maxUses} credits marked as used.`
           : row.availability === "available"
-            ? `At least 1 of ${row.maxUses} available.`
+            ? remaining === 1 ? "1 credit remaining" : `1 or ${remaining} credits remaining`
             : row.availability === "likely_used"
-              ? "No promo available. All credits may have been used."
+              ? `${row.maxUses} of ${row.maxUses} credits used.`
               : "Availability could not be confirmed.";
         item.append(note);
       }
@@ -376,7 +384,8 @@ export function mountDoorDashProvider() {
         note.textContent = `${currency.format(row.recordedAmount)} recorded. Exact uses unknown.`;
         item.append(note);
       }
-      if (row.cardCreditId && row.recordedUses !== row.maxUses) {
+      const confirmedUnused = row.maxUses === 1 && row.availability === "available";
+      if (row.cardCreditId && row.recordedUses !== row.maxUses && !confirmedUnused && !exhausted) {
         const mark = document.createElement("button");
         mark.type = "button";
         mark.className = "tool-link-btn";

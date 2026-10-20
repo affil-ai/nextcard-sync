@@ -259,6 +259,8 @@ export function createOfferOperationStore() {
       added: 0,
       failed: 0,
       unverified: 0,
+      processed: 0,
+      verifying: false,
       remaining: total,
       cancelled: false,
       error: null,

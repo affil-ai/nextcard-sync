@@ -10,7 +10,7 @@ import { createRuntimeStateStore } from "./core/runtime-state";
 import { createOfferOperationStore } from "./offer-operation-store";
 import { createOfferOperationCoordinator } from "./offer-operation-coordinator";
 import { providerRegistry } from "../providers/provider-registry";
-import { doorDashQueries } from "../providers/doordash";
+import { doorDashQueries, doorDashReadSchema, normalizeDoorDashReads } from "../providers/doordash";
 import * as auth from "../lib/auth";
 import * as household from "../lib/household-context";
 
@@ -30,6 +30,7 @@ function mockReads(
   const fetcher = vi.fn(async (path: string, init: RequestInit) => {
     if (options.fail)
       return new Response("verification required", { status: 403 });
+    if (path === "/home") return new Response('<a href="/store/example-123/">Store</a>');
     if (path.includes("get_active_subscription_status")) {
       subscriptionReads++;
       return Response.json({
@@ -81,6 +82,51 @@ function mockReads(
   return fetcher;
 }
 
+it("checks a grocery cart even when three restaurant carts appear first", async () => {
+  const fetcher = mockReads();
+  const original = fetcher.getMockImplementation();
+  if (!original) throw new Error("Missing mocked DoorDash reads");
+  fetcher.mockImplementation(async (path: string, init: RequestInit) => {
+    if (path === "/graphql/listCarts") {
+      return Response.json({ data: { listCarts: [1, 2, 3, 4].map((index) => ({
+        id: `cart-${index}`,
+        subtotal: 1500,
+        isConvenienceCart: index === 4,
+        creator: { id: "consumer" },
+        restaurant: { id: `store-${index}` },
+      })) } });
+    }
+    return original(path, init);
+  });
+  await readDoorDashSession(doorDashQueries);
+  const checkouts = fetcher.mock.calls.map(([, init]) => String(init.body))
+    .filter((body) => body.includes('"location":"CHECKOUT"'));
+  expect(checkouts).toHaveLength(3);
+  expect(checkouts.some((body) => body.includes('"storeId":"store-4"'))).toBe(true);
+});
+
+it("discovers offered campaigns from account-local stores without a cart", async () => {
+  const fetcher = mockReads({ noCarts: true });
+  const original = fetcher.getMockImplementation();
+  if (!original) throw new Error("Missing mocked reads");
+  fetcher.mockImplementation(async (path: string, init: RequestInit) => {
+    if (path === "/home") return new Response('<a href="/convenience/store/123/">Market</a><a href="/store/market-456/">Market 2</a>');
+    if (path === "/graphql/getPlacements" && String(init.body).includes('"location":"STORE"')) {
+      return Response.json({ data: { getPlacements: { placements: { placementSections: [{ placementModels: [{
+        title: { copy: "$10 off Chase monthly benefit" }, description: { copy: "Apply at checkout" },
+        custom: { campaign_id: "grocery-campaign" },
+      }] }] } } } });
+    }
+    return original(path, init);
+  });
+  const result = await readDoorDashSession(doorDashQueries);
+  expect(result.reads.filter((row) => row.source.startsWith("placements:store:"))).toHaveLength(2);
+  const normalized = normalizeDoorDashReads(doorDashReadSchema.array().parse(result.reads), new Date().toISOString(), result.accountKey);
+  expect(normalized.campaigns).toEqual([expect.objectContaining({ campaignId: "grocery-campaign", frequency: "monthly" })]);
+  expect(normalized.contexts).toEqual([]);
+  expect(fetcher.mock.calls.some(([path]) => path.includes("partner_plan_benefit_validation"))).toBe(false);
+});
+
 it("only runs the captured read operations and hashes the account identifier", async () => {
   const fetcher = mockReads();
   const result = await readDoorDashSession(doorDashQueries);
@@ -104,7 +150,7 @@ it("only runs the captured read operations and hashes the account identifier", a
 it("does not invent carts when there is no checkout context", async () => {
   const fetcher = mockReads({ noCarts: true });
   const result = await readDoorDashSession(doorDashQueries);
-  expect(fetcher).toHaveBeenCalledTimes(5);
+  expect(fetcher).toHaveBeenCalledTimes(7);
   expect(
     result.reads.some((read) => read.source.startsWith("placements:checkout")),
   ).toBe(false);

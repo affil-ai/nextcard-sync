@@ -51,6 +51,8 @@ export interface OfferOperationState {
   added: number;
   failed: number;
   unverified?: number;
+  processed?: number;
+  verifying?: boolean;
   remaining: number | null;
   cancelled: boolean;
   error: string | null;
@@ -309,6 +311,8 @@ export function normalizeOfferOperation(value: unknown): OfferOperationState | n
     total: typeof value.total === "number" && value.total >= 0 ? value.total : null,
     added: typeof value.added === "number" && value.added >= 0 ? value.added : 0,
     unverified: typeof value.unverified === "number" && value.unverified >= 0 ? value.unverified : 0,
+    processed: typeof value.processed === "number" && Number.isFinite(value.processed) && value.processed >= 0 ? Math.floor(value.processed) : 0,
+    verifying: value.verifying === true,
     failed: typeof value.failed === "number" && value.failed >= 0 ? value.failed : 0,
     remaining:
       typeof value.remaining === "number" && value.remaining >= 0 ? value.remaining : null,
@@ -374,6 +378,7 @@ export function getOfferOperationStatusText(
         : "Offer check needs attention";
     }
     case "adding":
+      if (state.issuer === "chase") return getChaseOfferProgressText(state.processed ?? 0, state.total, state.verifying === true);
       return state.total == null
         ? `Adding ${issuerName} offers…`
         : `Adding offers — ${state.added} of ${state.total}`;
@@ -427,4 +432,10 @@ export function getOfferSaveStatusText(
     case "not_started":
       return "";
   }
+}
+
+// Submitted requests are progress, not confirmed activations.
+export function getChaseOfferProgressText(processed: number, total: number | null, verifying: boolean) {
+  if (verifying) return "Verifying activations…";
+  return total == null ? "Preparing offers…" : `Processing ${processed} of ${total}`;
 }

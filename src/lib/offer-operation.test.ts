@@ -23,6 +23,20 @@ describe("offer operation state", () => {
     expect(state.added).toBe(0);
   });
 
+  it("restores Chase submission progress without calling it confirmed activation", () => {
+    const operation = { ...createOfferOperation("chase", "progress"), phase: "adding", total: 119,
+      processed: 34, added: 0, verifying: false };
+    const snapshot = normalizeOfferOperationSnapshot({ active: operation, history: {} });
+    if (!snapshot.active) throw new Error("Missing restored operation");
+    expect(getOfferOperationStatusText(snapshot.active)).toBe("Processing 34 of 119");
+    const verifying = applyOfferOperationPatch(snapshot.active, { processed: 119, verifying: true });
+    if (!verifying) throw new Error("Missing verification phase");
+    expect(getOfferOperationStatusText(verifying)).toBe("Verifying activations…");
+    expect(verifying.added).toBe(0);
+    const complete = applyOfferOperationPatch(verifying, { phase: "completed", added: 117, failed: 2 });
+    if (!complete) throw new Error("Missing completion");
+    expect(getOfferOperationStatusText(complete)).toContain("117 added");
+  });
   it("allows the normal check and enrollment path", () => {
     expect(canTransitionOfferOperation("opening", "waiting_for_login")).toBe(true);
     expect(canTransitionOfferOperation("waiting_for_login", "checking")).toBe(true);
