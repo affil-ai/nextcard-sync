@@ -720,7 +720,7 @@ export function updateOverlayProgress(message: string): void {
   }, 200);
 }
 
-function removeOverlay(): void {
+export function removeOverlay(): void {
   stopOverlayPoll();
   hostEl?.remove();
   hostEl = null;

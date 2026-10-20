@@ -1,3 +1,4 @@
+import { z } from "zod";
 import { getAuth } from "./auth";
 
 export const FREE_MONTHLY_OFFER_ACTIVATION_LIMIT = 100;
@@ -14,19 +15,25 @@ interface StoredOfferActivationUsage {
 
 type StoredUsageByAccount = Record<string, StoredOfferActivationUsage>;
 
-export interface OfferActivationUsage {
-  month: string;
-  used: number;
-  reserved?: number;
-  limit: number | null;
-  remaining: number | null;
-}
+const serverAllowanceSchema = z.object({
+  month: z.string(),
+  accountLevel: z.enum(["free", "pro"]),
+  used: z.number().finite().nonnegative(),
+  reserved: z.number().finite().nonnegative().optional(),
+  limit: z.number().finite().nonnegative().nullable(),
+  remaining: z.number().finite().nonnegative().nullable(),
+});
+const serverReservationSchema = serverAllowanceSchema.extend({
+  granted: z.number().finite().nonnegative(),
+});
+
+export type OfferActivationUsage = z.infer<typeof serverAllowanceSchema>;
 
 export interface OfferActivationReservation extends OfferActivationUsage {
   ok: boolean;
   requested: number;
   granted: number;
-  error?: "monthly_offer_limit_reached" | "quota_unavailable";
+  error?: "monthly_offer_limit_reached" | "offer_run_unavailable" | "quota_unavailable";
 }
 
 interface PendingOfferActivationCompletion {
@@ -88,6 +95,7 @@ async function getLocalOfferActivationUsage(
   const limit = isPro ? null : FREE_MONTHLY_OFFER_ACTIVATION_LIMIT;
   return {
     month,
+    accountLevel: isPro ? "pro" : "free",
     used: usage.used,
     limit,
     remaining: limit == null ? null : Math.max(0, limit - usage.used),
@@ -229,31 +237,11 @@ export async function getOfferActivationUsage(
         `${__CONVEX_SITE_URL__}/extension/offer-activation-usage`,
         { headers: { Authorization: `Bearer ${auth.token}` } },
       );
-      const body = await response.json() as Partial<OfferActivationUsage>;
-      if (
-        response.ok
-        && typeof body.month === "string"
-        && typeof body.used === "number"
-        && (typeof body.limit === "number" || body.limit === null)
-        && (typeof body.remaining === "number" || body.remaining === null)
-      ) {
-        const local = await getLocalOfferActivationUsage(email, isPro);
-        const used = Math.max(local.used, Math.max(0, Math.floor(body.used)));
-        const reserved =
-          typeof body.reserved === "number"
-            ? Math.max(0, Math.floor(body.reserved))
-            : 0;
-        const limit = __MOCK_FREE_PLAN__
-          ? FREE_MONTHLY_OFFER_ACTIVATION_LIMIT
-          : body.limit;
-        return {
-          month: body.month,
-          used,
-          reserved,
-          limit,
-          remaining:
-            limit === null ? null : Math.max(0, limit - used - reserved),
-        };
+      const parsed = serverAllowanceSchema.safeParse(await response.json());
+      if (response.ok && parsed.success) {
+        const body = parsed.data;
+        if (__MOCK_FREE_PLAN__) return getLocalOfferActivationUsage(email, false);
+        return body;
       }
     } catch {
       // Keep the extension usable while the compatible backend rolls out.
@@ -286,48 +274,27 @@ export async function reserveOfferActivations(
           body: JSON.stringify({ runId, requested: safeRequested }),
         },
       );
-      const body = await response.json() as Partial<OfferActivationReservation>;
-      if (
-        (response.ok || response.status === 409)
-        && typeof body.month === "string"
-        && typeof body.used === "number"
-        && typeof body.granted === "number"
-        && (typeof body.limit === "number" || body.limit === null)
-        && (typeof body.remaining === "number" || body.remaining === null)
-      ) {
-        const local = await getLocalOfferActivationUsage(email, isPro);
-        const serverGranted = Math.max(0, Math.floor(body.granted));
-        const granted =
-          local.remaining === null
-            ? serverGranted
-            : Math.min(serverGranted, local.remaining);
-        const limit = __MOCK_FREE_PLAN__
-          ? FREE_MONTHLY_OFFER_ACTIVATION_LIMIT
-          : body.limit;
+      const parsed = serverReservationSchema.safeParse(await response.json());
+      if ((response.ok || response.status === 409) && parsed.success) {
+        const body = parsed.data;
+        const local = __MOCK_FREE_PLAN__
+          ? await getLocalOfferActivationUsage(email, false)
+          : null;
+        const serverGranted = Math.min(safeRequested, Math.floor(body.granted));
+        const granted = local?.remaining != null
+          ? Math.min(serverGranted, local.remaining)
+          : serverGranted;
+        const allowance = local ?? body;
+        const ok = response.ok && granted > 0;
+        if (ok) return { ...allowance, ok: true, requested: safeRequested, granted };
+        const exhausted = allowance.accountLevel === "free"
+          && allowance.limit !== null && allowance.remaining === 0;
         return {
-          ok: response.ok && granted > 0,
-          month: body.month,
-          used: Math.max(local.used, Math.max(0, Math.floor(body.used))),
-          reserved:
-            typeof body.reserved === "number"
-              ? Math.max(0, Math.floor(body.reserved))
-              : 0,
-          limit,
-          remaining:
-            limit === null
-              ? null
-              : Math.max(
-                  0,
-                  Math.min(
-                    typeof body.remaining === "number" ? body.remaining : 0,
-                    local.remaining ?? Number.POSITIVE_INFINITY,
-                  ),
-                ),
+          ...allowance,
+          ok: false,
           requested: safeRequested,
-          granted,
-          ...(!response.ok
-            ? { error: "monthly_offer_limit_reached" as const }
-            : {}),
+          granted: 0,
+          error: exhausted ? "monthly_offer_limit_reached" : "offer_run_unavailable",
         };
       }
     } catch {}

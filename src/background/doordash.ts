@@ -1,3 +1,4 @@
+import { doorDashUsageConfirmationSchema } from "../providers/doordash";
 import {
   doorDashQueries,
   doorDashReadSchema,
@@ -256,7 +257,7 @@ export function registerDoorDashTest() {
         : scope !== null || !(await isLegacyHouseholdOperationMode()))
     ) {
       throw new Error(
-        "The Nextcard account or selected household profile changed. Check DoorDash again.",
+        "The nextcard account or selected household profile changed. Check DoorDash again.",
       );
     }
   }
@@ -265,8 +266,9 @@ export function registerDoorDashTest() {
     body: Record<string, unknown>,
   ) {
     await requireCurrent(op);
+    const endpoint = body.operation === "benefits" || body.operation === "usage-options" || body.operation === "confirm-usage" ? "benefit-usage" : "benefit-sync";
     const response = await fetch(
-      `${__CONVEX_SITE_URL__}/extension/${op.scope ? "v2/" : ""}benefit-sync`,
+      `${__CONVEX_SITE_URL__}/extension/${op.scope ? "v2/" : ""}${endpoint}`,
       {
         method: "POST",
         headers: {
@@ -294,13 +296,17 @@ export function registerDoorDashTest() {
       },
     );
     await requireCurrent(op);
+    if (endpoint === "benefit-usage" && response.status === 404)
+      throw new Error("Usage confirmation needs the backend update. Usage unchanged.");
     const result: unknown = await response.json();
     if (!response.ok) {
       const parsed = z
         .object({ code: z.string().optional() })
         .safeParse(result);
+      if (body.operation === "benefits" && response.status === 400 && parsed.success && parsed.data.code === "invalid_request")
+        throw new Error("Credit details need the backend update. Your credits have not changed.");
       throw new Error(
-        `Nextcard could not save this sync (${parsed.success ? (parsed.data.code ?? response.status) : response.status}). Check the account, selected card, and backend deployment, then retry.`,
+        `nextcard could not save this sync (${parsed.success ? (parsed.data.code ?? response.status) : response.status}). Check the account, selected card, and backend deployment, then retry.`,
       );
     }
     return result;
@@ -314,6 +320,9 @@ export function registerDoorDashTest() {
         "DOORDASH_TEST_CHECK",
         "DOORDASH_TEST_CARDS",
         "DOORDASH_TEST_SAVE",
+        "DOORDASH_BENEFITS",
+        "DOORDASH_USAGE_OPTIONS",
+        "DOORDASH_USAGE_CONFIRM",
       ].includes(String(message.type))
     )
       return false;
@@ -348,7 +357,7 @@ export function registerDoorDashTest() {
         operation = null;
         const auth = await getAuth();
         if (!auth)
-          throw new Error("Sign in to Nextcard before syncing DoorDash.");
+          throw new Error("Sign in to nextcard before syncing DoorDash.");
         const generation = getAuthGeneration();
         const scope = await getCurrentHouseholdOperationScope();
         const snapshot = await checkDoorDashTab(message.tabId);
@@ -368,8 +377,10 @@ export function registerDoorDashTest() {
       await requireCurrent(op);
       if (message.type === "DOORDASH_TEST_CARDS")
         return request(op, { accountKey: op.snapshot.accountKey });
+      if (message.type === "DOORDASH_BENEFITS")
+        return request(op, { operation: "benefits", snapshot: op.snapshot });
       if (!("userCardId" in message) || typeof message.userCardId !== "string")
-        throw new Error("Choose a Nextcard card first.");
+        throw new Error("Choose a nextcard card first.");
       const fresh = await checkDoorDashTab(op.tabId);
       if (
         !fresh.accountKey ||
@@ -379,11 +390,33 @@ export function registerDoorDashTest() {
         throw new Error(
           "The DoorDash account or plan changed. Check again and choose its card.",
         );
+      if (
+        message.type === "DOORDASH_USAGE_OPTIONS" ||
+        message.type === "DOORDASH_USAGE_CONFIRM"
+      ) {
+        const confirmation =
+          message.type === "DOORDASH_USAGE_CONFIRM"
+            ? doorDashUsageConfirmationSchema.parse(
+                "confirmation" in message ? message.confirmation : undefined,
+              )
+            : undefined;
+        const result = await request(op, {
+          operation:
+            message.type === "DOORDASH_USAGE_OPTIONS"
+              ? "usage-options"
+              : "confirm-usage",
+          userCardId: message.userCardId,
+          snapshot: fresh,
+          ...(confirmation ? { confirmation } : {}),
+        });
+        operation = { ...op, snapshot: fresh };
+        return result;
+      }
       const result = await request(op, {
         userCardId: message.userCardId,
         snapshot: fresh,
       });
-      operation = null;
+      operation = { ...op, snapshot: fresh };
       return {
         ...z.object({ ok: z.literal(true), saved: z.number() }).parse(result),
         snapshot: fresh,

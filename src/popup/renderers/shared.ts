@@ -57,6 +57,15 @@ export function getProviderStatusLabel(state: ProviderSyncState) {
   return STATUS_LABELS[state.status];
 }
 
+export function renderCardSyncSummaryHtml(state: ProviderSyncState) {
+  if (state.status !== "done" || state.backendSyncStatus !== "saved" || !state.cardSync) return "";
+  const saved = state.cardSync.created + state.cardSync.existing;
+  const pending = state.cardSync.productChangesToReview;
+  const summary = `${saved} ${saved === 1 ? "card" : "cards"} synced`;
+  if (pending === 0) return `<p>${summary}</p>`;
+  return `<p>${summary} · ${pending} product ${pending === 1 ? "change" : "changes"} to review. <a href="${escapeHtml(__NEXTCARD_URL__)}/dashboard/cards" target="_blank" rel="noopener noreferrer">Review cards</a></p>`;
+}
+
 // Shared modal wiring keeps every detail renderer using the same delete confirmation flow.
 export async function confirmDeleteProvider(providerName: string, provider: ProviderId) {
   const expectedScope = getDisplayedHouseholdScope();

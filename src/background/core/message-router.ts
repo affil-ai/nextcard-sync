@@ -1,5 +1,5 @@
 import { WELCOME_PAGE_PATH } from "../../lib/welcome";
-import { readOfferSelection } from "../../lib/offer-selection";
+import { readOfferSelection, readReviewOffers } from "../../lib/offer-selection";
 import { getCachedAmexOfferIds } from "../../lib/sync-offers-to-nextcard";
 import type {
   ExtensionProfile,
@@ -332,7 +332,7 @@ export function createMessageRouter(options: {
     // The BofA listener owns these replies. A synchronous fallback here wins
     // Chrome's first-response race and hides its progress and errors.
     if (typeof message.type === "string" && message.type.startsWith("BOFA_PORTAL_")) return false;
-    if (typeof message.type === "string" && message.type.startsWith("DOORDASH_TEST_")) return false;
+    if (typeof message.type === "string" && message.type.startsWith("DOORDASH_")) return false;
     switch (message.type) {
       case "REQUEST_SYNC": {
         const providerId = message.provider;
@@ -474,7 +474,10 @@ export function createMessageRouter(options: {
             auth?.email,
             profile?.accountLevel === "pro",
           );
-          sendResponse({ ...usage, accountLevel: profile?.accountLevel ?? "free" });
+          sendResponse(usage);
+          if (usage.accountLevel !== profile?.accountLevel) {
+            void options.refreshExtensionProfile?.().catch(() => {});
+          }
         });
         return true;
 
@@ -683,7 +686,7 @@ export function createMessageRouter(options: {
             sendResponse({
               ...reservation,
               ok: false,
-              accountLevel: profile?.accountLevel ?? "free",
+              accountLevel: reservation.accountLevel,
               error: reservation.error ?? "quota_unavailable",
             });
             return;
@@ -1298,6 +1301,33 @@ export function createMessageRouter(options: {
           });
         }
         sendResponse({ ok: true });
+        return true;
+      }
+
+      case "AMEX_OFFERS_REVIEW_DETAILS": {
+        const offers = readReviewOffers(message.offers);
+        if (sender.id !== chrome.runtime.id || sender.origin !== "https://global.americanexpress.com"
+          || typeof message.runId !== "string" || typeof message.cardId !== "string" || !offers) {
+          sendResponse({ ok: false });
+          return false;
+        }
+        const runId = message.runId;
+        const cardId = message.cardId;
+        void (async () => {
+          const active = await options.offerOperations.getActiveRun("amex", runId);
+          if (!active || active.phase !== "ready_to_add" || active.ownedTabId !== sender.tab?.id) {
+            sendResponse({ ok: false });
+            return;
+          }
+          const copy = new Map(offers.map((offer) => [offer.id, offer]));
+          await options.offerOperations.patchActiveRun("amex", runId, {
+            cards: active.cards.map((card) => card.key === cardId ? {
+              ...card,
+              offers: card.offers?.map((offer) => copy.get(offer.id) ?? offer),
+            } : card),
+          });
+          sendResponse({ ok: true });
+        })().catch(() => sendResponse({ ok: false }));
         return true;
       }
 

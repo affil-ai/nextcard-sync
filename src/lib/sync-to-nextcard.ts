@@ -12,6 +12,7 @@
 import type { ExtensionRewardsSummary, ProviderId, MarriottLoyaltyData, AtmosLoyaltyData, ChaseURData, AALoyaltyData, DeltaLoyaltyData, UnitedLoyaltyData, SouthwestLoyaltyData, IHGLoyaltyData, HyattLoyaltyData, AmexLoyaltyData, CapitalOneLoyaltyData, HiltonLoyaltyData, FrontierLoyaltyData, BiltLoyaltyData, DiscoverLoyaltyData, CitiLoyaltyData, PushToNextCardResult } from "./types";
 import { extractLastFourDigits } from "./card-digits";
 import {
+  cardSyncSummarySchema,
   atmosProviderDataSchema,
   chaseProviderDataSchema,
   marriottProviderDataSchema,
@@ -809,7 +810,9 @@ export async function pushToNextCard(
     });
 
     const result = await response.json().catch(() => ({}));
+    const cardSync = cardSyncSummarySchema.safeParse(result.cardSync);
     const metadata = {
+      ...(cardSync.success ? { cardSync: cardSync.data } : {}),
       isLimited:
         typeof result.isLimited === "boolean" ? result.isLimited : undefined,
       syncedRewardsPrograms: Array.isArray(result.syncedRewardsPrograms)

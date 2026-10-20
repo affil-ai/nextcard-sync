@@ -435,14 +435,43 @@ footer p {
   footer { padding-block: 10px; }
 }
 
-/* Step 1 has one action. The browser-menu tutorial belongs to step 2. */
-.setup[data-step="open"] .extensions-menu,
-.setup[data-step="open"] .puzzle { display: none; }
-.setup[data-step="open"] .panel-preview { display: block; }
+/* Opening and signing in only need their primary actions. */
+.setup[data-step="open"] .illustration,
+.setup[data-step="sign-in"] .illustration,
+.setup[data-step="activate"] .illustration { display: none; }
+.sidebar-handoff { display: none; }
+.setup[data-step="activate"] .sidebar-handoff {
+  display: flex;
+  position: fixed;
+  right: 32px;
+  top: 50%;
+  width: clamp(180px, 23vw, 360px);
+  pointer-events: none;
+  color: var(--foreground);
+}
+.sidebar-handoff svg {
+  width: 100%;
+  height: auto;
+  animation: sidebar-arrow-bounce 1.6s ease-in-out infinite;
+}
+@keyframes sidebar-arrow-bounce {
+  0%, 100% { transform: translateX(-8px); }
+  50% { transform: translateX(8px); }
+}
+@media (max-width: 900px) {
+  .setup[data-step="activate"] .sidebar-handoff {
+    position: static;
+    width: min(360px, 75%);
+    margin: 32px 0 0 auto;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .sidebar-handoff svg { animation: none; }
+}
 .detail:empty { display: none; }
 .description, .detail { max-width: 56ch; text-wrap: balance; }
 footer { justify-content: flex-end; }
-.tutorial-cursor, .tutorial-captions, .tutorial-toggle { display: none; }
+.browser-tabs, .browser-page, .browser-address span, .tutorial-cursor, .tutorial-captions { display: none; }
 .setup[data-step="pin"] .illustration {
   --pin-pointer-y: 89px;
   position: relative;
@@ -450,7 +479,52 @@ footer { justify-content: flex-end; }
   padding-top: 16px;
   margin-bottom: 4px;
 }
-.setup[data-step="pin"] .browser-preview { height: 192px; }
+/* Start with the complete browser, then keep the toolbar's right edge in view. */
+.setup[data-step="pin"] .browser-scene {
+  position: relative;
+  height: 192px;
+  container-type: inline-size;
+  overflow: hidden;
+  border-radius: 12px;
+}
+.setup[data-step="pin"] .browser-preview {
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 161.29%;
+  height: 310px;
+  transform-origin: top right;
+  animation: tutorial-browser-zoom 12s cubic-bezier(.22, 1, .36, 1) infinite both;
+}
+.setup[data-step="pin"] .browser-tabs {
+  display: flex;
+  align-items: end;
+  gap: 12px;
+  height: 24px;
+  padding-inline: 12px;
+  background: #eee8e2;
+  font-size: 10px;
+}
+.browser-tab { padding: 4px 16px; background: #faf7f3; border-radius: 6px 6px 0 0; }
+.browser-new-tab { align-self: center; }
+.setup[data-step="pin"] .browser-address span {
+  display: block;
+  padding: 4px 12px;
+  color: var(--foreground);
+  font-size: 11px;
+}
+.setup[data-step="pin"] .browser-page {
+  display: block;
+  padding: 34px 7%;
+}
+.browser-page-heading, .browser-page-line { height: 12px; width: 34%; border-radius: 4px; background: #eee8e2; }
+.browser-page-line { height: 7px; width: 58%; margin-top: 12px; }
+.browser-page-cards { display: flex; gap: 16px; margin-top: 28px; }
+.browser-page-cards i { flex: 1; height: 94px; border: 1px solid var(--border); border-radius: 8px; background: #faf8f5; }
+@keyframes tutorial-browser-zoom {
+  0%, 8%, 100% { transform: scale(.62); }
+  20%, 95% { transform: scale(1); }
+}
 .setup[data-step="pin"] .browser-toolbar {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 32px 24px 20px;
@@ -460,41 +534,44 @@ footer { justify-content: flex-end; }
   width: 32px;
   height: 32px;
   background: transparent;
-  animation: tutorial-menu-highlight 9s infinite;
+  animation: tutorial-menu-highlight 12s infinite;
 }
 .setup[data-step="pin"] .extensions-menu {
   z-index: 2;
+  top: 70px;
   transform-origin: top right;
-  animation: tutorial-menu 9s infinite;
+  animation: tutorial-menu 12s infinite;
 }
 .setup[data-step="pin"] .pin {
   color: #342019;
   background: transparent;
-  animation: tutorial-pin 9s infinite;
+  animation: tutorial-pin 12s infinite;
 }
 .setup[data-step="pin"] .extension-row {
   background: #faf8f5;
-  animation: tutorial-row 9s infinite;
+  animation: tutorial-row 12s infinite;
 }
 .setup[data-step="pin"] .pinned-icon {
   display: block;
-  animation: tutorial-toolbar-icon 9s infinite;
+  animation: tutorial-toolbar-icon 12s infinite;
 }
 .setup[data-step="pin"] .panel-preview {
   display: block;
-  animation: tutorial-panel 9s infinite;
+  top: 64px;
+  width: 70cqw;
+  animation: tutorial-panel 12s infinite;
 }
 .setup[data-step="pin"] .tutorial-cursor {
   display: block;
   position: absolute;
   z-index: 3;
-  top: 20px;
+  top: 44px;
   right: 78px;
   width: 24px;
   height: 24px;
   color: var(--foreground);
   filter: drop-shadow(0 1px 1px #fff);
-  animation: tutorial-pointer 9s infinite;
+  animation: tutorial-pointer 12s infinite;
 }
 .setup[data-step="pin"] .tutorial-captions {
   display: flex;
@@ -508,77 +585,99 @@ footer { justify-content: flex-end; }
   font-weight: 600;
 }
 .tutorial-caption { padding: 4px 10px; border-radius: 6px; white-space: nowrap; }
-.tutorial-caption--menu { animation: tutorial-caption-menu 9s infinite; }
-.tutorial-caption--pin { animation: tutorial-caption-pin 9s infinite; }
-.tutorial-caption--open { animation: tutorial-caption-open 9s infinite; }
-.setup[data-step="pin"] .tutorial-toggle {
-  display: inline-flex;
-  min-height: 32px;
-  padding: 4px 10px;
-  margin-bottom: 8px;
-  font-size: .8125rem;
-  font-weight: 400;
+.tutorial-caption--menu { animation: tutorial-caption-menu 12s infinite; }
+.tutorial-caption--pin { animation: tutorial-caption-pin 12s infinite; }
+.tutorial-caption--open { animation: tutorial-caption-open 12s infinite; }
+.setup[data-step="pin"] .puzzle,
+.setup[data-step="pin"] .extensions-menu,
+.setup[data-step="pin"] .pin,
+.setup[data-step="pin"] .extension-row,
+.setup[data-step="pin"] .pinned-icon,
+.setup[data-step="pin"] .panel-preview,
+.setup[data-step="pin"] .tutorial-cursor,
+.setup[data-step="pin"] .tutorial-caption {
+  animation-fill-mode: both;
 }
-.setup.animation-paused .illustration * { animation-play-state: paused; }
 @keyframes tutorial-menu {
-  0%, 14%, 80%, 100% { opacity: 0; transform: translateY(-6px) scale(.97); }
-  20%, 74% { opacity: 1; transform: translateY(0) scale(1); }
+  0% { opacity: 0; transform: translateY(-6px) scale(.97); }
+  20%, 30.5%, 80%, 95% { opacity: 0; transform: translateY(-6px) scale(.97); }
+  35%, 75.5% { opacity: 1; transform: translateY(0) scale(1); }
+  100% { opacity: 0; transform: translateY(-6px) scale(.97); }
 }
 @keyframes tutorial-menu-highlight {
-  0%, 8%, 22%, 100% { background: transparent; }
-  12%, 18% { background: var(--primary); }
+  0% { background: transparent; }
+  20%, 26%, 36.5%, 95% { background: transparent; }
+  29%, 33.5% { background: var(--primary); }
+  100% { background: transparent; }
 }
 @keyframes tutorial-pin {
-  0%, 32%, 100% { color: var(--foreground); fill: transparent; }
-  38%, 95% { color: #1959b8; fill: #e2ecff; }
+  0% { color: var(--foreground); fill: transparent; }
+  20%, 44%, 95% { color: var(--foreground); fill: transparent; }
+  48.5%, 91.25% { color: #1959b8; fill: #e2ecff; }
+  100% { color: var(--foreground); fill: transparent; }
 }
 @keyframes tutorial-row {
-  0%, 60%, 78%, 100% { background: #faf8f5; }
-  66%, 73% { background: var(--nc-accent-yellow); }
+  0% { background: #faf8f5; }
+  20%, 65%, 78.5%, 95% { background: #faf8f5; }
+  69.5%, 74.75% { background: var(--nc-accent-yellow); }
+  100% { background: #faf8f5; }
 }
 @keyframes tutorial-toolbar-icon {
-  0%, 36%, 100% { opacity: 0; transform: scale(.9); }
-  42%, 95% { opacity: 1; transform: scale(1); }
+  0% { opacity: 0; transform: scale(.9); }
+  20%, 47%, 95% { opacity: 0; transform: scale(.9); }
+  51.5%, 91.25% { opacity: 1; transform: scale(1); }
+  100% { opacity: 0; transform: scale(.9); }
 }
 @keyframes tutorial-panel {
-  0%, 73%, 100% { opacity: 0; transform: translateX(10px); }
-  80%, 95% { opacity: 1; transform: translateX(0); }
+  0% { opacity: 0; transform: translateX(10px); }
+  20%, 74.75%, 95% { opacity: 0; transform: translateX(10px); }
+  80%, 91.25% { opacity: 1; transform: translateX(0); }
+  100% { opacity: 0; transform: translateX(10px); }
 }
 @keyframes tutorial-pointer {
-  0%, 8%, 18% { opacity: 1; transform: translate(0, 0); }
-  14% { transform: translate(0, 0) scale(.85); }
-  28%, 42% { opacity: 1; transform: translate(29px, var(--pin-pointer-y)); }
-  35% { transform: translate(29px, var(--pin-pointer-y)) scale(.85); }
-  56%, 74% { opacity: 1; transform: translate(-64px, var(--pin-pointer-y)); }
-  68% { transform: translate(-64px, var(--pin-pointer-y)) scale(.85); }
-  80%, 100% { opacity: 0; transform: translate(-64px, var(--pin-pointer-y)); }
+  0% { opacity: 0; transform: translate(0, 0); }
+  20%, 26%, 33.5% { opacity: 1; transform: translate(0, 0); }
+  30.5% { transform: translate(0, 0) scale(.85); }
+  41%, 51.5% { opacity: 1; transform: translate(29px, var(--pin-pointer-y)); }
+  46.25% { transform: translate(29px, var(--pin-pointer-y)) scale(.85); }
+  62%, 75.5% { opacity: 1; transform: translate(-64px, var(--pin-pointer-y)); }
+  71% { transform: translate(-64px, var(--pin-pointer-y)) scale(.85); }
+  80%, 95% { opacity: 0; transform: translate(-64px, var(--pin-pointer-y)); }
+  100% { opacity: 0; transform: translate(-64px, var(--pin-pointer-y)); }
 }
 @keyframes tutorial-caption-menu {
-  0%, 23% { background: var(--nc-accent-yellow); }
-  28%, 100% { background: transparent; }
+  0% { background: var(--nc-accent-yellow); }
+  20%, 37.25% { background: var(--nc-accent-yellow); }
+  41%, 95% { background: transparent; }
+  100% { background: transparent; }
 }
 @keyframes tutorial-caption-pin {
-  0%, 23%, 55%, 100% { background: transparent; }
-  28%, 50% { background: var(--nc-accent-yellow); }
+  0% { background: transparent; }
+  20%, 37.25%, 61.25%, 95% { background: transparent; }
+  41%, 57.5% { background: var(--nc-accent-yellow); }
+  100% { background: transparent; }
 }
 @keyframes tutorial-caption-open {
-  0%, 50%, 100% { background: transparent; }
-  55%, 95% { background: var(--nc-accent-yellow); }
+  0% { background: transparent; }
+  20%, 57.5%, 95% { background: transparent; }
+  61.25%, 91.25% { background: var(--nc-accent-yellow); }
+  100% { background: transparent; }
 }
 @media (max-width: 600px) {
-  .setup[data-step="pin"] .extensions-menu { right: 36px; width: min(280px, calc(100% - 48px)); }
+  .setup[data-step="pin"] .extensions-menu { right: 36px; width: min(280px, calc(100cqw - 48px)); }
   .setup[data-step="pin"] .tutorial-captions { gap: 2px; }
   .tutorial-caption { padding-inline: 6px; }
 }
 @media (max-height: 760px) {
   .setup[data-step="pin"] .illustration { --pin-pointer-y: 80px; height: 224px; padding-top: 10px; }
-  .setup[data-step="pin"] .browser-preview { height: 172px; }
+  .setup[data-step="pin"] .browser-scene { height: 172px; }
+  .setup[data-step="pin"] .browser-preview { height: 277px; }
 }
 @media (prefers-reduced-motion: reduce) {
   .setup[data-step="pin"] .illustration * { animation: none; }
   .setup[data-step="pin"] .tutorial-cursor,
-  .setup[data-step="pin"] .tutorial-toggle,
   .setup[data-step="pin"] .panel-preview { display: none; }
+  .setup[data-step="pin"] .browser-preview { transform: none; }
   .setup[data-step="pin"] .pin { color: #1959b8; fill: #e2ecff; }
 }
 .setup[data-step="open"] .panel-sign-in { display: none; }

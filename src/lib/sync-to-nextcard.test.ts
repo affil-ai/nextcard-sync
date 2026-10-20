@@ -189,3 +189,26 @@ describe("pushToNextCard", () => {
     ]);
   });
 });
+
+it("preserves product changes awaiting review separately from saved cards", async () => {
+  vi.stubGlobal("fetch", vi.fn(async () => ({
+    ok: true,
+    status: 200,
+    json: async () => ({ cardSync: { created: 0, existing: 2, productChangesToReview: 1 } }),
+  })));
+  await expect(pushToNextCard("hilton", hiltonData)).resolves.toMatchObject({
+    ok: true,
+    cardSync: { created: 0, existing: 2, productChangesToReview: 1 },
+  });
+});
+
+it("ignores malformed card counts without failing an otherwise successful sync", async () => {
+  vi.stubGlobal("fetch", vi.fn(async () => ({
+    ok: true,
+    status: 200,
+    json: async () => ({ cardSync: { created: 0, existing: -2, productChangesToReview: "one" } }),
+  })));
+  const result = await pushToNextCard("hilton", hiltonData);
+  expect(result.ok).toBe(true);
+  expect(result.cardSync).toBeUndefined();
+});

@@ -15,14 +15,6 @@ const skipButton = document.getElementById("skip-pin");
 const backButton = document.getElementById("previous-step");
 const offersLink = document.getElementById("view-offers");
 const progress = document.querySelectorAll(".progress li");
-const animationToggle = document.getElementById("animation-toggle");
-let animationPaused = false;
-animationToggle?.addEventListener("click", () => {
-  animationPaused = !animationPaused;
-  setup?.classList.toggle("animation-paused", animationPaused);
-  animationToggle.textContent = animationPaused ? "Play animation" : "Pause animation";
-  animationToggle.setAttribute("aria-pressed", String(animationPaused));
-});
 const guideStartedAt = Date.now();
 const steps = [
   {
@@ -52,7 +44,7 @@ const steps = [
     name: "activate",
     title: "Activate your first offers",
     description:
-      "Choose your bank in the sidebar to find your offers.",
+      "Choose your bank in the sidebar on the right to find your offers.",
     detail: "Select offers, then confirm to activate them.",
     action: "Open nextcard sync",
   },

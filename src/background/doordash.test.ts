@@ -5,6 +5,11 @@ import {
   readDoorDashSession,
   registerDoorDashTest,
 } from "./doordash";
+import { createMessageRouter } from "./core/message-router";
+import { createRuntimeStateStore } from "./core/runtime-state";
+import { createOfferOperationStore } from "./offer-operation-store";
+import { createOfferOperationCoordinator } from "./offer-operation-coordinator";
+import { providerRegistry } from "../providers/provider-registry";
 import { doorDashQueries } from "../providers/doordash";
 import * as auth from "../lib/auth";
 import * as household from "../lib/household-context";
@@ -248,4 +253,100 @@ it("blocks saving when the selected Nextcard profile changes after capture", asy
     error: expect.stringContaining("profile changed"),
   });
   expect(fetcher).not.toHaveBeenCalled();
+});
+
+it("rechecks the DoorDash account and sends the explicit period total through the authenticated backend", async () => {
+  vi.spyOn(auth, "getAuth").mockResolvedValue({
+    token: "synthetic-token",
+    name: null,
+    email: null,
+    signedInAt: "now",
+  });
+  vi.spyOn(household, "getCurrentHouseholdOperationScope").mockResolvedValue(
+    null,
+  );
+  vi.spyOn(household, "isLegacyHouseholdOperationMode").mockResolvedValue(true);
+  const addListener = vi.fn();
+  const executeScript = vi.fn(async () => [
+    {
+      result: {
+        reads: [
+          {
+            source: "subscription",
+            status: "ok",
+            data: { plan_id: "plan", subscription_status: "ACTIVE" },
+          },
+        ],
+        accountKey: "abcdef1234567890",
+      },
+    },
+  ]);
+  const fetcher = vi.fn(async (_url: string, _init: RequestInit) =>
+    Response.json({ ok: true, amountUsed: 20 }),
+  );
+  vi.stubGlobal("fetch", fetcher);
+  vi.stubGlobal("chrome", {
+    runtime: {
+      id: "test",
+      getURL: (path: string) => `chrome-extension://test/${path}`,
+      onMessage: { addListener },
+    },
+    tabs: {
+      get: vi.fn(async () => ({
+        url: "https://www.doordash.com/consumer/payment",
+      })),
+    },
+    scripting: { executeScript },
+  });
+  registerDoorDashTest();
+  const listener = addListener.mock.calls[0]?.[0];
+  const sender = {
+    id: "test",
+    url: "chrome-extension://test/src/popup/popup.html",
+  };
+  await new Promise((resolve) =>
+    listener({ type: "DOORDASH_TEST_CHECK", tabId: 1 }, sender, resolve),
+  );
+  const confirmation = {
+    cardCreditId: "credit-a",
+    periodStart: "2026-10-01",
+    periodEnd: "2026-10-31",
+    uses: 2,
+  };
+  const result = await new Promise((resolve) =>
+    listener(
+      { type: "DOORDASH_USAGE_CONFIRM", userCardId: "card-a", confirmation },
+      sender,
+      resolve,
+    ),
+  );
+  expect(result).toEqual({ ok: true, amountUsed: 20 });
+  expect(executeScript).toHaveBeenCalledTimes(2);
+  const body: unknown = JSON.parse(String(fetcher.mock.calls[0]?.[1]?.body));
+  expect(body).toMatchObject({
+    operation: "confirm-usage",
+    userCardId: "card-a",
+    confirmation,
+    snapshot: { accountKey: "abcdef1234567890", planId: "plan" },
+  });
+});
+
+
+it("leaves every DoorDash reply to its dedicated listener", () => {
+  const unused = async () => { throw new Error("Unexpected unrelated handler"); };
+  const store = createOfferOperationStore();
+  const general = createMessageRouter({
+    providerRegistry, stateStore: createRuntimeStateStore(),
+    syncHandlers: { generic: unused, atmos: unused, "chase-v1": unused, amex: unused, capitalone: unused, hyatt: unused, bilt: unused },
+    cancelRun: unused, startSignIn: unused, signOut: unused, getCachedAuth: unused,
+    recordConsent: unused, pushToNextCard: unused, deleteFromNextCard: unused,
+    offerOperations: store,
+    offerCoordinator: createOfferOperationCoordinator(store, async () => null, async () => true),
+    travelSyncCoordinator: { start: unused, getStatus: unused, cancel: unused, resetResult: unused },
+  });
+  const respond = vi.fn();
+  for (const type of ["DOORDASH_TEST_CHECK", "DOORDASH_TEST_CARDS", "DOORDASH_TEST_SAVE", "DOORDASH_BENEFITS", "DOORDASH_USAGE_OPTIONS", "DOORDASH_USAGE_CONFIRM"]) {
+    expect(general({ type }, { id: "test", url: "chrome-extension://test/src/popup/popup.html" }, respond)).toBe(false);
+  }
+  expect(respond).not.toHaveBeenCalled();
 });

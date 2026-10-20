@@ -114,7 +114,7 @@ it.each([true, false])(
     expect(document.body.textContent).not.toContain("Shop through BofA");
     if (!all) {
       const checkbox =
-        document.querySelector<HTMLInputElement>('input[value="2"]');
+        document.querySelector<HTMLInputElement>('input[value="1"]');
       if (!checkbox) throw new Error("Missing selection");
       checkbox.click();
     }
@@ -151,7 +151,7 @@ it.each([true, false])(
       await vi.advanceTimersByTimeAsync(0);
       expect(document.querySelector<HTMLElement>(".offer-review")?.hidden).toBe(false);
       expect(document.querySelectorAll(".offer-review-row")).toHaveLength(1);
-      expect(document.body.textContent).toContain("0 of 1 selected");
+      expect(document.body.textContent).toContain("1 of 1 selected");
       const activateRemaining = Array.from(document.querySelectorAll("button")).find(b => b.textContent === "Activate all 1 offer");
       activateRemaining?.click();
       const confirmRemaining = Array.from(document.querySelectorAll("button")).find(b => b.textContent === "Activate 1 offer");

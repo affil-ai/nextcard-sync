@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   FREE_MONTHLY_OFFER_ACTIVATION_LIMIT,
   capOfferEnrollmentTotal,
+  getOfferActivationUsage,
   recordOfferActivations,
   reserveOfferActivations,
   retryPendingOfferActivationCompletions,
@@ -67,6 +68,47 @@ describe("offer activation monthly allowance", () => {
       error: "quota_unavailable",
       requested: 25,
       granted: 0,
+    });
+  });
+
+  it("uses the live Pro allowance and grant despite an exhausted cached Free plan", async () => {
+    const month = new Date().toISOString().slice(0, 7);
+    stored.offerActivationUsageByAccount = {
+      "test@example.com": { month, used: 100, countedRunIds: [] },
+    };
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
+      ok: true, status: 200,
+      json: async () => ({ month, accountLevel: "pro", used: 628, limit: null, remaining: null, granted: 30 }),
+    }));
+    expect(await getOfferActivationUsage("test@example.com", false)).toMatchObject({
+      accountLevel: "pro", used: 628, limit: null, remaining: null,
+    });
+    expect(await reserveOfferActivations("test@example.com", false, "pro-run", 30)).toMatchObject({
+      ok: true, accountLevel: "pro", granted: 30, limit: null,
+    });
+  });
+
+  it("keeps the server's Free cap even when the cached plan is Pro", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
+      ok: true, status: 200,
+      json: async () => ({ month: "2026-10", accountLevel: "free", used: 95, limit: 100, remaining: 0, granted: 5 }),
+    }));
+    expect(await reserveOfferActivations("test@example.com", true, "free-run", 30)).toMatchObject({
+      ok: true, accountLevel: "free", granted: 5, limit: 100,
+    });
+  });
+
+  it.each([
+    { accountLevel: "pro", limit: null, remaining: null, error: "offer_run_unavailable" },
+    { accountLevel: "free", limit: 100, remaining: 20, error: "offer_run_unavailable" },
+    { accountLevel: "free", limit: 100, remaining: 0, error: "monthly_offer_limit_reached" },
+  ])("classifies a rejected $accountLevel run with remaining=$remaining", async ({ error, ...allowance }) => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
+      ok: false, status: 409,
+      json: async () => ({ month: "2026-10", used: 80, granted: 0, ...allowance }),
+    }));
+    expect(await reserveOfferActivations("test@example.com", false, "ended-run", 30)).toMatchObject({
+      ok: false, granted: 0, error, ...allowance,
     });
   });
 

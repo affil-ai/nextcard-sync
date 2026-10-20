@@ -1,9 +1,19 @@
 // @vitest-environment jsdom
 import { readFileSync } from "node:fs";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createOfferOperation, type OfferOperationSnapshot, type OfferOperationCard, type OfferOperationState } from "../lib/offer-operation";
 
-afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); });
+let removeDocumentListeners = () => {};
+beforeEach(() => {
+  const listeners = vi.spyOn(document, "addEventListener");
+  removeDocumentListeners = () => {
+    for (const [type, listener, options] of listeners.mock.calls) {
+      document.removeEventListener(type, listener, options);
+    }
+    listeners.mockRestore();
+  };
+});
+afterEach(() => { removeDocumentListeners(); vi.useRealTimers(); vi.unstubAllGlobals(); });
 
 it("keeps card-specific choices through confirmation and releases review with Done", async () => {
   vi.useFakeTimers();
@@ -49,9 +59,13 @@ it("keeps card-specific choices through confirmation and releases review with Do
   expect(run.textContent).toBe("Loading activation allowance…");
   expect(document.getElementById("chaseOffersQuotaNotice")).toBeNull();
   finishUsage?.(usage);
-  await vi.waitFor(() => expect(run.textContent).toBe("Choose offers to activate"));
+  await vi.waitFor(() => expect(run.textContent).toContain("Activate 1"));
   const first = document.querySelector("#chaseOffersReview input");
-  if (!(first instanceof HTMLInputElement)) throw new Error("Missing offer choice"); first.click();
+  if (!(first instanceof HTMLInputElement)) throw new Error("Missing offer choice");
+  expect(first.checked).toBe(true);
+  first.click();
+  expect(run.disabled).toBe(true);
+  first.click();
   expect(run.textContent).toContain("1234"); expect(run.disabled).toBe(false);
   run.click();
   expect(document.getElementById("offerConfirmBody")?.textContent).toContain("1234");
@@ -243,4 +257,60 @@ it.each([true, false])("guides BofA through review and rewards handoff, activate
   expect(document.getElementById("offersSetupRewardsActions")?.hidden).toBe(false);
   expect(root?.classList.contains("guided-active-issuer")).toBe(false);
   window.dispatchEvent(new Event("pagehide"));
+});
+
+
+it.each(["ended", "exhausted", "pro-mislabeled"])("handles the %s reservation without activating offers", async (reason) => {
+  vi.resetModules(); vi.useFakeTimers();
+  document.documentElement.innerHTML = readFileSync(`${process.cwd()}/src/popup/popup.html`, "utf8");
+  const card: OfferOperationCard = { key: "one", name: "Card", lastDigits: "1234", availableCount: 1,
+    countStatus: "complete", offers: [{ id: "offer", name: "Merchant", value: "10% back", details: null, terms: null }] };
+  const ready: OfferOperationState = { ...createOfferOperation("chase", "ended-run"), phase: "ready_to_add",
+    checkedAt: new Date().toISOString(), ownedTabId: 42, cards: [card] };
+  let snapshot: OfferOperationSnapshot = { active: ready, history: { chase: ready } };
+  const sendMessage = vi.fn(async (message: Record<string, unknown>) => {
+    switch (message.type) {
+      case "GET_AUTH_STATE": return { token: "test", email: "test@example.com", signedInAt: "test" };
+      case "GET_EXTENSION_PROFILE": return { accountLevel: "pro", offersFirstUiEnabled: true };
+      case "GET_OFFER_ACTIVATION_USAGE": return { accountLevel: "pro", used: 628, remaining: null, limit: null };
+      case "GET_OFFER_OPERATION_STATUS": return snapshot;
+      case "START_OFFER_ENROLLMENT": return reason === "ended"
+        ? { ok: false, error: "offer_run_unavailable", accountLevel: "pro", limit: null, remaining: null }
+        : { ok: false, error: "monthly_offer_limit_reached", used: 100,
+            accountLevel: reason === "exhausted" ? "free" : "pro",
+            limit: reason === "exhausted" ? 100 : null, remaining: reason === "exhausted" ? 0 : null };
+      case "CANCEL_OFFER_OPERATION": snapshot = { ...snapshot, active: null }; return { ok: true };
+      case "START_OFFER_CHECK": return { ok: true, state: { runId: "fresh-run" } };
+      default: return null;
+    }
+  });
+  vi.stubGlobal("chrome", {
+    runtime: { sendMessage, onMessage: { addListener() {} }, getManifest: () => ({ version: "0.9.1" }), getURL: (path: string) => path },
+    storage: { local: { get: async () => ({ disclosureAccepted: true, consentGiven: true, firstSyncCompleted: true, offerConsentVersion: 100 }),
+      set: async () => {}, remove: async () => {} }, onChanged: { addListener() {}, removeListener() {} } },
+    tabs: { create: vi.fn() }, windows: { getCurrent: async () => ({ id: 1 }) },
+  });
+  await import("./app");
+  await vi.waitFor(() => expect(document.getElementById("chaseOffersRunBtn")?.textContent).toContain("Activate 1"));
+  document.getElementById("chaseOffersRunBtn")?.click();
+  await vi.waitFor(() => expect(document.getElementById("offerConfirmModal")?.classList.contains("visible")).toBe(true));
+  document.getElementById("offerConfirmContinue")?.click();
+  await vi.waitFor(() => expect(document.getElementById("offerLimitModal")?.classList.contains("visible")).toBe(true));
+  const primary = document.getElementById("offerLimitUpgrade");
+  expect(document.getElementById("offerLimitTitle")?.textContent).toBe(reason === "ended"
+    ? "This offer check has ended" : reason === "exhausted" ? "Monthly limit reached" : "Couldn’t verify your monthly limit");
+  if (reason === "ended") {
+    expect(primary?.textContent).toBe("Check again");
+    primary?.click();
+    await vi.waitFor(() => expect(sendMessage).toHaveBeenCalledWith({ type: "START_OFFER_CHECK", issuer: "chase" }));
+    const requests = sendMessage.mock.calls.map(([message]) => message.type);
+    expect(requests.indexOf("CANCEL_OFFER_OPERATION")).toBeLessThan(requests.indexOf("START_OFFER_CHECK"));
+    expect(sendMessage.mock.calls.filter(([message]) => message.type === "START_OFFER_ENROLLMENT")).toHaveLength(1);
+  } else if (reason === "exhausted") {
+    expect(primary?.textContent).toBe("Upgrade to Pro");
+    expect(primary?.hidden).toBe(false);
+  } else {
+    expect(primary?.hidden).toBe(true);
+    expect(document.getElementById("offerLimitBody")?.textContent).not.toContain("100");
+  }
 });

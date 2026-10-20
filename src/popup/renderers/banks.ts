@@ -14,6 +14,7 @@ import {
   getProviderStatusDotClass,
   getProviderStatusLabel,
   renderIssueReportHtml,
+  renderCardSyncSummaryHtml,
   renderValue,
   confirmDeleteProvider,
   STATUS_SUBTITLES,
@@ -191,6 +192,7 @@ export function createBankRenderers(
     chaseEls.errorContainer.innerHTML = error
       ? `<div class="error-msg">${escapeHtml(error)}</div>${renderIssueReportHtml("Chase", "chase", status, error)}`
       : renderIssueReportHtml("Chase", "chase", status, null);
+    chaseEls.errorContainer.innerHTML += renderCardSyncSummaryHtml(state);
 
     if (!data) {
       chaseEls.dataSection.style.display = "none";
@@ -345,6 +347,7 @@ export function createBankRenderers(
     amexEls.errorContainer.innerHTML = error
       ? `<div class="error-msg">${escapeHtml(error)}</div>${renderIssueReportHtml("American Express", "amex", status, error)}`
       : renderIssueReportHtml("American Express", "amex", status, null);
+    amexEls.errorContainer.innerHTML += renderCardSyncSummaryHtml(state);
 
     if (!data) {
       amexEls.dataSection.style.display = "none";
@@ -495,6 +498,7 @@ export function createBankRenderers(
     capitaloneEls.errorContainer.innerHTML = error
       ? `<div class="error-msg">${escapeHtml(error)}</div>${renderIssueReportHtml("Capital One", "capitalone", status, error)}`
       : renderIssueReportHtml("Capital One", "capitalone", status, null);
+    capitaloneEls.errorContainer.innerHTML += renderCardSyncSummaryHtml(state);
 
     if (!data) {
       capitaloneEls.dataSection.style.display = "none";
@@ -586,6 +590,7 @@ export function createBankRenderers(
     biltEls.errorContainer.innerHTML = error
       ? `<div class="error-msg">${escapeHtml(error)}</div>${renderIssueReportHtml("Bilt Rewards", "bilt", status, error)}`
       : renderIssueReportHtml("Bilt Rewards", "bilt", status, null);
+    biltEls.errorContainer.innerHTML += renderCardSyncSummaryHtml(state);
 
     if (!data) {
       biltEls.dataSection.style.display = "none";
@@ -749,6 +754,7 @@ export function createBankRenderers(
     discoverEls.errorMsg.innerHTML = discoverError
       ? `${escapeHtml(discoverError)}${renderIssueReportHtml("Discover", "discover", s, discoverError)}`
       : renderIssueReportHtml("Discover", "discover", s, null);
+    if (state.status === "done") discoverEls.statusSubtitle.innerHTML = renderCardSyncSummaryHtml(state);
     if (state.lastSyncedAt && !state.pendingBackendPush) {
       discoverEls.lastSynced.style.display = "";
       discoverEls.lastSyncedTime.textContent = formatRelativeTime(state.lastSyncedAt);
@@ -826,6 +832,7 @@ export function createBankRenderers(
     citiEls.errorMsg.innerHTML = citiError
       ? `${escapeHtml(citiError)}${renderIssueReportHtml("Citi", "citi", s, citiError)}`
       : renderIssueReportHtml("Citi", "citi", s, null);
+    if (state.status === "done") citiEls.statusSubtitle.innerHTML = renderCardSyncSummaryHtml(state);
     if (state.lastSyncedAt && !state.pendingBackendPush) {
       citiEls.lastSynced.style.display = "";
       citiEls.lastSyncedTime.textContent = formatRelativeTime(state.lastSyncedAt);

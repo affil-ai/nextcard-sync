@@ -100,10 +100,6 @@
           </div>
         </details>
       </div>
-      <details class="doordash-test" id="doorDashTest">
-        <summary>DoorDash benefits</summary>
-        <p>Sign in to DoorDash, choose its tab, then check your Chase benefits. Choose the matching Nextcard card to save availability. This does not place orders or change carts.</p>
-      </details>
       <div class="tab-bar hidden" id="tabBar" data-active="offers" role="tablist" aria-label="Extension sections">
         <div class="tab-slider"></div>
         <button class="tab-btn active" id="offersTab" role="tab" aria-selected="true" aria-controls="toolsTabPanel" data-tab="offers">Offers</button>
@@ -144,6 +140,10 @@
           <button class="section-dashboard-btn" id="rewardsDashboardBtn" type="button">Open rewards dashboard <span aria-hidden="true">→</span></button>
         </section>
       <div class="provider-list" id="providerList"></div>
+      <section class="benefit-connections" aria-labelledby="benefitConnectionsTitle">
+        <h2 id="benefitConnectionsTitle">Benefit connections</h2>
+        <section id="doorDashProvider" class="doordash-provider" aria-label="DoorDash sync provider"></section>
+      </section>
       </div><!-- /syncTabPanel -->
       <div id="toolsTabPanel" role="tabpanel" aria-labelledby="offersTab">
         <div class="offers-coachmark" id="offersCoachmark" hidden>
@@ -250,7 +250,7 @@
           <div id="chaseOffersReady" class="tool-expand" style="display:none;">
             <div class="offer-recent-result" id="chaseOffersRecentResult" hidden></div>
             <div id="chaseOffersCardSelectWrap" style="display:none;"><select id="chaseOffersCardSelect" class="tool-select"></select></div>
-            <div style="display:flex;justify-content:space-between;align-items:center;"><div class="tool-status" style="font-weight:600;color:#342019;" id="chaseOffersOfferCount"></div><button class="tool-link-btn" id="chaseOffersRefreshBtn">Refresh</button></div>
+            <div class="offer-availability-row"><div class="tool-status" id="chaseOffersOfferCount"></div><button class="tool-link-btn" id="chaseOffersRefreshBtn">Refresh</button></div>
             <div class="offer-review" id="chaseOffersReview"></div>
             <div class="offer-enrollment-actions">
               <button class="sync-btn" id="chaseOffersRunBtn" type="button">Activate selected offers</button>
@@ -294,7 +294,7 @@
           <div id="amexOffersReady" class="tool-expand" style="display:none;">
             <div class="offer-recent-result" id="amexOffersRecentResult" hidden></div>
             <div id="amexOffersCardSelectWrap" style="display:none;"><select id="amexOffersCardSelect" class="tool-select"></select></div>
-            <div style="display:flex;justify-content:space-between;align-items:center;"><div class="tool-status" style="font-weight:600;color:#342019;" id="amexOffersOfferCount"></div><button class="tool-link-btn" id="amexOffersRefreshBtn">Refresh</button></div>
+            <div class="offer-availability-row"><div class="tool-status" id="amexOffersOfferCount"></div><button class="tool-link-btn" id="amexOffersRefreshBtn">Refresh</button></div>
             <label id="amexOffersSharedOption" class="tool-check-option" style="display:none;">
               <input type="checkbox" id="amexOffersSharedCheckbox" />
               <span>Try matching offers on other eligible Amex cards</span>
@@ -340,7 +340,7 @@
           <div id="citiOffersReady" class="tool-expand" style="display:none;">
             <div class="offer-recent-result" id="citiOffersRecentResult" hidden></div>
             <div id="citiOffersCardSelectWrap" style="display:none;"><select id="citiOffersCardSelect" class="tool-select"></select></div>
-            <div style="display:flex;justify-content:space-between;align-items:center;"><div class="tool-status" style="font-weight:600;color:#342019;" id="citiOffersOfferCount"></div><button class="tool-link-btn" id="citiOffersRefreshBtn">Refresh</button></div>
+            <div class="offer-availability-row"><div class="tool-status" id="citiOffersOfferCount"></div><button class="tool-link-btn" id="citiOffersRefreshBtn">Refresh</button></div>
             <div class="offer-review" id="citiOffersReview"></div>
             <div class="offer-enrollment-actions">
               <button class="sync-btn" id="citiOffersRunBtn" type="button">Activate selected offers</button>
@@ -387,7 +387,7 @@
           </div>
           <div id="capitaloneOffersReady" class="tool-expand" style="display:none;">
             <div id="capitaloneOffersCardSelectWrap" style="display:none;"><select id="capitaloneOffersCardSelect" class="tool-select"></select></div>
-            <div style="display:flex;justify-content:space-between;align-items:center;"><div class="tool-status" style="font-weight:600;color:#342019;" id="capitaloneOffersOfferCount"></div><button class="tool-link-btn" id="capitaloneOffersRefreshBtn">Refresh</button></div>
+            <div class="offer-availability-row"><div class="tool-status" id="capitaloneOffersOfferCount"></div><button class="tool-link-btn" id="capitaloneOffersRefreshBtn">Refresh</button></div>
             <button class="sync-btn" id="capitaloneOffersRunBtn" style="margin:0;">Sync offers</button>
           </div>
           <div id="capitaloneOffersRunning" class="tool-expand" style="display:none;">
@@ -467,6 +467,10 @@
       </div>
       <div class="version-footer" id="versionFooter"></div>
       <div class="changelog" id="changelog">
+        <h4>v0.9.1</h4>
+        <ul><li>Fixed Pro offer activation limits</li><li>Retry ended offer checks without an upgrade prompt</li></ul>
+        <h4>v0.9.0</h4>
+        <ul><li>Offers selected by default, with deselection and details</li><li>Amex offer list fixes</li></ul>
         <h4>v0.8.9</h4>
         <ul><li>DoorDash benefit tracking</li></ul>
         <h4>v0.8.8</h4>

@@ -1,6 +1,6 @@
 import "./popup.css";
-import { mountDoorDashTest } from "./doordash";
-mountDoorDashTest();
+import { mountDoorDashProvider } from "./doordash";
+mountDoorDashProvider();
 import { updateBofaOffersSetup, requestBofaOfferCheck, areOtherOfferToolsBusy } from "./app";
 
 import { initializePinReminder } from "./pin-reminder";

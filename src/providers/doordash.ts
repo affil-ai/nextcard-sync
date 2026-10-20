@@ -60,6 +60,77 @@ export const doorDashSnapshotSchema = z.object({
     .optional(),
 });
 export type DoorDashSnapshot = z.infer<typeof doorDashSnapshotSchema>;
+// Membership identifies promo cadence. DashPass billing does not.
+export function doorDashMembershipFamily(label: string) {
+  if (/reserve/i.test(label) && /business|biz/i.test(label))
+    return "reserve_business";
+  if (/reserve/i.test(label)) return "reserve";
+  if (/preferred/i.test(label)) return "preferred";
+  if (/freedom/i.test(label)) return "freedom";
+  if (/slate/i.test(label)) return "slate";
+  if (/ink/i.test(label)) return "ink";
+  return null;
+}
+
+export function assessDoorDashUsage(snapshot: DoorDashSnapshot) {
+  const families = [
+    ...new Set(
+      snapshot.membership
+        .map(doorDashMembershipFamily)
+        .filter((family) => family !== null),
+    ),
+  ];
+  const family = families.length === 1 ? (families[0] ?? null) : null;
+  const frequency: DoorDashCreditRow["frequency"] | null =
+    family === "freedom" || family === "slate"
+      ? "quarterly"
+      : family
+        ? "monthly"
+        : null;
+  const complete = Boolean(
+    snapshot.accountKey &&
+    snapshot.planId &&
+    frequency &&
+    snapshot.subscriptionStatus === "ACTIVE" &&
+    snapshot.eligibleForBenefits === true &&
+    [
+      "subscription",
+      "membership",
+      "carts",
+      "placements:wallet",
+      "account-verification",
+    ].every((source) =>
+      snapshot.checks.some(
+        (check) => check.source === source && check.status === "ok",
+      ),
+    ) &&
+    snapshot.checks.every((check) => check.status === "ok") &&
+    snapshot.contexts?.some(
+      (context) =>
+        context.nonRestaurant &&
+        context.validationPassed &&
+        snapshot.checks.some(
+          (check) => check.source === context.source && check.status === "ok",
+        ),
+    ),
+  );
+  const at = new Date(snapshot.checkedAt);
+  const period =
+    frequency === "quarterly"
+      ? `Q${Math.floor(at.getUTCMonth() / 3) + 1} ${at.getUTCFullYear()}`
+      : at.toLocaleDateString(undefined, {
+          month: "long",
+          year: "numeric",
+          timeZone: "UTC",
+        });
+  return {
+    family,
+    frequency,
+    period,
+    likelyUsed: complete && snapshot.campaigns.length === 0,
+  };
+}
+
 export const doorDashReplySchema = z.discriminatedUnion("ok", [
   z.object({ ok: z.literal(true), snapshot: doorDashSnapshotSchema }),
   z.object({ ok: z.literal(false), error: z.string() }),
@@ -71,6 +142,7 @@ export const doorDashCardsReplySchema = z.discriminatedUnion("ok", [
       z.object({
         userCardId: z.string(),
         name: z.string(),
+        catalogName: z.string().optional(),
         lastFourDigits: z.string().nullable(),
       }),
     ),
@@ -84,6 +156,53 @@ export const doorDashSaveReplySchema = z.discriminatedUnion("ok", [
     saved: z.number().int().nonnegative(),
     snapshot: doorDashSnapshotSchema,
   }),
+  z.object({ ok: z.literal(false), error: z.string() }),
+]);
+
+export const doorDashUsageOptionSchema = z.object({
+  cardCreditId: z.string(),
+  label: z.string(),
+  periodStart: z.string(),
+  periodEnd: z.string(),
+  maxUses: z.number().int().positive().max(10),
+  amountPerUse: z.number().positive(),
+  recordedUses: z.number().int().nonnegative().nullable().optional(),
+  recordedAmount: z.number().nonnegative().optional(),
+  availability: z.enum(["available", "likely_used", "unknown"]).optional(),
+});
+export type DoorDashUsageOption = z.infer<typeof doorDashUsageOptionSchema>;
+export const doorDashUsageConfirmationSchema = doorDashUsageOptionSchema
+  .pick({
+    cardCreditId: true,
+    periodStart: true,
+    periodEnd: true,
+  })
+  .extend({ uses: z.number().int().positive().max(10) });
+export const doorDashUsageOptionsReplySchema = z.discriminatedUnion("ok", [
+  z.object({
+    ok: z.literal(true),
+    options: z.array(doorDashUsageOptionSchema),
+  }),
+  z.object({ ok: z.literal(false), error: z.string() }),
+]);
+export const doorDashUsageConfirmReplySchema = z.discriminatedUnion("ok", [
+  z.object({ ok: z.literal(true), amountUsed: z.number().nonnegative() }),
+  z.object({ ok: z.literal(false), error: z.string() }),
+]);
+
+export const doorDashCreditRowSchema = z.object({
+  key: z.string(), label: z.string(),
+  frequency: z.enum(["monthly", "quarterly"]),
+  periodStart: z.string(), periodEnd: z.string(),
+  maxUses: z.number().int().positive().max(10), amountPerUse: z.number().positive(),
+  availability: z.enum(["available", "likely_used", "unknown"]),
+  recordedUses: z.number().int().nonnegative().nullable().optional(),
+  recordedAmount: z.number().nonnegative().optional(),
+  cardCreditId: z.string().optional(),
+});
+export type DoorDashCreditRow = z.infer<typeof doorDashCreditRowSchema>;
+export const doorDashExpectedCreditsReplySchema = z.discriminatedUnion("ok", [
+  z.object({ ok: z.literal(true), benefits: z.array(doorDashCreditRowSchema) }),
   z.object({ ok: z.literal(false), error: z.string() }),
 ]);
 

@@ -65,6 +65,7 @@ export async function clearAuth(expectedGeneration?: number): Promise<void> {
     || key === "offerConsentVersion"
     || key === "pendingDestination"
     || key === "pendingTab"
+    || key.startsWith("nextcard_doordash_provider_view_")
     || key.startsWith("provider_")
     || key.startsWith("rewards_summaries_v2::")
     || key.startsWith("offerUrlCache::")

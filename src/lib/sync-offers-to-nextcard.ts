@@ -60,6 +60,7 @@ function getLegacyIssuerCardId(issuerCardId: string): string {
 
 export interface OfferSyncPayload {
   runId?: string;
+  activationCardIds?: string[];
   scope: HouseholdOperationScope | null;
   issuer: string;
   issuerCardId: string;
@@ -115,13 +116,14 @@ export const DETECTED_OFFER_URL_CACHE_KEY = "detectedOfferUrlCache";
 
 export interface DetectedOfferSyncPayload {
   runId?: string;
+  accountCardIds?: string[];
   scope: HouseholdOperationScope | null;
   issuer: string;
   issuerCardId: string;
   issuerCardName: string;
   issuerCardLastDigits: string | null;
-  // Present only after the issuer returned every page for this card. The
-  // backend must not use partial responses to mark offers unavailable.
+  // Missing rows are negative evidence only after every page was read.
+  // Exact enrollment observations use accountCardIds independently.
   snapshot?: CompleteOfferSnapshot;
   offers: Array<{
     issuerOfferId: string;
@@ -356,6 +358,9 @@ async function postOfferSync(
   if (!issuerCardKey) {
     return { ok: false, error: "Missing issuer card identity" };
   }
+  const activationCardIds = payload.issuer === "amex" && payload.activationCardIds
+    ? await Promise.all([...new Set(payload.activationCardIds)].map((id) => getIssuerCardKey(payload.issuer, id)))
+    : undefined;
   const { scope: localScope, ...wirePayload } = payload;
   void localScope;
 
@@ -385,6 +390,7 @@ async function postOfferSync(
             memberLifecycleVersion: payload.scope.memberLifecycleVersion,
           }
         : {}),
+      activationCardIds,
       issuerCardId: issuerCardKey,
       legacyIssuerCardId: getLegacyIssuerCardId(payload.issuerCardId),
     }),
@@ -667,6 +673,9 @@ async function postDetectedOfferSync(
     let latestOfferMap: OfferUrlCache | undefined;
     const issuerCardKey = await getIssuerCardKey(payload.issuer, payload.issuerCardId);
     if (!issuerCardKey) return { ok: false, error: "Missing issuer card identity" };
+    const accountCardIds = payload.issuer === "amex" && payload.accountCardIds
+      ? await Promise.all([...new Set(payload.accountCardIds)].map((id) => getIssuerCardKey(payload.issuer, id)))
+      : undefined;
     const { scope: localScope, ...wirePayload } = payload;
     void localScope;
     const endpoint = payload.scope
@@ -702,6 +711,7 @@ async function postDetectedOfferSync(
                 memberLifecycleVersion: payload.scope.memberLifecycleVersion,
               }
             : {}),
+          accountCardIds,
           issuerCardId: issuerCardKey,
           legacyIssuerCardId: getLegacyIssuerCardId(payload.issuerCardId),
           offers,

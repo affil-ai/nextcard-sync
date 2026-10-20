@@ -1280,13 +1280,15 @@ async function runEnrollment(
   }).catch(() => {});
 }
 
-function syncDetectedSnapshot(card: AmexCard, offers: AmexOffer[], runId: string | null, capturedAt?: string) {
+function syncDetectedSnapshot(card: AmexCard, offers: AmexOffer[], runId: string | null, capturedAt?: string, observedAt = capturedAt ?? new Date().toISOString(), accountCardIds?: string[]) {
   return chrome.runtime.sendMessage({
     type: "AMEX_OFFERS_DETECTED",
     runId,
     cardId: card.id,
     cardName: card.name,
     cardLastDigits: card.lastDigits,
+    observedAt,
+    accountCardIds,
     snapshotComplete: capturedAt !== undefined,
     snapshotCapturedAt: capturedAt,
     observedIssuerOfferIds: capturedAt ? offers.map((offer) => offer.offerId).filter(Boolean) : undefined,
@@ -1330,7 +1332,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       for (let i = 0; i < cards.length; i++) {
         const snapshot = probes[i];
         if (snapshot && (snapshot.offers.length > 0 || snapshot.complete)) {
-          void syncDetectedSnapshot(cards[i], snapshot.offers, discoveryRunId, snapshot.complete ? snapshotCapturedAt : undefined);
+          void syncDetectedSnapshot(cards[i], snapshot.offers, discoveryRunId, snapshot.complete ? snapshotCapturedAt : undefined, snapshotCapturedAt, cards.map(card => card.id));
         }
       }
       // Show the card picker immediately. Full terms are a read-only enrichment
@@ -1350,7 +1352,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         offerCounts,
         sharedOfferPreview,
         offersByCard: Object.fromEntries(cards.map((card, index) => [card.id,
-          probes[index]?.complete ? probes[index].offers.filter(isUnenrolledOffer).map((offer) => ({
+          probes[index] ? probes[index].offers.filter(isUnenrolledOffer).map((offer) => ({
             id: offer.offerId, name: offer.name, value: offer.shortDescription,
             details: offer.detailsText ?? null, terms: offer.termsText ?? null,
           })) : null])),
@@ -1366,7 +1368,14 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
           return;
         }
         if (offers.some((offer) => offer.termsText || offer.detailsText)) {
-          await syncDetectedSnapshot(cards[i], offers, discoveryRunId);
+          await chrome.runtime.sendMessage({
+            type: "AMEX_OFFERS_REVIEW_DETAILS", runId: discoveryRunId, cardId: cards[i].id,
+            offers: offers.filter(isUnenrolledOffer).map((offer) => ({
+              id: offer.offerId, name: offer.name, value: offer.shortDescription,
+              details: offer.detailsText ?? null, terms: offer.termsText ?? null,
+            })),
+          }).catch(() => {});
+          await syncDetectedSnapshot(cards[i], offers, discoveryRunId, undefined, snapshotCapturedAt, cards.map(card => card.id));
         }
       }
     })();

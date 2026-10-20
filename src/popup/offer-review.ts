@@ -3,10 +3,11 @@ import type { OfferOperationCard } from "../lib/offer-operation";
 /** Keep choices and focus stable while the background snapshot polls. */
 export class OfferReview {
   private choices = new Map<string, Set<string>>();
+  private expanded = new Map<string, boolean>();
   private rendered = new WeakMap<HTMLElement, string>();
 
   selected(runId: string, card: OfferOperationCard): string[] {
-    return [...(this.choices.get(`${runId}:${card.key}`) ?? [])].filter((id) =>
+    return [...(this.choices.get(`${runId}:${card.key}`) ?? card.offers?.map((offer) => offer.id) ?? [])].filter((id) =>
       card.offers?.some((offer) => offer.id === id),
     );
   }
@@ -21,6 +22,10 @@ export class OfferReview {
     const fingerprint = JSON.stringify([key, card.offers]);
     if (this.rendered.get(host) === fingerprint) return;
     this.rendered.set(host, fingerprint);
+    const previousKey = host.dataset.offerReviewKey;
+    const previous = host.querySelector<HTMLDetailsElement>(".offer-review-disclosure");
+    if (previousKey && previous) this.expanded.set(previousKey, previous.open);
+    host.dataset.offerReviewKey = key;
     host.replaceChildren();
     if (!card.offers) {
       host.textContent = "Check again to load the offers before activating.";
@@ -29,18 +34,24 @@ export class OfferReview {
     if (!card.offers.length) return;
     let chosen = this.choices.get(key);
     if (!chosen) {
-      chosen = new Set();
+      chosen = new Set(card.offers.map((offer) => offer.id));
       this.choices.set(key, chosen);
     }
     const selected = chosen;
+    const disclosure = document.createElement("details");
+    disclosure.className = "offer-review-disclosure";
+    disclosure.open = this.expanded.get(key) ?? false;
+    disclosure.addEventListener("toggle", () => this.expanded.set(key, disclosure.open));
+    const summary = document.createElement("summary");
+    summary.className = "offer-review-summary";
+    const title = document.createElement("span");
+    title.textContent = "Choose offers";
     const controls = document.createElement("div");
     controls.className = "offer-review-controls";
-    const instruction = document.createElement("span");
-    instruction.textContent = "Select offers to activate";
     const selectAll = document.createElement("button");
     selectAll.type = "button";
     selectAll.className = "tool-link-btn";
-    const selectionCount = document.createElement("p");
+    const selectionCount = document.createElement("span");
     selectionCount.className = "offer-review-selection-count";
     selectionCount.setAttribute("aria-live", "polite");
     selectionCount.textContent = `${selected.size} of ${card.offers.length} selected`;
@@ -62,8 +73,10 @@ export class OfferReview {
       }
       update();
     };
-    controls.append(instruction, selectAll);
-    host.append(controls, selectionCount);
+    summary.append(title, selectionCount);
+    controls.append(selectAll);
+    disclosure.append(summary, controls);
+    host.append(disclosure);
     const list = document.createElement("div");
     list.className = "offer-review-list";
     for (const offer of card.offers) {
@@ -99,7 +112,7 @@ export class OfferReview {
       row.append(details);
       list.append(row);
     }
-    host.append(list);
+    disclosure.append(list);
     selectAll.textContent =
       selected.size === card.offers.length ? "Clear selection" : "Select all";
   }

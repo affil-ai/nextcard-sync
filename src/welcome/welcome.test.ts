@@ -80,13 +80,6 @@ describe("guided install setup", () => {
     expect(open).toHaveBeenCalledWith({ windowId: 42 });
     await vi.waitFor(() => expectStep("pin"));
     expect(document.getElementById("skip-pin")?.hidden).toBe(false);
-    const pause = document.getElementById("animation-toggle");
-    pause?.click();
-    expect(document.querySelector(".setup")?.classList.contains("animation-paused")).toBe(true);
-    expect(pause?.textContent).toBe("Play animation");
-    pause?.click();
-    expect(document.querySelector(".setup")?.classList.contains("animation-paused")).toBe(false);
-
     expect(document.querySelectorAll('[aria-current="step"]').length).toBe(1);
   });
 

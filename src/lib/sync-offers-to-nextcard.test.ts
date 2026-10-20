@@ -154,6 +154,25 @@ describe("syncOffersToNextCard", () => {
     });
   });
 
+  it("hashes and preserves the Amex login's activation cards on the enrollment save", async () => {
+    let requestBody: BodyInit | null | undefined;
+    const fetchMock = vi.fn(async (_input: string, init?: RequestInit) => {
+      requestBody = init?.body;
+      return { ok: true, json: async () => ({}) };
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    storageGet.mockResolvedValue({});
+    storageSet.mockResolvedValue(undefined);
+    await syncOffersToNextCard({ ...payload, issuer: "amex", activationCardIds: ["card-123", "card-456", "card-123"] });
+    const wire = JSON.parse(String(requestBody));
+    expect(wire.activationCardIds).toHaveLength(2);
+    expect(wire.activationCardIds).toContain(wire.issuerCardId);
+    expect(wire.activationCardIds.every((id: string) => /^v1:[a-f0-9]{64}$/.test(id))).toBe(true);
+    expect(String(requestBody)).not.toContain('"card-456"');
+    expect(wire.memberId).toBe(householdScope.memberId);
+    expect(wire.offers[0].enrolledAt).toBe(payload.offers[0].enrolledAt);
+  });
+
   it("sends the frozen household target to the v2 backend request", async () => {
     vi.mocked(getCurrentHouseholdOperationScope).mockResolvedValue(householdScope);
     let requestBody: BodyInit | null | undefined;
@@ -648,6 +667,25 @@ describe("syncDetectedOffersToNextCard", () => {
         }),
       }),
     );
+  });
+
+  it("keeps the observed account and original observation time when syncing a partial Amex list", async () => {
+    let requestBody: BodyInit | null | undefined;
+    vi.stubGlobal("fetch", vi.fn(async (_input: string, init?: RequestInit) => {
+      requestBody = init?.body;
+      return { ok: true, json: async () => ({}) };
+    }));
+    storageGet.mockResolvedValue({});
+    storageSet.mockResolvedValue(undefined);
+    await syncDetectedOffersToNextCard({ ...detectedPayload, accountCardIds: ["card-123", "other-card"] });
+    const wire = JSON.parse(String(requestBody));
+    expect(wire.accountCardIds).toHaveLength(2);
+    expect(wire.accountCardIds).toContain(wire.issuerCardId);
+    expect(wire.accountCardIds.every((id: string) => /^v1:[a-f0-9]{64}$/.test(id))).toBe(true);
+    expect(String(requestBody)).not.toContain('"other-card"');
+    expect(wire.offers[0].detectedAt).toBe(detectedPayload.offers[0].detectedAt);
+    expect(wire.snapshot).toBeUndefined();
+    expect(wire.reconcileSnapshot).toBe(false);
   });
 
   it("serializes multi-card detected-offer saves", async () => {

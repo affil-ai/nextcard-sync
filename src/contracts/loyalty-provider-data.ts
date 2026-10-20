@@ -343,3 +343,11 @@ export type QualifyingMetric = z.infer<typeof qualifyingMetricSchema>;
 export type Stat = z.infer<typeof statSchema>;
 export type CardBenefitData = z.infer<typeof cardBenefitDataSchema>;
 export type CardData = z.infer<typeof cardDataSchema>;
+
+// Additive backend card-sync response, validated before displaying wallet counts.
+export const cardSyncSummarySchema = z.object({
+  created: z.number().int().nonnegative(),
+  existing: z.number().int().nonnegative(),
+  productChangesToReview: z.number().int().nonnegative(),
+});
+export type CardSyncSummary = z.infer<typeof cardSyncSummarySchema>;

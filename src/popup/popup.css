@@ -2578,13 +2578,16 @@
   margin-bottom: 8px;
 }
 
-.offer-card-choice { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 12px; min-height: 56px; padding: 12px; border: 1px solid #eee8e2; border-radius: 10px; background: #fff; color: #342019; font-family: inherit; text-align: left; cursor: pointer; }
+.offer-card-choice { display: grid; grid-template-columns: minmax(0, 1fr) 76px; align-items: start; gap: 12px; min-height: 56px; padding: 12px; border: 1px solid #eee8e2; border-radius: 10px; background: #fff; color: #342019; font-family: inherit; text-align: left; cursor: pointer; }
 
 .offer-card-choice.selected { border-color: #f6b156; background: #fffaf2; box-shadow: none; }
 
+.offer-card-choice-copy { display: grid; gap: 2px; }
+.offer-card-choice .offer-card-choice-digits { white-space: nowrap; font-size: 12px; }
+
 .offer-card-choice span { min-width: 0; font-size: 13px; font-weight: 500; line-height: 1.5; overflow-wrap: anywhere; white-space: normal; }
 
-.offer-card-choice strong { flex-shrink: 0; max-width: 96px; color: #342019; font-size: 12px; font-weight: 500; line-height: 1.5; text-align: right; }
+.offer-card-choice strong { padding-top: 1px; white-space: nowrap; color: #342019; font-size: 12px; font-weight: 500; line-height: 1.5; text-align: right; }
 
 .legacy-ui .offers-coachmark,
 .legacy-ui .offers-recommendation,
@@ -2858,24 +2861,39 @@
   box-shadow: 0 0 0 3px rgb(174 117 44 / 13%);
 }
 
-.offer-review { color: #342019; margin: 16px 0; }
+.offer-availability-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: baseline; gap: 12px; }
+.offer-availability-row .tool-status { margin: 0; font-weight: 600; }
+.offer-availability-row .tool-link-btn { white-space: nowrap; }
+.offer-review { color: #342019; margin: 12px 0 16px; }
 
-.offer-review-controls { display: flex; align-items: center; justify-content: space-between; gap: 12px; font-size: 13px; font-weight: 600; }
+.offer-review-controls { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 32px; font-size: 13px; font-weight: 600; }
+.offer-review-controls .tool-link-btn { white-space: nowrap; }
+
+.offer-review-disclosure { border: 1px solid #eee8e2; border-radius: 10px; overflow: hidden; }
+.offer-review-summary { display: grid; grid-template-columns: minmax(0, 1fr) auto 8px; align-items: center; gap: 12px; padding: 12px; cursor: pointer; list-style: none; font-size: 13px; font-weight: 600; }
+.offer-review-summary::-webkit-details-marker { display: none; }
+.offer-review-summary::after { content: ""; width: 6px; height: 6px; border-right: 1.5px solid currentColor; border-bottom: 1.5px solid currentColor; transform: rotate(45deg); }
+.offer-review-disclosure[open] > .offer-review-summary::after { transform: rotate(225deg); }
+.offer-review-summary .offer-review-selection-count { margin: 0; font-weight: 400; white-space: nowrap; }
+.offer-review-disclosure > .offer-review-controls { justify-content: flex-end; padding: 0 12px 8px; }
+.offer-review-disclosure > .offer-review-list { margin: 0; border: 0; border-top: 1px solid #eee8e2; border-radius: 0; }
 
 .offer-review-list { max-height: 320px; overflow-y: auto; border: 1px solid #eee8e2; border-radius: 10px; margin-top: 12px; }
 
 .offer-review-row { padding: 14px 12px; border-bottom: 1px solid #eee8e2; }
 .offer-review-row:last-child { border-bottom: 0; }
 
-.offer-review-row label { display: flex; align-items: flex-start; gap: 12px; cursor: pointer; font-size: 13px; line-height: 1.5; }
+.offer-review-row label { display: grid; grid-template-columns: 18px minmax(0, 1fr); align-items: start; gap: 12px; cursor: pointer; font-size: 13px; line-height: 1.5; }
 
-.offer-review-row input { width: 18px; height: 18px; flex-shrink: 0; margin-top: 2px; accent-color: #342019; }
+.offer-review-row input { width: 18px; height: 18px; margin: 1px 0 0; accent-color: #342019; }
 
+.offer-review-row label strong { display: block; line-height: 20px; }
 .offer-review-row label span span { display: block; margin-top: 4px; }
 
-.offer-review-row details { margin: 8px 0 0 30px; font-size: 12px; line-height: 1.6; }
+.offer-review-row details { margin: 6px 0 0 30px; font-size: 12px; line-height: 1.6; }
 
-.offer-review-row summary { cursor: pointer; text-underline-offset: 3px; }
+.offer-review-row summary { cursor: pointer; padding: 4px 0; text-underline-offset: 3px; }
+.offer-review-row summary::marker { font-size: 10px; }
 
 .offer-review-row p { padding-top: 8px; white-space: pre-wrap; overflow-wrap: anywhere; }
 
@@ -2958,13 +2976,40 @@
 .provider-card-row .provider-card { padding-right: 58px; }
 .provider-card-row > .rewards-sync-stop { position: absolute; right: 12px; top: 50%; transform: translateY(-50%); }
 .provider-card-row .provider-arrow { display: none; }
-      .doordash-test { margin: 12px 16px; padding: 14px; border: 1px solid var(--border, #d4d4d8); border-radius: 12px; color: var(--text, #18181b); background: var(--bg, #fff); font-size: 13px; line-height: 1.5; }
-      .doordash-test > summary { cursor: pointer; font-weight: 600; }
-      .doordash-test select { width: 100%; padding: 8px; margin: 8px 0; color: inherit; background: inherit; border: 1px solid var(--border, #d4d4d8); border-radius: 6px; }
-      .doordash-actions { display: flex; flex-wrap: wrap; gap: 8px; margin: 8px 0; }
-      .doordash-actions button { padding: 7px 10px; border: 1px solid var(--border, #d4d4d8); border-radius: 6px; color: inherit; background: inherit; cursor: pointer; }
-      .doordash-actions button:disabled { opacity: .6; cursor: wait; }
-      .doordash-campaign { padding: 12px 0; border-top: 1px solid var(--border, #d4d4d8); }
-      .doordash-test code { overflow-wrap: anywhere; font-size: 11px; }
-      .doordash-test p { margin: 8px 0; }
-      .doordash-test button:focus-visible, .doordash-test select:focus-visible, .doordash-test summary:focus-visible { outline: 2px solid #315cfd; outline-offset: 3px; }
+/* DoorDash uses the Rewards provider layout, with setup on demand. */
+.doordash-provider { margin-bottom: 10px; color: #342019; }
+.doordash-provider [hidden] { display: none !important; }
+.doordash-provider-header { gap: 10px; }
+.doordash-provider-icon { background: #fff1ed; }
+.doordash-provider-icon img { width: 28px; height: 28px; object-fit: contain; }
+.doordash-provider-subtitle { font-size: 12px; line-height: 1.4; margin-top: 3px; overflow-wrap: anywhere; }
+.doordash-provider .provider-last-sync { color: #74675d; line-height: 1.4; }
+.doordash-refresh-button { margin-top: 12px; }
+.doordash-connection { padding: 4px 16px 16px; border: 1px solid #f0ece8; border-top: 0; border-radius: 0 0 16px 16px; background: #fff; font-size: 12px; line-height: 1.5; }
+.doordash-provider:has(.doordash-connection:not([hidden])) .doordash-provider-header { border-bottom: 0; border-radius: 16px 16px 0 0; box-shadow: none; }
+.doordash-connection p { margin: 10px 0; }
+.doordash-connection label { display: block; font-weight: 600; margin-top: 12px; }
+.doordash-connection select { width: 100%; min-width: 0; padding: 10px; margin: 8px 0; color: #342019; background: #fff; border: 1px solid #e7ded5; border-radius: 8px; font: inherit; }
+.doordash-actions { display: flex; flex-wrap: wrap; gap: 8px; margin: 8px 0; }
+.doordash-actions button { padding: 7px 10px; border: 1px solid #e7ded5; border-radius: 8px; color: #342019; background: #faf7f2; }
+.doordash-provider button:disabled { opacity: .6; cursor: wait; }
+.doordash-benefit { display: flex; flex-wrap: wrap; gap: 4px 8px; padding: 12px 0; border-top: 1px solid #f0ece8; }
+.doordash-benefit strong { flex: 1; min-width: 140px; }
+.doordash-benefit > span { color: #236443; }
+.doordash-benefit p { width: 100%; margin: 0; }
+.doordash-provider :is(button, select, summary):focus-visible { outline: 2px solid #342019; outline-offset: 3px; }
+
+.doordash-usage-actions { align-items: center; margin: 12px 0; }
+.doordash-usage-actions .sync-btn { margin: 0; }
+
+.doordash-credit-row { padding: 12px 0; border-top: 1px solid #f0ece8; }
+.doordash-credit-row p { margin: 4px 0 8px; }
+.doordash-credit-use { padding: 3px 0; }
+.doordash-credit-use[data-used="true"] { color: #236443; font-weight: 600; }
+
+.benefit-connections { margin-top: 24px; }
+.benefit-connections > h2 { margin: 0 0 10px; font-size: 13px; font-weight: 600; color: #342019; }
+
+.doordash-provider[aria-busy="true"] .provider-last-sync { color: #342019; }
+
+#doorDashProvider { scroll-margin-block-start: 16px; }

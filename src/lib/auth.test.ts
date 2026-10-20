@@ -16,6 +16,8 @@ beforeEach(() => {
           "detectedOfferUrlCache::account-a::member-a::1": {},
           "pendingOfferSyncs::account-a::member-a::1": [],
           "pendingDetectedOfferSyncs::account-a::member-a::1": [],
+          "nextcard_doordash_provider_view_v2::member-a": {},
+          "nextcard_doordash_provider_view_v2::member-b": {},
           unrelatedPreference: true,
         })),
         remove: storageRemove,
@@ -32,6 +34,8 @@ describe("clearAuth", () => {
     if (!Array.isArray(removed)) throw new Error("Expected removed storage keys");
     expect(removed).toEqual(expect.arrayContaining([
       "nextcard_auth",
+      "nextcard_doordash_provider_view_v2::member-a",
+      "nextcard_doordash_provider_view_v2::member-b",
       "pendingDetectedOfferSyncs",
       "pendingOfferActivationCompletions",
       "offerUrlCache::account-a::member-a::1",

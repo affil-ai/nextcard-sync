@@ -29,21 +29,29 @@ const card: OfferOperationCard = {
 };
 
 describe("offer review and issuer selection", () => {
-  it("starts with nothing selected, preserves choices across polling, and activates only chosen IDs", () => {
+  it("selects all by default, preserves deselections across polling, and activates only chosen IDs", () => {
     const review = new OfferReview();
     const host = document.createElement("div");
     document.body.append(host);
     review.render(host, "run", card, () => {});
-    expect(review.selected("run", card)).toEqual([]);
+    expect(review.selected("run", card)).toEqual(["a", "b"]);
+    const disclosure = host.querySelector<HTMLDetailsElement>(".offer-review-disclosure");
+    if (!disclosure) throw new Error("Missing offer menu");
+    expect(disclosure.open).toBe(false);
+    disclosure.open = true;
     expect(
       host.querySelector(".offer-review-selection-count")?.textContent,
-    ).toBe("0 of 2 selected");
+    ).toBe("2 of 2 selected");
     const input = host.querySelector("input");
     if (!input) throw new Error("Missing checkbox");
     input.click();
     review.render(host, "run", card, () => {});
     expect(host.querySelector("input")).toBe(input);
-    expect(review.selected("run", card)).toEqual(["a"]);
+    expect(review.selected("run", card)).toEqual(["b"]);
+    review.render(host, "run", { ...card, offers: card.offers?.map((offer) => ({ ...offer, terms: "Updated issuer terms" })) }, () => {});
+    expect(review.selected("run", card)).toEqual(["b"]);
+    expect(host.textContent).toContain("Updated issuer terms");
+    expect(host.querySelector<HTMLDetailsElement>(".offer-review-disclosure")?.open).toBe(true);
     expect(
       host.querySelector(".offer-review-selection-count")?.textContent,
     ).toBe("1 of 2 selected");
@@ -52,8 +60,8 @@ describe("offer review and issuer selection", () => {
         [{ offerId: "a" }, { offerId: "b" }],
         review.selected("run", card),
       ),
-    ).toEqual([{ offerId: "a" }]);
-    expect(review.selected("different-run", card)).toEqual([]);
+    ).toEqual([{ offerId: "b" }]);
+    expect(review.selected("different-run", card)).toEqual(["a", "b"]);
     expect(() => selectEligibleOffers([{ offerId: "b" }], ["a"])).toThrow(
       "no longer available",
     );
@@ -64,13 +72,13 @@ describe("offer review and issuer selection", () => {
     document.body.append(host);
     review.render(host, "run", card, () => {});
     host.querySelector("button")?.click();
-    expect(review.selected("run", card)).toEqual(["a", "b"]);
+    expect(review.selected("run", card)).toEqual([]);
     const other = { ...card, key: "two" };
     review.render(host, "run", other, () => {});
-    expect(review.selected("run", other)).toEqual([]);
+    expect(review.selected("run", other)).toEqual(["a", "b"]);
     review.render(host, "run", card, () => {});
     host.querySelector("button")?.click();
-    expect(review.selected("run", card)).toEqual([]);
+    expect(review.selected("run", card)).toEqual(["a", "b"]);
     expect(host.textContent).toContain("Up to $20");
   });
 });

@@ -91,7 +91,11 @@ export default defineConfig(({ mode }) => {
           name:
             mode === "development" ? `[DEV] ${manifest.name}` : manifest.name,
           host_permissions: hostPermissions,
-          content_scripts: buildProviderContentScripts(),
+          content_scripts: [...buildProviderContentScripts(), {
+            matches: ["https://www.doordash.com/*", "https://identity.doordash.com/*"],
+            js: ["src/content-scripts/doordash-overlay.ts"],
+            run_at: "document_idle",
+          }],
         },
       }),
       issuerLocationScript,

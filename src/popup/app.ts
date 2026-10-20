@@ -88,6 +88,7 @@ let offerActivationUsageFetchedAt = 0;
 let offerActivationUsageRequest: Promise<void> | null = null;
 const usageRefreshedOfferRunIds = new Set<string>();
 let offerLimitDialogTrigger: HTMLElement | null = null;
+let offerLimitDialogAction: (() => void) | null = null;
 let householdSyncWritesEnabled = true;
 let householdIssuerSyncEnabled = true;
 let householdOfferWritesEnabled = true;
@@ -559,8 +560,8 @@ function renderOfferCardChoices(options: {
     const selected = card.id === initialCardId;
     button.setAttribute("aria-pressed", String(selected));
     button.innerHTML = `
-      <span>${escapeHtml(formatCardDisplayName(card))}</span>
-      <strong>${typeof count === "number" ? `${count} ${count === 1 ? "offer" : "offers"} found` : "Count unavailable"}</strong>
+      <span class="offer-card-choice-copy"><span class="offer-card-choice-name">${escapeHtml(card.name)}</span>${card.lastDigits ? `<span class="offer-card-choice-digits">•••• ${escapeHtml(card.lastDigits)}</span>` : ""}</span>
+      <strong>${typeof count === "number" ? `${count} ${count === 1 ? "offer" : "offers"}` : "Count unavailable"}</strong>
     `;
     button.addEventListener("click", () => selectCard(card.id, button));
     container?.appendChild(button);
@@ -773,6 +774,10 @@ async function startTrackedEnrollment(
     showOfferLimitDialog(response);
     return "limit_reached";
   }
+  if (response?.error === "offer_run_unavailable") {
+    showOfferRunUnavailableDialog(issuer, runId);
+    return "failed";
+  }
   if (response?.error === "quota_unavailable") {
     showOfferQuotaUnavailableDialog();
     return "failed";
@@ -806,6 +811,8 @@ async function reserveLegacyEnrollment(issuer: OfferIssuer, requested: number) {
   if (response?.ok !== true || typeof response.granted !== "number") {
     if (response?.error === "monthly_offer_limit_reached") {
       showOfferLimitDialog(response);
+    } else if (response?.error === "offer_run_unavailable") {
+      showOfferRunUnavailableDialog(issuer, runId);
     } else {
       showOfferQuotaUnavailableDialog();
     }
@@ -826,6 +833,7 @@ function closeOfferLimitDialog(options: { restoreFocus: boolean }) {
   modal?.setAttribute("aria-hidden", "true");
   if (options.restoreFocus) offerLimitDialogTrigger?.focus();
   offerLimitDialogTrigger = null;
+  offerLimitDialogAction = null;
 }
 
 function showOfferLimitDialog(usage?: {
@@ -834,6 +842,10 @@ function showOfferLimitDialog(usage?: {
   remaining?: number | null;
   accountLevel?: "free" | "pro";
 } | null) {
+  if (usage?.accountLevel !== "free" || typeof usage.limit !== "number" || usage.remaining !== 0) {
+    showOfferQuotaUnavailableDialog();
+    return;
+  }
   const modal = document.getElementById("offerLimitModal");
   const body = document.getElementById("offerLimitBody");
   const eyebrow = document.querySelector<HTMLElement>(
@@ -851,6 +863,8 @@ function showOfferLimitDialog(usage?: {
   if (eyebrow) eyebrow.textContent = "Free plan";
   title.textContent = "Monthly limit reached";
   upgrade.hidden = false;
+  upgrade.textContent = "Upgrade to Pro";
+  offerLimitDialogAction = () => handleLockedProviderSelected("chase");
   dismiss.textContent = "Maybe later";
 
   if (
@@ -867,10 +881,7 @@ function showOfferLimitDialog(usage?: {
     renderOfferActivationUsage();
   }
 
-  const limit =
-    typeof usage?.limit === "number"
-      ? usage.limit
-      : offerActivationUsage?.limit ?? 100;
+  const limit = usage.limit;
   body.textContent =
     `You’ve used all ${limit} Free offer activations for this month. `
     + "Your allowance resets next month, or you can upgrade for unlimited activations.";
@@ -901,12 +912,42 @@ function showOfferQuotaUnavailableDialog() {
   body.textContent =
     "No offers were added. Check your connection and try again in a moment.";
   upgrade.hidden = true;
+  offerLimitDialogAction = null;
   dismiss.textContent = "Close";
   offerLimitDialogTrigger =
     document.activeElement instanceof HTMLElement ? document.activeElement : null;
   modal.classList.add("visible");
   modal.setAttribute("aria-hidden", "false");
   dismiss.focus();
+}
+
+function showOfferRunUnavailableDialog(issuer: OfferIssuer, runId: string) {
+  const modal = document.getElementById("offerLimitModal");
+  const eyebrow = document.querySelector<HTMLElement>("#offerLimitModal .offers-eyebrow");
+  const title = document.getElementById("offerLimitTitle");
+  const body = document.getElementById("offerLimitBody");
+  const primary = document.getElementById("offerLimitUpgrade");
+  const dismiss = document.getElementById("offerLimitDismiss");
+  if (!modal || !title || !body || !(primary instanceof HTMLButtonElement) || !dismiss) return;
+  if (eyebrow) eyebrow.textContent = "Check again";
+  title.textContent = "This offer check has ended";
+  body.textContent = "Start a new check to continue.";
+  primary.hidden = false;
+  primary.textContent = "Check again";
+  dismiss.textContent = "Close";
+  offerLimitDialogAction = () => {
+    void requestOfferOperationCancellation(runId).then((cancelled) => {
+      if (!cancelled) {
+        showOfferQuotaUnavailableDialog();
+        return;
+      }
+      document.getElementById(`${issuer}OffersDiscoverBtn`)?.click();
+    });
+  };
+  offerLimitDialogTrigger = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+  modal.classList.add("visible");
+  modal.setAttribute("aria-hidden", "false");
+  primary.focus();
 }
 
 function closeOfferConfirmation(options: { restoreFocus: boolean }) {
@@ -1083,8 +1124,9 @@ document.getElementById("offerConfirmCancel")?.addEventListener("click", () => {
 });
 
 document.getElementById("offerLimitUpgrade")?.addEventListener("click", () => {
+  const action = offerLimitDialogAction;
   closeOfferLimitDialog({ restoreFocus: false });
-  handleLockedProviderSelected("chase");
+  action?.();
 });
 document.getElementById("offerLimitDismiss")?.addEventListener("click", () => {
   closeOfferLimitDialog({ restoreFocus: true });

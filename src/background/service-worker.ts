@@ -657,6 +657,7 @@ function updateProviderFromBackendPush(
       status: "done",
       error: null,
       backendSyncStatus: "saved",
+      cardSync: result.cardSync,
       backendSyncError: null,
       pendingBackendPush: false,
       lastBackendPushAttemptAt: attemptedAt,
@@ -1328,6 +1329,7 @@ chrome.runtime.onMessage.addListener(
 
       const payload: OfferSyncPayload = {
         runId: operation.runId,
+        activationCardIds: issuer === "amex" ? operation.cards.map((card) => card.key) : undefined,
         scope: operation.scope,
         issuer,
         issuerCardId: String(message.cardId ?? message.accountId ?? ""),
@@ -1395,6 +1397,9 @@ chrome.runtime.onMessage.addListener(
 
       const payload: DetectedOfferSyncPayload = {
         runId: operation.runId,
+        accountCardIds: issuer === "amex" && Array.isArray(message.accountCardIds)
+          && message.accountCardIds.every((id): id is string => typeof id === "string")
+          ? message.accountCardIds : undefined,
         scope: operation.scope,
         issuer,
         issuerCardId: String(message.cardId ?? message.accountId ?? ""),
@@ -1403,7 +1408,9 @@ chrome.runtime.onMessage.addListener(
         snapshot,
         offers: detectedOffers.map((o) => ({
           ...o,
-          detectedAt: new Date().toISOString(),
+          detectedAt: issuer === "amex" && typeof message.observedAt === "string"
+            && Number.isFinite(Date.parse(message.observedAt))
+            ? message.observedAt : new Date().toISOString(),
         })),
       };
 
