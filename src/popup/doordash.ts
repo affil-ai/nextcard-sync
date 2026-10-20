@@ -376,7 +376,8 @@ export function mountDoorDashProvider() {
         note.textContent = `${currency.format(row.recordedAmount)} recorded. Exact uses unknown.`;
         item.append(note);
       }
-      if (row.cardCreditId && row.recordedUses !== row.maxUses) {
+      const confirmedUnused = row.maxUses === 1 && row.availability === "available";
+      if (row.cardCreditId && row.recordedUses !== row.maxUses && !confirmedUnused) {
         const mark = document.createElement("button");
         mark.type = "button";
         mark.className = "tool-link-btn";

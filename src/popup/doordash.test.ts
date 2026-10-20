@@ -728,6 +728,25 @@ function expectedReply(availability: "available" | "likely_used" | "unknown" = "
   return { ok: true, benefits: [{ key: "non-restaurant", label: "DoorDash grocery", frequency: maxUses === 2 ? "monthly" : "quarterly", periodStart: "2026-10-01", periodEnd: maxUses === 2 ? "2026-10-31" : "2026-12-31", maxUses, amountPerUse: 10, availability }] };
 }
 
+it.each([
+  { availability: "available", manualAction: false },
+  { availability: "unknown", manualAction: true },
+] satisfies { availability: "available" | "unknown"; manualAction: boolean }[])("shows single-use manual entry=$manualAction when availability=$availability", async ({ availability, manualAction }) => {
+  sendMessage.mockImplementation(async (message: { type: string }) => {
+    if (message.type === "DOORDASH_BENEFITS") {
+      const reply = expectedReply(availability);
+      return { ...reply, benefits: reply.benefits.map((benefit) => ({ ...benefit, cardCreditId: "credit-a", recordedUses: 0 })) };
+    }
+    if (message.type === "DOORDASH_TEST_CARDS") return { ok: true, cards: [] };
+    return { ok: true, snapshot: eligibleSnapshot() };
+  });
+  mountDoorDashProvider(); button().click();
+  await vi.waitFor(() => expect(document.getElementById("doorDashCreditRows")?.textContent).toContain(availability === "available" ? "○ Available" : "○ Usage unknown"));
+  const actions = document.getElementById("doorDashCreditRows")?.querySelectorAll("button");
+  expect(actions?.length).toBe(manualAction ? 1 : 0);
+  if (manualAction) expect(actions?.[0]?.textContent).toBe("Mark as used");
+});
+
 it("checks a missing single-use credit before wallet linkage and identifies it as inferred", async () => {
   sendMessage.mockImplementation(async (message: { type: string }) => {
     if (message.type === "DOORDASH_BENEFITS") return expectedReply("likely_used");
@@ -836,7 +855,7 @@ it.each([
   sendMessage.mockImplementation(async (request: { type: string }) => {
     if (request.type === "DOORDASH_BENEFITS") {
       const reply = expectedReply(availability, 2);
-      return { ...reply, benefits: reply.benefits.map((benefit) => ({ ...benefit, recordedUses })) };
+      return { ...reply, benefits: reply.benefits.map((benefit) => ({ ...benefit, cardCreditId: "credit-a", recordedUses })) };
     }
     if (request.type === "DOORDASH_TEST_CARDS") return { ok: true, cards: [] };
     return { ok: true, snapshot: eligibleSnapshot() };
@@ -849,6 +868,7 @@ it.each([
   expect(rows?.querySelectorAll('.doordash-credit-use[data-used="true"]').length).toBe(used);
   expect(rows?.querySelectorAll('.doordash-credit-use[data-used="false"]').length).toBe(0);
   if (recordedUses === 2) expect(rows?.textContent).not.toContain("At least 1");
+  expect(rows?.querySelectorAll("button").length).toBe(recordedUses < 2 ? 1 : 0);
 });
 
 
