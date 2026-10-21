@@ -74,7 +74,7 @@ function parseIntSafe(str: string): number | null {
 
 // ── Scrape account page ─────────────────────────────────────
 
-function scrapeAccountPage(): UnitedLoyaltyData {
+export function scrapeAccountPage(): UnitedLoyaltyData {
   const data: UnitedLoyaltyData = {
     milesBalance: null,
     eliteStatus: null,
@@ -138,17 +138,13 @@ function scrapeAccountPage(): UnitedLoyaltyData {
     }
   } catch (e) { console.warn("[NextCard United] travelBankBalance:", e); }
 
-  // eliteStatus: base members don't have a Premier status label shown;
-  // for Premier members it would appear in the progress section header
+  // Read an explicit current tier, excluding progress-to-next-tier headings.
+  // Base members may have no status label, so retain the Member fallback.
   try {
-    const statusEl = document.querySelector('[class*="PremierProgress__headerText"]');
-    const statusText = statusEl?.textContent?.trim() ?? '';
-    if (statusText.toLowerCase().includes('premier')) {
-      const match = statusText.match(/Premier\s+(Silver|Gold|Platinum|1K)/i);
-      data.eliteStatus = match ? `Premier ${match[1]}` : 'MileagePlus Member';
-    } else {
-      data.eliteStatus = 'MileagePlus Member';
-    }
+    const statusText = document.querySelector('[class*="PremierProgress__headerText"]')
+      ?.textContent?.replace(/\s+/g, ' ').trim() ?? '';
+    const match = statusText.match(/^(?:(?:your|current)\s+(?:Premier\s+)?status\s*:?\s*)?(Premier\s+(?:Silver|Gold|Platinum|1K)|Global Services|MileagePlus(?:®)? Member)(?:\s+status)?[.!]?$/i);
+    data.eliteStatus = match?.[1] ?? "MileagePlus Member";
   } catch (e) { console.warn("[NextCard United] eliteStatus:", e); }
 
   return data;

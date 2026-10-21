@@ -134,7 +134,7 @@ function parseAvailablePointsFromPageText() {
 
 // ── Scrape overview page ────────────────────────────────────
 
-function scrapeOverviewPage(): Partial<AtmosLoyaltyData> {
+export function scrapeOverviewPage(): Partial<AtmosLoyaltyData> {
   const data: Partial<AtmosLoyaltyData> = {};
 
   // Member name
@@ -150,7 +150,7 @@ function scrapeOverviewPage(): Partial<AtmosLoyaltyData> {
   const oldTier = normalizeText(tierRow?.querySelector("div")?.textContent);
   const newTier = Array.from(document.querySelectorAll(".loyalty-header-row .info-row, .guest-information-container .info-row"))
     .map((el) => normalizeText(el.textContent))
-    .find((text) => /member/i.test(text) && !/rewards\s+no/i.test(text));
+    .find((text) => Boolean(text) && !/rewards\s+no/i.test(text));
   data.statusLevel = oldTier || newTier || null;
 
   // Member number

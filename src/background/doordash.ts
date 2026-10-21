@@ -76,7 +76,7 @@ export async function readDoorDashSession(queries: typeof doorDashQueries) {
           const store = url.pathname.match(/^\/(?:convenience\/)?store\/(?:[^/]*-)?(\d+)\/?$/);
           if (store?.[1]) storeIds.set(store[1], storeIds.get(store[1]) === true || url.pathname.startsWith("/convenience/"));
         }
-        return { source, status: "ok", data: { storeIds: [...storeIds].sort((left, right) => Number(right[1]) - Number(left[1])).slice(0, 3).map(([id]) => id) } };
+        return { source, status: "ok", data: { stores: [...storeIds].sort((left, right) => Number(right[1]) - Number(left[1])).slice(0, 3).map(([id, nonRestaurant]) => ({ id, nonRestaurant })) } };
       }
       const json: unknown = await response.json();
       if (record(json).errors)
@@ -86,7 +86,13 @@ export async function readDoorDashSession(queries: typeof doorDashQueries) {
           error:
             "DoorDash could not complete this query. No usage was inferred.",
         };
-      return { source, status: "ok", data: payload ? record(json).data : json };
+      const data = payload ? record(json).data : json;
+      if ((payload?.operationName === "getPlacements" &&
+          !Array.isArray(record(record(record(data).getPlacements).placements).placementSections)) ||
+          (payload?.operationName === "listCarts" && !Array.isArray(record(data).listCarts))) {
+        return { source, status: "error", error: "DoorDash returned incomplete benefit data. Try syncing again." };
+      }
+      return { source, status: "ok", data };
     } catch {
       return {
         source,
@@ -172,15 +178,18 @@ export async function readDoorDashSession(queries: typeof doorDashQueries) {
       ])),
     );
   }
-  // Store placements can expose account campaigns without creating a cart.
-  // Their absence is not checkout validation and must never imply usage.
-  if (!reads.some((item) => item.source.startsWith("context:"))) {
+  // Store placements expose account campaigns without creating a cart.
+  // Keep grocery/retail provenance so a complete empty check can infer exhaustion.
+  if (Array.isArray(cartData) && cartData.length === 0) {
     const stores = await read("stores", "/home", undefined, true);
     reads.push(stores);
-    const storeIds = record(stores.data).storeIds;
-    if (Array.isArray(storeIds)) {
-      for (const [index, storeId] of storeIds.entries()) {
-        if (typeof storeId !== "string") continue;
+    const storeContexts = record(stores.data).stores;
+    if (Array.isArray(storeContexts)) {
+      for (const [index, value] of storeContexts.entries()) {
+        const store = record(value);
+        const storeId = text(store.id);
+        if (!storeId) continue;
+        reads.push({ source: `store-context:${index + 1}`, status: "ok", data: { nonRestaurant: store.nonRestaurant === true } });
         reads.push(await gql(`placements:store:${index + 1}`, "getPlacements", queries.placements, {
           location: "STORE", component: "CAROUSEL", storeId,
         }));

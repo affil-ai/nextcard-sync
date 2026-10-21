@@ -123,8 +123,25 @@ it("discovers offered campaigns from account-local stores without a cart", async
   expect(result.reads.filter((row) => row.source.startsWith("placements:store:"))).toHaveLength(2);
   const normalized = normalizeDoorDashReads(doorDashReadSchema.array().parse(result.reads), new Date().toISOString(), result.accountKey);
   expect(normalized.campaigns).toEqual([expect.objectContaining({ campaignId: "grocery-campaign", frequency: "monthly" })]);
-  expect(normalized.contexts).toEqual([]);
+  expect(normalized.contexts).toEqual([
+    { source: "placements:store:1", nonRestaurant: true, validationPassed: false },
+    { source: "placements:store:2", nonRestaurant: false, validationPassed: false },
+  ]);
   expect(fetcher.mock.calls.some(([path]) => path.includes("partner_plan_benefit_validation"))).toBe(false);
+});
+
+it.each(["placements", "carts"])("rejects malformed %s instead of treating missing data as an exhausted campaign", async (part) => {
+  const fetcher = mockReads({ noCarts: true });
+  const original = fetcher.getMockImplementation();
+  if (!original) throw new Error("Missing mocked reads");
+  fetcher.mockImplementation(async (path: string, init: RequestInit) => {
+    if (path === (part === "placements" ? "/graphql/getPlacements" : "/graphql/listCarts"))
+      return Response.json({ data: {} });
+    return original(path, init);
+  });
+  const result = await readDoorDashSession(doorDashQueries);
+  expect(result.reads.some((read) => read.source === (part === "placements" ? "placements:wallet" : "carts") && read.status === "error")).toBe(true);
+  if (part === "carts") expect(fetcher.mock.calls.some(([path]) => path === "/home")).toBe(false);
 });
 
 it("only runs the captured read operations and hashes the account identifier", async () => {

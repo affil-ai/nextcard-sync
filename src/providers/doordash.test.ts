@@ -212,7 +212,7 @@ describe("DoorDash campaign observations", () => {
   });
 });
 
-// Missing campaigns are evidence only after an eligible checkout was checked.
+// Missing campaigns require either checkout validation or complete no-cart coverage.
 describe("DoorDash missing-campaign inference", () => {
   function checkedSnapshot() {
     return doorDashSnapshotSchema.parse({
@@ -279,6 +279,20 @@ describe("DoorDash missing-campaign inference", () => {
       { ...snapshot, checks: [] },
     ])
       expect(assessDoorDashUsage(changed).likelyUsed).toBe(false);
+  });
+  it("infers exhaustion without a cart only with complete grocery/retail coverage", () => {
+    const snapshot = checkedSnapshot();
+    snapshot.checkoutContextsChecked = 0;
+    snapshot.contexts = [{ source: "placements:store:1", nonRestaurant: true, validationPassed: false }];
+    snapshot.checks = snapshot.checks.filter((check) => !check.source.startsWith("placements:checkout:") && !check.source.startsWith("validation:"));
+    snapshot.checks.push({ source: "stores", status: "ok" }, { source: "placements:store:1", status: "ok" });
+    expect(assessDoorDashUsage(snapshot).likelyUsed).toBe(true);
+    for (const changed of [
+      { ...snapshot, contexts: [] },
+      { ...snapshot, contexts: [{ source: "placements:store:1", nonRestaurant: false, validationPassed: false }] },
+      { ...snapshot, checks: snapshot.checks.filter((check) => check.source !== "account-verification") },
+      { ...snapshot, checks: [...snapshot.checks, { source: "placements:store:2", status: "error" }] },
+    ]) expect(assessDoorDashUsage(doorDashSnapshotSchema.parse(changed)).likelyUsed).toBe(false);
   });
   it("keeps a two-use campaign offered without claiming one or two uses remain", () => {
     const offered = normalizeDoorDashReads(

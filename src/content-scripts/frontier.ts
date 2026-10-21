@@ -110,8 +110,11 @@ function extractEliteStatus() {
   const tileHero = normalizeText(statusTile?.querySelector(".tile-hero")?.textContent);
   if (tileHero) return tileHero;
 
-  const bodyText = normalizeText(document.body.innerText);
-  const match = bodyText.match(/\b(Member|Elite Silver|Elite Gold|Elite Platinum|Elite Diamond|Silver|Gold|Platinum|Diamond)\b/i);
+  // Read the current-tier label inside account status tiles, never unrelated
+  // page copy or the next-tier benefits cards.
+  const statusText = normalizeText(statusTile?.textContent);
+  const benefitsText = normalizeText(findStatusBenefitsTile()?.textContent);
+  const match = `${statusText} ${benefitsText}`.match(/(?:MY STATUS|Your Status Tier):\s*((?:Elite\s+)?(?:Silver|Gold|Platinum|Diamond)|Member)\b/i);
   return match ? match[1] : null;
 }
 
@@ -184,7 +187,7 @@ function hasAuthenticatedData(data: FrontierLoyaltyData) {
 
 // ── Scrape account page ─────────────────────────────────────
 
-function scrapeAccountPage(): FrontierLoyaltyData {
+export function scrapeAccountPage(): FrontierLoyaltyData {
   const data: FrontierLoyaltyData = {
     milesBalance: null,
     eliteStatus: null,

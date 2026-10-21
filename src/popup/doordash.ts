@@ -384,8 +384,8 @@ export function mountDoorDashProvider() {
         note.textContent = `${currency.format(row.recordedAmount)} recorded. Exact uses unknown.`;
         item.append(note);
       }
-      const confirmedUnused = row.maxUses === 1 && row.availability === "available";
-      if (row.cardCreditId && row.recordedUses !== row.maxUses && !confirmedUnused && !exhausted) {
+      const confirmedAvailable = row.availability === "available";
+      if (row.cardCreditId && row.recordedUses !== row.maxUses && !confirmedAvailable && !exhausted) {
         const mark = document.createElement("button");
         mark.type = "button";
         mark.className = "tool-link-btn";

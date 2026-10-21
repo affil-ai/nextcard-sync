@@ -105,14 +105,22 @@ export function assessDoorDashUsage(snapshot: DoorDashSnapshot) {
       ),
     ) &&
     snapshot.checks.every((check) => check.status === "ok") &&
-    snapshot.contexts?.some(
+    (snapshot.contexts?.some(
       (context) =>
         context.nonRestaurant &&
         context.validationPassed &&
         snapshot.checks.some(
           (check) => check.source === context.source && check.status === "ok",
         ),
-    ),
+    ) || (
+      snapshot.checkoutContextsChecked === 0 &&
+      !snapshot.contexts?.some((context) => context.source.startsWith("placements:checkout:")) &&
+      snapshot.checks.some((check) => check.source === "stores" && check.status === "ok") &&
+      snapshot.contexts?.some((context) =>
+        context.source.startsWith("placements:store:") && context.nonRestaurant &&
+        snapshot.checks.some((check) => check.source === context.source && check.status === "ok")
+      )
+    )),
   );
   const at = new Date(snapshot.checkedAt);
   const period =
@@ -345,9 +353,14 @@ export function normalizeDoorDashReads(
         read.source.startsWith("placements:checkout:") && read.status === "ok",
     ).length,
     contexts: reads
-      .filter((read) => read.source.startsWith("context:"))
+      .filter((read) => read.source.startsWith("context:") || read.source.startsWith("store-context:"))
       .map((read) => {
         const data = record(read.data);
+        if (read.source.startsWith("store-context:")) return {
+          source: `placements:store:${read.source.slice("store-context:".length)}`,
+          nonRestaurant: data.nonRestaurant === true,
+          validationPassed: false,
+        };
         const index = read.source.slice("context:".length);
         const validation = record(
           reads.find(

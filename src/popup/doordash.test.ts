@@ -479,11 +479,11 @@ it("shows automatically saved inferred usage after the sync acknowledgement", as
   expect(chrome.tabs.create).not.toHaveBeenCalled();
 });
 
-it("requires a use count for a two-use credit and keeps failed saves retryable", async () => {
+it("requires a use count for an unknown two-use credit and keeps failed saves retryable", async () => {
   let failSave = true;
   let recordedUses = 0;
   sendMessage.mockImplementation(async (message: { type: string }) => {
-    if (message.type === "DOORDASH_BENEFITS") return expectedReply("available", 2);
+    if (message.type === "DOORDASH_BENEFITS") return expectedReply("unknown", 2);
     if (message.type === "DOORDASH_TEST_CARDS")
       return {
         ok: true,
@@ -507,7 +507,7 @@ it("requires a use count for a two-use credit and keeps failed saves retryable",
             periodEnd: "2026-10-31",
             maxUses: 2,
             amountPerUse: 10,
-            recordedUses, recordedAmount: recordedUses * 10, availability: "available",
+            recordedUses, recordedAmount: recordedUses * 10, availability: "unknown",
           },
         ],
       };
@@ -724,19 +724,21 @@ function expectedReply(availability: "available" | "likely_used" | "unknown" = "
 }
 
 it.each([
-  { availability: "available", manualAction: false },
-  { availability: "unknown", manualAction: true },
-] satisfies { availability: "available" | "unknown"; manualAction: boolean }[])("shows single-use manual entry=$manualAction when availability=$availability", async ({ availability, manualAction }) => {
+  { availability: "available", maxUses: 1, manualAction: false },
+  { availability: "available", maxUses: 2, manualAction: false },
+  { availability: "unknown", maxUses: 1, manualAction: true },
+  { availability: "unknown", maxUses: 2, manualAction: true },
+] satisfies { availability: "available" | "unknown"; maxUses: number; manualAction: boolean }[])("shows manual entry=$manualAction for $maxUses uses when availability=$availability", async ({ availability, maxUses, manualAction }) => {
   sendMessage.mockImplementation(async (message: { type: string }) => {
     if (message.type === "DOORDASH_BENEFITS") {
-      const reply = expectedReply(availability);
+      const reply = expectedReply(availability, maxUses);
       return { ...reply, benefits: reply.benefits.map((benefit) => ({ ...benefit, cardCreditId: "credit-a", recordedUses: 0 })) };
     }
     if (message.type === "DOORDASH_TEST_CARDS") return { ok: true, cards: [] };
     return { ok: true, snapshot: eligibleSnapshot() };
   });
   mountDoorDashProvider(); button().click();
-  await vi.waitFor(() => expect(document.getElementById("doorDashCreditRows")?.textContent).toContain(availability === "available" ? "○ Available" : "○ Usage unknown"));
+  await vi.waitFor(() => expect(document.getElementById("doorDashCreditRows")?.textContent).toContain(availability === "available" ? "○ Available" : maxUses === 1 ? "○ Usage unknown" : "Availability could not be confirmed."));
   const actions = document.getElementById("doorDashCreditRows")?.querySelectorAll("button");
   expect(actions?.length).toBe(manualAction ? 1 : 0);
   if (manualAction) expect(actions?.[0]?.textContent).toBe("Mark as used");
@@ -867,7 +869,7 @@ it.each([
     expect(rows?.querySelector(".doordash-credit-status")?.textContent).toBe("○ Available");
   } else expect(rows?.querySelector(".doordash-credit-status")).toBeNull();
   expect(rows?.textContent).not.toContain("At least 1");
-  expect(rows?.querySelectorAll("button").length).toBe(recordedUses < 2 && availability !== "likely_used" ? 1 : 0);
+  expect(rows?.querySelectorAll("button").length).toBe(recordedUses < 2 && availability === "unknown" ? 1 : 0);
 });
 
 
