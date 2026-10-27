@@ -137,6 +137,7 @@ it("reviews the wrong profile's data removal before confirming a household corre
   let finishCorrection: ((value: { ok: boolean }) => void) | undefined;
   const correctionFinished = new Promise<{ ok: boolean }>((resolve) => { finishCorrection = resolve; });
   let correctionAttempts = 0;
+  let extraMember = false;
   const sendMessage = vi.fn(async (message: Record<string, unknown>) => {
     switch (message.type) {
       case "GET_AUTH_STATE": return { token: "token", email: "owner@example.com", signedInAt: "test" };
@@ -149,7 +150,8 @@ it("reviews the wrong profile's data removal before confirming a household corre
             loyaltyWrites: true, memberIssuerCardSync: true, memberOfferReads: true,
             memberOfferWrites: true, combinedReads: true },
           members: [{ id: "vishal", displayName: "Vishal", isPrimary: true, lifecycleVersion: 1 },
-            { id: "jordan", displayName: "Jordan", isPrimary: false, lifecycleVersion: 1 }],
+            { id: "jordan", displayName: "Jordan", isPrimary: false, lifecycleVersion: 1 },
+            ...(extraMember ? [{ id: "new-member", displayName: "New member", isPrimary: false, lifecycleVersion: 1 }] : [])],
         }, selectedMemberId: "vishal", pendingConfirmation: pending,
       };
       case "CONFIRM_HOUSEHOLD_SYNC":
@@ -170,6 +172,11 @@ it("reviews the wrong profile's data removal before confirming a household corre
   const memberSelect = document.getElementById("householdMemberSelect");
   if (!(correct instanceof HTMLButtonElement) || !(confirm instanceof HTMLButtonElement) || !(memberSelect instanceof HTMLSelectElement)) throw new Error("Missing profile controls");
   await vi.waitFor(() => expect(correct.textContent).toBe("Sync to Vishal"));
+  expect(document.getElementById("householdSyncConfirmation")?.parentElement?.dataset.syncProvider).toBe("atmos");
+  extraMember = true;
+  document.getElementById("refreshHouseholdProfiles")?.click();
+  await vi.waitFor(() => expect(memberSelect.options.length).toBe(3));
+  expect(memberSelect.value).toBe("vishal");
   correct.click();
   await vi.waitFor(() => expect(confirm.textContent).toBe("Clear and sync"));
   expect(document.getElementById("householdSyncConfirmationText")?.textContent).toContain("from Jordan, then sync this login to Vishal");

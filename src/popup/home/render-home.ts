@@ -34,6 +34,9 @@ export function buildHomeSnapshot(
       return [
         providerId,
         state?.status ?? "idle",
+        state?.progressMessage ?? "",
+        state?.error ?? "",
+        state?.backendSyncError ?? "",
         state?.lastSyncedAt ?? "",
         state?.backendSyncStatus ?? "",
         state?.pendingBackendPush ? "pending" : "",
@@ -70,7 +73,7 @@ export function createHomeRenderer(options: {
     button.className = "rewards-sync-stop";
     button.title = "Stop sync";
     button.setAttribute("aria-label", `Stop ${providerRegistry[providerId].name} sync`);
-    button.innerHTML = '<svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden="true"><rect x="5" y="5" width="14" height="14" rx="2" /></svg>';
+    button.textContent = "Stop";
     button.addEventListener("click", (event) => {
       event.stopPropagation();
       options.onSummaryCancelRequested(providerId);
@@ -186,6 +189,7 @@ export function createHomeRenderer(options: {
         const definition = providerRegistry[summary.provider];
         const card = document.createElement("article");
         card.className = "rewards-summary-card";
+        card.dataset.syncProvider = summary.provider;
         const isSyncing =
           state?.status === "extracting"
           || state?.status === "detecting_login"
@@ -226,20 +230,21 @@ export function createHomeRenderer(options: {
             ${balance ? `<strong class="rewards-summary-balance" aria-label="Balance ${escapeHtml(balance)}">${escapeHtml(balance)}</strong>` : ""}
             ${summary.statusLevel ? `<span class="rewards-summary-status">${escapeHtml(summary.statusLevel)}</span>` : ""}
             ${meta ? `<div class="rewards-summary-meta">${escapeHtml(meta)}</div>` : ""}
-            <div class="provider-last-sync">${isSyncing ? state?.status === "waiting_for_login" ? "Waiting for sign-in and verification" : "Syncing now…" : `Synced ${lastSync ?? "recently"}`}</div>
+            <div class="provider-last-sync">${awaitingConfirmation ? "Not saved yet · Confirm the account below" : isSyncing ? "Updating your saved balance…" : `Synced ${lastSync ?? "recently"}`}</div>
           </div>
           <div class="rewards-summary-actions">
-            <button class="rewards-summary-primary" type="button">View details <span aria-hidden="true">→</span></button>
-            ${!isSyncing ? `<button class="rewards-summary-secondary" type="button"${isSyncAllRunning ? " disabled" : ""}>${hasError ? "Try again" : "Sync again"}</button>` : ""}
+            ${!isSyncing && !awaitingConfirmation ? `<button class="rewards-summary-primary rewards-summary-sync" type="button"${isSyncAllRunning ? " disabled" : ""}>${hasError ? "Try again" : "Sync again"}</button>` : ""}
+            <button class="rewards-summary-secondary rewards-summary-details" type="button">View details <span aria-hidden="true">→</span></button>
           </div>
         `;
 
+        appendSyncProgress(card, state);
         if (isSyncing) card.querySelector(".rewards-summary-header")?.appendChild(createStopButton(summary.provider));
         card
-          .querySelector<HTMLButtonElement>(".rewards-summary-primary")
+          .querySelector<HTMLButtonElement>(".rewards-summary-details")
           ?.addEventListener("click", () => options.onSummarySelected(summary));
         card
-          .querySelector<HTMLButtonElement>(".rewards-summary-secondary")
+          .querySelector<HTMLButtonElement>(".rewards-summary-sync")
           ?.addEventListener("click", () => options.onSummarySyncRequested(summary.provider));
         options.providerList.appendChild(card);
       }
@@ -275,6 +280,7 @@ export function createHomeRenderer(options: {
             options.onLockedProviderSelected(providerId);
             return;
           }
+          if (state?.status === "awaiting_confirmation") return;
           options.onProviderSelected(providerId);
         });
 
@@ -282,6 +288,7 @@ export function createHomeRenderer(options: {
           state?.status === "extracting"
           || state?.status === "detecting_login"
           || state?.status === "waiting_for_login";
+        card.disabled = isSyncing || state?.status === "awaiting_confirmation";
         const dotClass = isSyncing
           ? "syncing"
           : state?.status === "awaiting_confirmation"
@@ -314,15 +321,17 @@ export function createHomeRenderer(options: {
           card.classList.add("tour-target");
         }
 
-        if (isSyncing) {
-          const row = document.createElement("div");
-          row.className = "provider-card-row";
-          if (group.label === "Banks") row.classList.add("tour-target");
-          row.append(card, createStopButton(providerId));
-          options.providerList.appendChild(row);
-        } else {
-          options.providerList.appendChild(card);
-        }
+        const row = document.createElement("div");
+        row.className = "provider-sync-card";
+        row.dataset.syncProvider = providerId;
+        const controls = document.createElement("div");
+        controls.className = isSyncing ? "provider-card-row" : "provider-card-controls";
+        if (group.label === "Banks") row.classList.add("tour-target");
+        controls.appendChild(card);
+        if (isSyncing) controls.appendChild(createStopButton(providerId));
+        row.appendChild(controls);
+        appendSyncProgress(row, state);
+        options.providerList.appendChild(row);
       }
     }
 
@@ -347,4 +356,33 @@ export function createHomeRenderer(options: {
       options.providerList.classList.remove("tour-locked");
     }
   };
+}
+
+function appendSyncProgress(container: HTMLElement, state: ProviderSyncState | undefined) {
+  if (!state) return;
+  const active = state.status === "extracting" || state.status === "detecting_login" || state.status === "waiting_for_login";
+  const detail = active
+    ? state.progressMessage ?? (state.status === "waiting_for_login" ? "Waiting for sign-in and verification" : "Opening your account…")
+    : state.status === "error" || state.pendingBackendPush || state.backendSyncStatus === "partial"
+      ? state.backendSyncError ?? state.error ?? "Your latest data has not been fully saved. Try again."
+      : state.status === "awaiting_confirmation"
+        ? "Review the account owner below. Nothing is saved until you confirm."
+        : null;
+  if (!detail) return;
+  const progress = document.createElement("div");
+  progress.className = "rewards-sync-progress";
+  progress.setAttribute("role", "status");
+  progress.setAttribute("aria-live", "polite");
+  const message = document.createElement("p");
+  message.textContent = detail;
+  progress.appendChild(message);
+  if (active) {
+    const help = document.createElement("p");
+    help.className = "rewards-sync-help";
+    help.textContent = state.status === "waiting_for_login"
+      ? "Sign in to the correct account in the provider tab. For another household member, sign out of the previous account first."
+      : "You can browse other tabs or close this panel. Keep the provider tab open until syncing finishes, then return here to confirm the account.";
+    progress.appendChild(help);
+  }
+  container.appendChild(progress);
 }

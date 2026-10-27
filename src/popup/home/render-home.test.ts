@@ -103,7 +103,17 @@ it("lets a saved program cancel its active sync directly from the summary card",
       onSyncAllRequested() {}, onSyncAllCancelRequested() {},
     });
     render(states);
-    expect(providerList.querySelector(".rewards-summary-secondary")).toBeNull();
+    expect(providerList.querySelector(".rewards-summary-sync")).toBeNull();
+    expect(providerList.querySelector(".rewards-sync-progress")?.textContent).toContain("Sign in to the correct account");
+    states.capitalone.status = "extracting";
+    states.capitalone.progressMessage = "Reading card 2 of 4 <account>";
+    render(states);
+    expect(providerList.querySelector(".rewards-sync-progress")?.textContent).toContain("Reading card 2 of 4 <account>");
+    expect(providerList.querySelector(".rewards-sync-progress account")).toBeNull();
+    states.capitalone.progressMessage = "Reading card 3 of 4";
+    render(states);
+    expect(providerList.querySelector(".rewards-sync-progress")?.textContent).toContain("Reading card 3 of 4");
+    expect(providerList.querySelector(".rewards-sync-progress")?.textContent).toContain("Keep the provider tab open");
     expect(providerList.querySelectorAll(".rewards-sync-stop")).toHaveLength(1);
     const stop = providerList.querySelector(".rewards-summary-header .rewards-sync-stop");
     if (!(stop instanceof HTMLButtonElement)) throw new Error("Missing stop icon");
@@ -114,7 +124,7 @@ it("lets a saved program cancel its active sync directly from the summary card",
     expect(onSummarySyncRequested).not.toHaveBeenCalled();
     states.capitalone.status = "done";
     render(states);
-    const retry = providerList.querySelector(".rewards-summary-secondary");
+    const retry = providerList.querySelector(".rewards-summary-sync");
     if (!(retry instanceof HTMLButtonElement)) throw new Error("Missing sync action");
     expect(retry.textContent).toBe("Sync again");
     expect(providerList.querySelector(".rewards-summary-header .rewards-sync-stop")).toBeNull();
@@ -126,5 +136,14 @@ it("lets a saved program cancel its active sync directly from the summary card",
     expect(onSummaryCancelRequested).toHaveBeenCalledWith("aa");
     retry.click();
     expect(onSummarySyncRequested).toHaveBeenCalledWith("capitalone");
+    expect(retry.classList.contains("rewards-summary-primary")).toBe(true);
+    states.capitalone.status = "awaiting_confirmation";
+    render(states);
+    expect(providerList.querySelector(".rewards-summary-sync")).toBeNull();
+    expect(providerList.querySelector(".rewards-summary-card")?.textContent).toContain("Not saved yet");
+    expect(providerList.querySelector(".rewards-summary-card")?.textContent).toContain("Nothing is saved until you confirm");
+    states.aa.status = "awaiting_confirmation";
+    render(states);
+    expect(providerList.querySelector('[data-sync-provider="aa"] button')?.hasAttribute("disabled")).toBe(true);
   } finally { vi.unstubAllGlobals(); }
 });

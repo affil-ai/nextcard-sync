@@ -121,6 +121,10 @@
           <select id="householdMemberSelect" name="householdMember" aria-describedby="householdSyncTargetHelp"></select>
           <span class="visually-hidden" id="householdSyncTargetHelp" aria-live="polite">Choose which household profile owns this login and its synced data.</span>
       </section>
+      <div id="householdProfileActions" class="household-profile-actions" hidden>
+        <button type="button" id="refreshHouseholdProfiles" class="tool-link-btn">Refresh profiles</button>
+        <span id="householdProfileRefreshStatus" role="status"></span>
+      </div>
       <div id="syncTabPanel" role="tabpanel" aria-labelledby="rewardsTab" style="display:none;">
         <section class="household-sync-confirmation" id="householdSyncConfirmation" hidden tabindex="-1" aria-live="polite">
           <div class="household-sync-confirmation-header">

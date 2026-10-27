@@ -1,5 +1,5 @@
 import type { ProviderId, ProviderSyncState, SyncStatus } from "../../lib/types";
-import { getDisplayedHouseholdScope } from "../state";
+import { getDisplayedHouseholdScope, getDisplayedRewardsMemberId } from "../state";
 
 const confirmModal = document.getElementById("confirmModal") as HTMLDivElement;
 const confirmModalTitle = document.getElementById("confirmModalTitle") as HTMLDivElement;
@@ -27,8 +27,8 @@ export const STATUS_SUBTITLES: Record<SyncStatus, string> = {
   detecting_login: "",
   waiting_for_login: "",
   extracting:
-    "Sit tight — we're navigating your account pages. Please don't close or switch the tab.",
-  awaiting_confirmation: "Review the account owner above before saving.",
+    "Sync runs in the provider tab. Keep it open; you can browse other tabs or close this panel and return to confirm when it finishes.",
+  awaiting_confirmation: "Review the account owner and confirm below to save.",
   done: "",
   cancelled: "",
   error: "",
@@ -118,7 +118,11 @@ export function openRewards(dashboardPath = "/dashboard/rewards") {
   const safePath = dashboardPath.startsWith("/dashboard/rewards")
     ? dashboardPath
     : "/dashboard/rewards";
-  chrome.tabs.create({ url: new URL(safePath, __NEXTCARD_URL__).toString() });
+  const url = new URL(safePath, __NEXTCARD_URL__);
+  const memberId = getDisplayedRewardsMemberId();
+  if (memberId) url.searchParams.set("member", memberId);
+  else url.searchParams.delete("member");
+  chrome.tabs.create({ url: url.toString() });
 }
 
 export function updateWalletBtn(providerId: string, status: string) {

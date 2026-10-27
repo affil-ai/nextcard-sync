@@ -30,10 +30,17 @@ import {
 import { orderedProviderIds } from "../providers/provider-groups";
 import type { HouseholdExtensionContext, HouseholdOperationScope } from "../lib/household-context";
 
+let displayedRewardsMemberId: string | null = null;
+
+export function getDisplayedRewardsMemberId() {
+  return displayedRewardsMemberId;
+}
+
 let displayedHouseholdScope: HouseholdOperationScope | null | undefined;
 
 export function setDisplayedHouseholdScope(context: HouseholdExtensionContext | null, memberId: string | null) {
   const member = context?.members.find((candidate) => candidate.id === memberId);
+  displayedRewardsMemberId = member && !member.isPrimary ? member.id : null;
   displayedHouseholdScope = context && member ? {
     accountScopeId: context.accountScopeId,
     memberId: member.id,

@@ -48,6 +48,7 @@ import {
   getOnboardingCompletionAction,
 } from "./onboarding";
 import { createHomeRenderer } from "./home/render-home";
+import { placeSyncConfirmation } from "./home/sync-confirmation";
 import type { RewardsSyncAllState } from "./home/home-state";
 import {
   getOffersSetupCompletedStorageKey,
@@ -101,6 +102,9 @@ const householdMemberSelect = householdMemberSelectElement instanceof HTMLSelect
 const householdSelectedMemberLabel = document.getElementById(
   "householdSelectedMemberLabel",
 );
+const householdProfileActions = document.getElementById("householdProfileActions");
+const refreshHouseholdProfiles = document.getElementById("refreshHouseholdProfiles");
+const householdProfileRefreshStatus = document.getElementById("householdProfileRefreshStatus");
 const manageHouseholdBtn = document.getElementById("manageHouseholdBtn");
 const householdSyncConfirmation = document.getElementById(
   "householdSyncConfirmation",
@@ -222,7 +226,7 @@ async function refreshHouseholdUi() {
       type: "GET_HOUSEHOLD_STATE",
     });
   } catch {
-    return;
+    return false;
   }
   const availability = isHouseholdPopupState(response)
     ? getHouseholdSyncAvailability(response.context, response.selectedMemberId)
@@ -232,7 +236,9 @@ async function refreshHouseholdUi() {
     isHouseholdPopupState(response) ? response.selectedMemberId : null,
   );
   if (!availability?.householdVisible || !isHouseholdPopupState(response)) {
+    displayedConfirmation = null;
     if (householdSyncTarget) householdSyncTarget.hidden = true;
+    if (householdProfileActions) householdProfileActions.hidden = true;
     if (householdSyncConfirmation) householdSyncConfirmation.hidden = true;
     householdSyncWritesEnabled = true;
     householdIssuerSyncEnabled = true;
@@ -243,10 +249,11 @@ async function refreshHouseholdUi() {
       offersTabButton.disabled = false;
       offersTabButton.title = "";
     }
-    return;
+    return false;
   }
 
   if (householdSyncTarget) householdSyncTarget.hidden = false;
+  if (householdProfileActions) householdProfileActions.hidden = false;
   if (householdMemberSelect) {
     householdMemberSelect.replaceChildren();
     if (response.selectedMemberId === null) {
@@ -356,11 +363,13 @@ async function refreshHouseholdUi() {
         ? `Keep on ${confirmation.collisionMemberDisplayName}`
         : "Confirm and save";
     }
+    positionSyncConfirmation();
     if (!householdConfirmationWasVisible && householdSyncConfirmation) {
-      householdSyncConfirmation.focus({ preventScroll: false });
+      householdSyncConfirmation.focus({ preventScroll: true });
     }
   }
   householdConfirmationWasVisible = Boolean(confirmation);
+  return true;
 }
 
 householdMemberSelect?.addEventListener("change", async () => {
@@ -378,6 +387,23 @@ householdMemberSelect?.addEventListener("change", async () => {
     await refreshHouseholdUi();
   } finally {
     householdMemberSelect.disabled = householdConfirmationBusy;
+  }
+});
+
+refreshHouseholdProfiles?.addEventListener("click", async () => {
+  if (!(refreshHouseholdProfiles instanceof HTMLButtonElement)) return;
+  refreshHouseholdProfiles.disabled = true;
+  refreshHouseholdProfiles.textContent = "Refreshing…";
+  if (householdProfileRefreshStatus) householdProfileRefreshStatus.textContent = "";
+  try {
+    const refreshed = await refreshHouseholdUi();
+    await refreshPopupState();
+    if (householdProfileRefreshStatus) householdProfileRefreshStatus.textContent = refreshed
+      ? "Profiles refreshed"
+      : "Could not refresh profiles. Try again.";
+  } finally {
+    refreshHouseholdProfiles.disabled = false;
+    refreshHouseholdProfiles.textContent = "Refresh profiles";
   }
 });
 
@@ -3626,6 +3652,7 @@ function showView(name: ViewName) {
     element.classList.toggle("active", key === name);
   }
   currentView = name;
+  positionSyncConfirmation();
 }
 
 function showNextcardAuthWait() {
@@ -4024,7 +4051,7 @@ function handleLockedProviderSelected(_providerId: ProviderId) {
   }, 2500);
 }
 
-const renderHome = createHomeRenderer({
+const renderHomeContent = createHomeRenderer({
   providerList: homeElements.providerList,
   tourTooltip: homeElements.tourTooltip,
   getFirstSyncCompleted: () => firstSyncCompleted,
@@ -4053,6 +4080,22 @@ const renderHome = createHomeRenderer({
     void cancelRewardsSyncAll();
   },
 });
+
+function positionSyncConfirmation() {
+  if (!householdSyncConfirmation || !syncTabPanel) return;
+  placeSyncConfirmation({
+    confirmation: householdSyncConfirmation,
+    provider: displayedConfirmation?.provider ?? null,
+    homeList: homeElements.providerList,
+    fallback: syncTabPanel,
+    detailView: document.getElementById(`${currentView}View`),
+  });
+}
+
+function renderHome(states: Record<ProviderId, ProviderSyncState>) {
+  renderHomeContent(states);
+  positionSyncConfirmation();
+}
 
 function getInitials(name: string | null) {
   if (!name) return "?";

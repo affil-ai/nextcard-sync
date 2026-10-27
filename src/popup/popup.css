@@ -3022,3 +3022,55 @@
 .doordash-provider[aria-busy="true"] .provider-last-sync { color: #342019; }
 
 #doorDashProvider { scroll-margin-block-start: 16px; }
+
+/* Keep the next step beside the program that started the sync. */
+.provider-sync-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.rewards-sync-progress {
+  padding: 10px 12px;
+  border: 1px solid var(--border-color, #e6ded6);
+  border-radius: 10px;
+  background: var(--surface-card, #fff);
+  color: var(--text-primary, #352b25);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.rewards-sync-progress p {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.rewards-sync-progress .rewards-sync-help {
+  margin-top: 6px;
+  color: var(--text-secondary, #6b6b73);
+}
+
+[data-sync-provider] > .household-sync-confirmation {
+  margin: 0;
+  padding: 12px;
+  border-radius: 10px;
+}
+
+.rewards-sync-stop {
+  width: auto;
+  min-width: 44px;
+  min-height: 36px;
+  padding: 0 8px;
+  font-size: 12px;
+}
+
+.household-profile-actions:not([hidden]) {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 20px 12px;
+  font-size: 11px;
+  color: var(--text-secondary, #6b6b73);
+}
+
+.provider-card-row:has(> .rewards-sync-stop) .provider-card { padding-right: 70px; }
