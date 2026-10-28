@@ -32,6 +32,7 @@ import {
 } from "../contracts/loyalty-provider-data";
 import type { StandardizedLoyaltyData, StandardizedIssuerData, QualifyingMetric, Stat } from "../contracts/loyalty-provider-data";
 import { getAuth } from "./auth";
+import { redactLoyaltyIdentifiers } from "./loyalty-privacy";
 import { normalizeRewardsSummaries } from "./rewards-summary";
 import type { HouseholdSyncTarget } from "./household-context";
 
@@ -737,13 +738,13 @@ export async function pushToNextCard(
 
   const standardized = toStandardizedProviderData(provider, validatedProviderData.data);
   const commonFields = extractCommonFields(provider, validatedProviderData.data);
-  const body = maskSensitiveFields({
+  const body = maskSensitiveFields(redactLoyaltyIdentifiers({
     provider,
     loyaltyProgramSlug: PROVIDER_TO_SLUG[provider],
     ...commonFields,
     providerData: standardized,
     rawProviderData: data,
-  });
+  }));
 
   try {
     if (options?.target) {

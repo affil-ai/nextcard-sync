@@ -212,3 +212,25 @@ it("ignores malformed card counts without failing an otherwise successful sync",
   expect(result.ok).toBe(true);
   expect(result.cardSync).toBeUndefined();
 });
+
+
+it("sends only redacted companion codes and nested copies to the database", async () => {
+  const bodies: string[] = [];
+  vi.stubGlobal("fetch", vi.fn(async (_url: string, init?: RequestInit) => {
+    bodies.push(String(init?.body));
+    return { ok: true, status: 200, json: async () => ({}) };
+  }));
+  await expect(pushToNextCard("atmos", {
+    availablePoints: 500, statusPoints: 10, statusLevel: null,
+    memberName: null, memberNumber: "123456789", rewards: [],
+    discounts: [{ name: "Companion fare", code: "FARE-ABC123", details: "Use FARE-ABC123 for 123456789", expiration: null }],
+  })).resolves.toEqual({ ok: true });
+  expect(bodies).toHaveLength(1);
+  expect(bodies[0]).not.toContain("FARE-ABC123");
+  expect(bodies[0]).not.toContain("123456789");
+  expect(JSON.parse(bodies[0])).toMatchObject({
+    memberNumber: "*****6789",
+    rawProviderData: { discounts: [{ code: "*******C123", details: "Use *******C123 for *****6789" }] },
+    providerData: { raw: { discounts: [{ code: "*******C123" }] } }
+  });
+});
