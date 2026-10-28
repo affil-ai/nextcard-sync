@@ -88,6 +88,7 @@ export function createProviderSyncTabOpener(options: {
       if (!eligible(activated)) throw new Error("The account tab changed before sync started. Try again.");
       if (activated.status !== "complete" || activated.discarded || activated.pendingUrl) await waitUntilLoaded(tabId);
       options.stateStore.assertRunActive(providerId, attemptId);
+      await options.stateStore.waitForAccountReady(providerId, attemptId);
       return tabId;
     }
     const tab = await chrome.tabs.create({ url: startUrl, active: true });
@@ -99,6 +100,7 @@ export function createProviderSyncTabOpener(options: {
     options.stateStore.recordRunTab(providerId, attemptId, tab.id, { owned: true });
     if (tab.status !== "complete") await waitUntilLoaded(tab.id);
     options.stateStore.assertRunActive(providerId, attemptId);
+    await options.stateStore.waitForAccountReady(providerId, attemptId);
     return tab.id;
   };
 }

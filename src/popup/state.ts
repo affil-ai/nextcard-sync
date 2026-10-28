@@ -185,11 +185,17 @@ function normalizeProviderState<T>(
       ? value.lastBackendPushAttemptAt
       : null;
 
+  const preparation = value.accountPreparation;
+  const accountPreparation = isRecord(preparation)
+    && typeof preparation.attemptId === "string" && typeof preparation.memberDisplayName === "string"
+    ? { attemptId: preparation.attemptId, memberDisplayName: preparation.memberDisplayName }
+    : null;
   const parsed = "data" in value ? schema.safeParse(value.data) : { success: false as const };
 
   return {
     status,
     data: parsed.success ? parsed.data : null,
+    accountPreparation,
     error,
     lastSyncedAt,
     progressMessage,

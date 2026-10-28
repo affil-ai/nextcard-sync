@@ -97,12 +97,37 @@ describe("runtime household state", () => {
       pendingBackendPush: false,
     });
 
+    stored.set("pending_household_sync_confirmation_v2", { target, data: {} });
     const restartedWorker = createRuntimeStateStore();
     await restartedWorker.setHouseholdScope(scope);
 
     expect(restartedWorker.states.atmos.status).toBe("awaiting_confirmation");
     expect(restartedWorker.states.atmos.error).toBeNull();
     expect(restartedWorker.states.atmos.syncTarget).toEqual(target);
+  });
+
+  it.each(["missing", "another-member", "another-operation"])("unblocks Chase after switching away from an abandoned confirmation (%s)", async reason => {
+    const scope = { accountScopeId: "account-a", memberId: "mom", memberLifecycleVersion: 1, isPrimary: false };
+    const state = createRuntimeStateStore();
+    await state.setHouseholdScope(scope);
+    await state.updateProvider("chase", {
+      status: "awaiting_confirmation",
+      syncTarget: { ...scope, memberDisplayName: "Mom", provider: "chase", contextRevision: "revision-1", operationId: "old-run" },
+      data: { availablePoints: 123 },
+    });
+    // Switching profiles removes or replaces the single pending confirmation.
+    if (reason !== "missing") {
+      const target = state.states.chase.syncTarget;
+      stored.set("pending_household_sync_confirmation_v2", { target: {
+        ...target, memberId: reason === "another-member" ? "dad" : "mom",
+        operationId: reason === "another-operation" ? "new-run" : "old-run",
+      }, data: {} });
+    }
+    await state.setHouseholdScope({ ...scope, memberId: "dad" });
+    await state.setHouseholdScope(scope);
+    expect(state.states.chase.status).toBe("idle");
+    expect(state.states.chase.syncTarget).toBeNull();
+    expect(state.states.chase.data).toBeNull();
   });
 
   it("does not restore provider state after the member lifecycle changes", async () => {

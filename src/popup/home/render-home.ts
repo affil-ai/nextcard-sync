@@ -40,6 +40,8 @@ export function buildHomeSnapshot(
         state?.lastSyncedAt ?? "",
         state?.backendSyncStatus ?? "",
         state?.pendingBackendPush ? "pending" : "",
+        state?.accountPreparation?.attemptId ?? "",
+        state?.accountPreparation?.memberDisplayName ?? "",
       ].join(":");
     })
     .join("|")
@@ -62,6 +64,7 @@ export function createHomeRenderer(options: {
   onSummarySelected: (summary: ExtensionRewardsSummary) => void;
   onSummarySyncRequested: (providerId: ProviderId) => void;
   onSummaryCancelRequested: (providerId: ProviderId) => void;
+  onAccountReady: (providerId: ProviderId, attemptId: string) => Promise<boolean>;
   onSyncAllRequested: (providerIds: ProviderId[]) => void;
   onSyncAllCancelRequested: () => void;
 }) {
@@ -238,7 +241,7 @@ export function createHomeRenderer(options: {
           </div>
         `;
 
-        appendSyncProgress(card, state);
+        appendSyncProgress(card, state, summary.provider, options.onAccountReady);
         if (isSyncing) card.querySelector(".rewards-summary-header")?.appendChild(createStopButton(summary.provider));
         card
           .querySelector<HTMLButtonElement>(".rewards-summary-details")
@@ -330,7 +333,7 @@ export function createHomeRenderer(options: {
         controls.appendChild(card);
         if (isSyncing) controls.appendChild(createStopButton(providerId));
         row.appendChild(controls);
-        appendSyncProgress(row, state);
+        appendSyncProgress(row, state, providerId, options.onAccountReady);
         options.providerList.appendChild(row);
       }
     }
@@ -358,7 +361,12 @@ export function createHomeRenderer(options: {
   };
 }
 
-function appendSyncProgress(container: HTMLElement, state: ProviderSyncState | undefined) {
+function appendSyncProgress(
+  container: HTMLElement,
+  state: ProviderSyncState | undefined,
+  providerId: ProviderId,
+  onAccountReady: (providerId: ProviderId, attemptId: string) => Promise<boolean>,
+) {
   if (!state) return;
   const active = state.status === "extracting" || state.status === "detecting_login" || state.status === "waiting_for_login";
   const detail = active
@@ -383,6 +391,26 @@ function appendSyncProgress(container: HTMLElement, state: ProviderSyncState | u
       ? "Sign in to the correct account in the provider tab. For another household member, sign out of the previous account first."
       : "You can browse other tabs or close this panel. Keep the provider tab open until syncing finishes, then return here to confirm the account.";
     progress.appendChild(help);
+  }
+  if (active && state.accountPreparation) {
+    const preparation = state.accountPreparation;
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "rewards-account-ready rewards-summary-primary";
+    button.textContent = `I'm signed in for ${preparation.memberDisplayName}. Continue sync`;
+    button.addEventListener("click", async () => {
+      button.disabled = true;
+      try {
+        if (!await onAccountReady(providerId, preparation.attemptId)) {
+          message.textContent = "Could not continue this sync. Try again or stop and restart.";
+        }
+      } catch {
+        message.textContent = "Could not continue this sync. Try again or stop and restart.";
+      } finally {
+        button.disabled = false;
+      }
+    });
+    progress.appendChild(button);
   }
   container.appendChild(progress);
 }

@@ -348,7 +348,7 @@ async function switchHouseholdMember(memberId: string) {
   }
   await offerCoordinator.clearAccountState();
   activeHouseholdTargets.clear();
-  await chrome.storage.local.remove(PENDING_HOUSEHOLD_CONFIRMATION_KEY);
+  await cancelPendingHouseholdSync();
   await chrome.storage.local.remove([
     "offerUrlCache",
     "detectedOfferUrlCache",

@@ -119,9 +119,9 @@
             <path d="M.5.5 4 4 7.5.5" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" />
           </svg>
           <select id="householdMemberSelect" name="householdMember" aria-describedby="householdSyncTargetHelp"></select>
-          <span class="visually-hidden" id="householdSyncTargetHelp" aria-live="polite">Choose which household profile owns this login and its synced data.</span>
       </section>
       <div id="householdProfileActions" class="household-profile-actions" hidden>
+        <p id="householdSyncTargetHelp" class="household-login-help" aria-live="polite">Changing this profile does not switch the account signed in at the provider.</p>
         <button type="button" id="refreshHouseholdProfiles" class="tool-link-btn">Refresh profiles</button>
         <span id="householdProfileRefreshStatus" role="status"></span>
       </div>

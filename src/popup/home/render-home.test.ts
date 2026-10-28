@@ -92,6 +92,7 @@ it("lets a saved program cancel its active sync directly from the summary card",
     states.capitalone = { ...states.capitalone, ...syncedState, status: "waiting_for_login" };
     const onSummaryCancelRequested = vi.fn();
     const onSummarySyncRequested = vi.fn();
+    const onAccountReady = vi.fn(async () => true);
     const providerList = document.createElement("div");
     const render = createHomeRenderer({
       providerList, tourTooltip: document.createElement("div"),
@@ -99,12 +100,20 @@ it("lets a saved program cancel its active sync directly from the summary card",
       getRewardsSummaries: () => [{ ...summary, provider: "capitalone", programName: "Capital One Miles" }],
       getSyncAllState: () => ({ status: "idle", providerIds: [], currentProviderId: null, processedCount: 0, failedCount: 0, startedAt: null, updatedAt: null }),
       markFirstSyncCompleted() {}, onProviderSelected() {}, onLockedProviderSelected() {},
-      onSummarySelected() {}, onSummarySyncRequested, onSummaryCancelRequested,
+      onSummarySelected() {}, onSummarySyncRequested, onSummaryCancelRequested, onAccountReady,
       onSyncAllRequested() {}, onSyncAllCancelRequested() {},
     });
     render(states);
     expect(providerList.querySelector(".rewards-summary-sync")).toBeNull();
     expect(providerList.querySelector(".rewards-sync-progress")?.textContent).toContain("Sign in to the correct account");
+    states.capitalone.accountPreparation = { attemptId: "member-run", memberDisplayName: "Mom" };
+    render(states);
+    const continueButton = providerList.querySelector(".rewards-sync-progress button");
+    if (!(continueButton instanceof HTMLButtonElement)) throw new Error("Missing account preparation action");
+    expect(continueButton.textContent).toContain("I'm signed in for Mom");
+    continueButton.click();
+    expect(onAccountReady).toHaveBeenCalledWith("capitalone", "member-run");
+    states.capitalone.accountPreparation = null;
     states.capitalone.status = "extracting";
     states.capitalone.progressMessage = "Reading card 2 of 4 <account>";
     render(states);

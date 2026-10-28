@@ -3047,7 +3047,7 @@
 
 .rewards-sync-progress .rewards-sync-help {
   margin-top: 6px;
-  color: var(--text-secondary, #6b6b73);
+  color: var(--text-primary, #352b25);
 }
 
 [data-sync-provider] > .household-sync-confirmation {
@@ -3066,6 +3066,7 @@
 
 .household-profile-actions:not([hidden]) {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 8px;
   margin: 0 20px 12px;
@@ -3074,3 +3075,26 @@
 }
 
 .provider-card-row:has(> .rewards-sync-stop) .provider-card { padding-right: 70px; }
+
+.household-login-help {
+  flex-basis: 100%;
+  margin: 0;
+  color: var(--text-primary, #352b25);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.household-profile-actions [role="status"] {
+  color: var(--text-primary, #352b25);
+}
+
+.rewards-account-ready {
+  width: 100%;
+  min-height: 36px;
+  margin-top: 10px;
+  padding: 8px 12px;
+  border-radius: 8px;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}

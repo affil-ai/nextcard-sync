@@ -160,3 +160,43 @@ it("recognizes a completed load even when its event happened before the listener
   expect(updates.size).toBe(0);
   expect(removals.size).toBe(0);
 });
+
+it("opens the household account tab but waits for the selected member to be ready before reading", async () => {
+  tabs = [tab(10, providerRegistry.atmos.syncUrl, true)];
+  const { state, open } = setup();
+  state.states.atmos.syncTarget = {
+    accountScopeId: "owner", memberId: "dad", memberDisplayName: "Dad", memberLifecycleVersion: 1,
+    contextRevision: "revision-1", operationId: "operation-1", provider: "atmos",
+  };
+  const { attemptId } = state.beginSyncRun("atmos");
+  let startedReading = false;
+  const pending = open("atmos", attemptId).then(() => { startedReading = true; });
+  await vi.waitFor(() => expect(chrome.tabs.update).toHaveBeenCalled());
+  expect(startedReading).toBe(false);
+  expect(state.states.atmos.accountPreparation?.memberDisplayName).toBe("Dad");
+  expect(state.confirmAccountReady("atmos", "old-attempt")).toBe(false);
+  expect(state.confirmAccountReady("atmos", attemptId)).toBe(true);
+  await pending;
+  expect(startedReading).toBe(true);
+  expect(state.states.atmos.accountPreparation).toBeNull();
+});
+
+it.each(["cancel", "close"])("stops household preparation without starting extraction (%s)", async action => {
+  tabs = [tab(10, providerRegistry.atmos.syncUrl, true)];
+  const { state, open, cancel } = setup();
+  state.states.atmos.syncTarget = {
+    accountScopeId: "owner", memberId: "mom", memberDisplayName: "Mom", memberLifecycleVersion: 1,
+    contextRevision: "revision-1", operationId: "operation-1", provider: "atmos",
+  };
+  const { attemptId } = state.beginSyncRun("atmos");
+  const pending = open("atmos", attemptId);
+  const rejected = expect(pending).rejects.toThrow(action === "cancel" ? "cancelled" : "Account tab closed");
+  await vi.waitFor(() => expect(state.states.atmos.accountPreparation).toBeTruthy());
+  if (action === "cancel") await cancel("atmos");
+  else for (const listener of [...removals]) listener(10, { windowId: 1, isWindowClosing: false });
+  await rejected;
+  expect(state.confirmAccountReady("atmos", attemptId)).toBe(false);
+  expect(state.states.atmos.accountPreparation).toBeNull();
+  expect(removals.size).toBe(0);
+  expect(chrome.tabs.remove).not.toHaveBeenCalled();
+});

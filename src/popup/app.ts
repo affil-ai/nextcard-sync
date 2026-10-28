@@ -135,6 +135,7 @@ const correctionElement = document.getElementById("householdSyncCorrection");
 const householdSyncCorrection = correctionElement instanceof HTMLButtonElement ? correctionElement : null;
 let correctionReviewOperationId: string | null = null;
 let householdConfirmationBusy = false;
+let householdSwitchInFlight = false;
 let displayedConfirmation: HouseholdPopupState["pendingConfirmation"] = null;
 
 type HouseholdPopupState = {
@@ -271,7 +272,7 @@ async function refreshHouseholdUi() {
       option.selected = member.id === response.selectedMemberId;
       householdMemberSelect.appendChild(option);
     }
-    householdMemberSelect.disabled = householdConfirmationBusy;
+    householdMemberSelect.disabled = householdConfirmationBusy || householdSwitchInFlight;
   }
   const help = document.getElementById("householdSyncTargetHelp");
   const selected = response.context.members.find(
@@ -297,9 +298,9 @@ async function refreshHouseholdUi() {
         : "Household rewards sync is temporarily unavailable. Switch to Primary to keep syncing."
       : selected && !selected.isPrimary
         ? response.context.capabilities.memberIssuerCardSync
-          ? "This bank or rewards login and all of its synced data belong to this profile."
+          ? `Changing profiles does not change the account signed in at your bank or airline. Before syncing for ${selected.displayName}, sign out of the previous account and sign in to the correct one.`
           : "Bank sync is not enabled for this profile yet. Airlines and hotels remain available."
-        : "Choose which household profile owns this login and its synced data.";
+        : "Choose who owns the synced data. Changing this profile does not switch the account signed in at the provider.";
   }
   const offersTabButtonElement = document.getElementById("offersTab");
   const offersTabButton = offersTabButtonElement instanceof HTMLButtonElement
@@ -351,7 +352,7 @@ async function refreshHouseholdUi() {
       householdSyncConfirmationText.textContent = reviewingCorrection
         ? `Clear ${!["chase", "amex", "capitalone", "bilt", "discover", "citi"].includes(confirmation.provider) ? "saved sync data and balance history" : "synced rewards, cards, offers, and history"} for ${providerName} from ${confirmation.collisionMemberDisplayName}, then sync this login to ${confirmation.memberDisplayName}? Manually saved rewards are kept. Your account with the provider is unchanged.`
         : confirmation.collisionMemberDisplayName
-        ? `This ${providerName} login was previously synced to ${confirmation.collisionMemberDisplayName}. Choose where to sync it now.`
+        ? `This ${providerName} login was previously synced to ${confirmation.collisionMemberDisplayName}. If this is the wrong login, cancel, sign out at ${providerName}, and sign in to the correct account before syncing again. Only move it if the earlier profile assignment was wrong.`
         : confirmation.manualConversionRequired
           ? `Convert the manual balance and sync ${providerName} for ${confirmation.memberDisplayName}?`
           : `Does this ${providerName} account belong to ${confirmation.memberDisplayName}? Nothing is saved until you confirm.`;
@@ -374,6 +375,8 @@ async function refreshHouseholdUi() {
 
 householdMemberSelect?.addEventListener("change", async () => {
   householdMemberSelect.disabled = true;
+  householdSwitchInFlight = true;
+  if (householdProfileRefreshStatus) householdProfileRefreshStatus.textContent = "Switching profile…";
   try {
     const result = await chrome.runtime.sendMessage({
       type: "SWITCH_HOUSEHOLD_MEMBER",
@@ -382,10 +385,14 @@ householdMemberSelect?.addEventListener("change", async () => {
     if (!result?.ok) throw new Error(result?.error ?? "Could not switch wallets.");
     await refreshHouseholdUi();
     await refreshPopupState();
+    if (householdProfileRefreshStatus) householdProfileRefreshStatus.textContent = "Profile switched. Provider sign-ins are unchanged.";
   } catch (error) {
     console.error("[NextCard Popup] Household wallet switch failed:", error);
+    if (householdProfileRefreshStatus) householdProfileRefreshStatus.textContent = error instanceof Error
+      ? error.message : "Could not switch profiles. Try again.";
     await refreshHouseholdUi();
   } finally {
+    householdSwitchInFlight = false;
     householdMemberSelect.disabled = householdConfirmationBusy;
   }
 });
@@ -3894,6 +3901,7 @@ async function recordOfferConsent() {
 async function startSyncFlow(
   providerId: ProviderId,
 ) {
+  if (householdSwitchInFlight) return false;
   if (!firstSyncCompleted || rewardsGuideQaPreviewActive) {
     tourSyncProvider = providerId;
     tourSyncBaselineLastSyncedAt =
@@ -4008,7 +4016,7 @@ function resetRewardsSyncAllState() {
 }
 
 async function runRewardsSyncAll(providerIds: ProviderId[]) {
-  if (rewardsSyncAllState.status === "running") return;
+  if (householdSwitchInFlight || rewardsSyncAllState.status === "running") return;
 
   const state = await startTravelSync(providerIds);
   if (!state) return;
@@ -4070,6 +4078,11 @@ const renderHomeContent = createHomeRenderer({
   onSummarySyncRequested: (providerId) => {
     resetRewardsSyncAllState();
     void requestSync(providerId);
+  },
+  onAccountReady: async (providerId, attemptId) => {
+    const response: unknown = await chrome.runtime.sendMessage({ type: "CONTINUE_HOUSEHOLD_SYNC", provider: providerId, attemptId });
+    await refreshPopupState();
+    return typeof response === "object" && response !== null && "ok" in response && response.ok === true;
   },
   onSummaryCancelRequested: (providerId) => {
     void chrome.runtime.sendMessage({ type: "CANCEL_SYNC", provider: providerId })

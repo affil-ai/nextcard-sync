@@ -138,6 +138,10 @@ it("reviews the wrong profile's data removal before confirming a household corre
   const correctionFinished = new Promise<{ ok: boolean }>((resolve) => { finishCorrection = resolve; });
   let correctionAttempts = 0;
   let extraMember = false;
+  let selectedMemberId = "vishal";
+  let switchAttempts = 0;
+  let finishSwitch: ((value: { ok: boolean }) => void) | undefined;
+  const switchFinished = new Promise<{ ok: boolean }>(resolve => { finishSwitch = resolve; });
   const sendMessage = vi.fn(async (message: Record<string, unknown>) => {
     switch (message.type) {
       case "GET_AUTH_STATE": return { token: "token", email: "owner@example.com", signedInAt: "test" };
@@ -152,8 +156,14 @@ it("reviews the wrong profile's data removal before confirming a household corre
           members: [{ id: "vishal", displayName: "Vishal", isPrimary: true, lifecycleVersion: 1 },
             { id: "jordan", displayName: "Jordan", isPrimary: false, lifecycleVersion: 1 },
             ...(extraMember ? [{ id: "new-member", displayName: "New member", isPrimary: false, lifecycleVersion: 1 }] : [])],
-        }, selectedMemberId: "vishal", pendingConfirmation: pending,
+        }, selectedMemberId, pendingConfirmation: pending,
       };
+      case "SWITCH_HOUSEHOLD_MEMBER":
+        switchAttempts++;
+        if (switchAttempts === 1) return { ok: false, error: "Connection lost. Try switching again." };
+        await switchFinished;
+        selectedMemberId = String(message.memberId);
+        return { ok: true };
       case "CONFIRM_HOUSEHOLD_SYNC":
         correctionAttempts++;
         return correctionAttempts === 1 ? { ok: false, error: "Temporary network error" } : correctionFinished;
@@ -200,6 +210,24 @@ it("reviews the wrong profile's data removal before confirming a household corre
   pending = null;
   finishCorrection?.({ ok: true });
   await vi.waitFor(() => expect(document.getElementById("householdSyncConfirmation")?.hidden).toBe(true));
+  memberSelect.value = "jordan";
+  memberSelect.dispatchEvent(new Event("change"));
+  await vi.waitFor(() => expect(document.getElementById("householdProfileRefreshStatus")?.textContent).toContain("Connection lost"));
+  expect(memberSelect.value).toBe("vishal");
+  expect(memberSelect.disabled).toBe(false);
+  memberSelect.value = "jordan";
+  memberSelect.dispatchEvent(new Event("change"));
+  await vi.waitFor(() => expect(switchAttempts).toBe(2));
+  expect(memberSelect.disabled).toBe(true);
+  document.querySelector<HTMLButtonElement>('[data-sync-provider="chase"] .provider-card')?.click();
+  expect(sendMessage.mock.calls.some(([message]) => message.type === "REQUEST_SYNC")).toBe(false);
+  finishSwitch?.({ ok: true });
+  await vi.waitFor(() => expect(memberSelect.disabled).toBe(false));
+  expect(memberSelect.value).toBe("jordan");
+  expect(document.getElementById("householdProfileRefreshStatus")?.textContent).toContain("Provider sign-ins are unchanged");
+  const loginHelp = document.getElementById("householdSyncTargetHelp");
+  expect(loginHelp?.textContent).toContain("Before syncing for Jordan");
+  expect(loginHelp?.classList.contains("visually-hidden")).toBe(false);
 });
 
 it.each([true, false])("guides BofA through review and rewards handoff, activate=%s", async (activate) => {

@@ -4,7 +4,7 @@ import type {
   ProviderId,
   ProviderSyncState,
 } from "../../lib/types";
-import { getHouseholdProviderStorageKey } from "../../lib/household-context";
+import { getHouseholdProviderStorageKey, householdOperationScopesMatch } from "../../lib/household-context";
 import type { HouseholdSyncTarget } from "../../lib/household-context";
 
 export interface RuntimeState extends ProviderSyncState {
@@ -27,6 +27,7 @@ function defaultState(): RuntimeState {
     lastBackendPushAttemptAt: null,
     tabId: null,
     syncTarget: null,
+    accountPreparation: null,
   };
 }
 
@@ -61,6 +62,7 @@ export function createRuntimeStateStore() {
   };
 
   const runRegistry = createSyncRunRegistry();
+  const accountReadyResolvers = new Map<string, () => void>();
   const runCancelListeners = new Map<string, Set<() => void>>();
 
   function getProviderStorageKey(providerId: ProviderId) {
@@ -104,6 +106,10 @@ export function createRuntimeStateStore() {
 
   async function hydratePersistedState() {
     resetAllStates();
+    const pending = await chrome.storage.local.get("pending_household_sync_confirmation_v2");
+    const pendingValue: unknown = pending.pending_household_sync_confirmation_v2;
+    const pendingTargetValue = pendingValue && typeof pendingValue === "object" && "target" in pendingValue && "data" in pendingValue
+      ? pendingValue.target : null;
     await Promise.all(
       (Object.keys(states) as ProviderId[]).map(async (providerId) => {
         const storageKey = getProviderStorageKey(providerId);
@@ -128,6 +134,18 @@ export function createRuntimeStateStore() {
 
         if (!namespacedState && legacyState && householdScope?.isPrimary) {
           await chrome.storage.local.set({ [storageKey]: legacyState });
+        }
+
+        // A profile switch discards its unconfirmed payload. Do not restore a
+        // disabled "ready to confirm" card when there is nothing left to confirm.
+        const pendingTarget = getPersistedSyncTarget(pendingTargetValue, providerId);
+        if (savedState.status === "awaiting_confirmation" && (
+          !syncTarget || !pendingTarget
+          || pendingTarget.operationId !== syncTarget.operationId
+          || !householdOperationScopesMatch(syncTarget, pendingTarget)
+        )) {
+          await chrome.storage.local.set({ [storageKey]: defaultState() });
+          return;
         }
 
         states[providerId].lastSyncedAt = savedState.lastSyncedAt;
@@ -229,6 +247,7 @@ export function createRuntimeStateStore() {
       backendSyncError,
       pendingBackendPush,
       lastBackendPushAttemptAt,
+      accountPreparation,
     } = states[providerId];
     return {
       status,
@@ -240,6 +259,7 @@ export function createRuntimeStateStore() {
       backendSyncError,
       pendingBackendPush,
       lastBackendPushAttemptAt,
+      accountPreparation,
     };
   }
 
@@ -279,6 +299,7 @@ export function createRuntimeStateStore() {
   function finishSyncRun(providerId: ProviderId, attemptId: string) {
     if (runRegistry.getRun(providerId)?.attemptId !== attemptId) return;
     states[providerId].tabId = null;
+    states[providerId].accountPreparation = null;
     states[providerId].progressMessage = null;
     runRegistry.clearRun(providerId, attemptId);
   }
@@ -347,6 +368,47 @@ export function createRuntimeStateStore() {
     }
   }
 
+  async function waitForAccountReady(providerId: ProviderId, attemptId: string) {
+    assertRunActive(providerId, attemptId);
+    const target = states[providerId].syncTarget;
+    if (!target) return;
+    const key = getRunKey(providerId, attemptId);
+    const cancelled = createRunCancelSignal(providerId, attemptId);
+    let rejectClosed: (error: Error) => void = () => {};
+    const closed = new Promise<never>((_resolve, reject) => { rejectClosed = reject; });
+    const tabId = states[providerId].tabId;
+    const onRemoved = (removedTabId: number) => {
+      if (removedTabId === tabId) rejectClosed(new Error("Account tab closed. Start sync again to choose the correct login."));
+    };
+    chrome.tabs.onRemoved.addListener(onRemoved);
+    if (tabId !== null) void chrome.tabs.get(tabId).catch(() => onRemoved(tabId));
+    const ready = new Promise<void>(resolve => { accountReadyResolvers.set(key, resolve); });
+    void updateProvider(providerId, {
+      status: "waiting_for_login",
+      progressMessage: `Sign in to the account you want to sync for ${target.memberDisplayName}, then continue here.`,
+      accountPreparation: { attemptId, memberDisplayName: target.memberDisplayName },
+    });
+    try {
+      await Promise.race([ready, cancelled.promise, closed]);
+      assertRunActive(providerId, attemptId);
+    } finally {
+      cancelled.cancel();
+      chrome.tabs.onRemoved.removeListener(onRemoved);
+      accountReadyResolvers.delete(key);
+      if (states[providerId].accountPreparation?.attemptId === attemptId) {
+        states[providerId].accountPreparation = null;
+      }
+    }
+  }
+
+  function confirmAccountReady(providerId: ProviderId, attemptId: string) {
+    const resolve = accountReadyResolvers.get(getRunKey(providerId, attemptId));
+    if (!isRunActive(providerId, attemptId) || !resolve) return false;
+    resolve();
+    accountReadyResolvers.delete(getRunKey(providerId, attemptId));
+    return true;
+  }
+
   function getRun(providerId: ProviderId) {
     return runRegistry.getRun(providerId);
   }
@@ -396,6 +458,8 @@ export function createRuntimeStateStore() {
     wasRunCancelled,
     recordRunTab,
     createRunCancelSignal,
+    waitForAccountReady,
+    confirmAccountReady,
     notifyRunCancelled,
     getRun,
     markRunCancelled,
