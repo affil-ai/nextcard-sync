@@ -298,9 +298,9 @@ async function refreshHouseholdUi() {
         : "Household rewards sync is temporarily unavailable. Switch to Primary to keep syncing."
       : selected && !selected.isPrimary
         ? response.context.capabilities.memberIssuerCardSync
-          ? `Changing profiles does not change the account signed in at your bank or airline. Before syncing for ${selected.displayName}, sign out of the previous account and sign in to the correct one.`
+          ? "Changing profiles doesn't switch the account open in your browser."
           : "Bank sync is not enabled for this profile yet. Airlines and hotels remain available."
-        : "Choose who owns the synced data. Changing this profile does not switch the account signed in at the provider.";
+        : "Changing profiles doesn't switch the account open in your browser.";
   }
   const offersTabButtonElement = document.getElementById("offersTab");
   const offersTabButton = offersTabButtonElement instanceof HTMLButtonElement

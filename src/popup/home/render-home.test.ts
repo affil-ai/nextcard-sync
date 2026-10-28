@@ -105,12 +105,15 @@ it("lets a saved program cancel its active sync directly from the summary card",
     });
     render(states);
     expect(providerList.querySelector(".rewards-summary-sync")).toBeNull();
-    expect(providerList.querySelector(".rewards-sync-progress")?.textContent).toContain("Sign in to the correct account");
+    expect(providerList.querySelector(".rewards-sync-progress")?.textContent).toContain("Finish sign-in and verification in the Capital One tab");
     states.capitalone.accountPreparation = { attemptId: "member-run", memberDisplayName: "Mom" };
     render(states);
     const continueButton = providerList.querySelector(".rewards-sync-progress button");
     if (!(continueButton instanceof HTMLButtonElement)) throw new Error("Missing account preparation action");
-    expect(continueButton.textContent).toContain("I'm signed in for Mom");
+    expect(continueButton.textContent).toBe("Continue sync");
+    expect(providerList.querySelector(".rewards-sync-title")?.textContent).toBe("Sync for Mom");
+    expect(providerList.querySelector(".rewards-sync-help")?.textContent).toBe("Check the account in the Capital One tab. Switch accounts if needed.");
+    expect(providerList.querySelector(".rewards-summary-card")?.textContent).not.toContain("Updating your saved balance");
     continueButton.click();
     expect(onAccountReady).toHaveBeenCalledWith("capitalone", "member-run");
     states.capitalone.accountPreparation = null;
@@ -122,7 +125,7 @@ it("lets a saved program cancel its active sync directly from the summary card",
     states.capitalone.progressMessage = "Reading card 3 of 4";
     render(states);
     expect(providerList.querySelector(".rewards-sync-progress")?.textContent).toContain("Reading card 3 of 4");
-    expect(providerList.querySelector(".rewards-sync-progress")?.textContent).toContain("Keep the provider tab open");
+    expect(providerList.querySelector(".rewards-sync-progress")?.textContent).toContain("Keep the Capital One tab open");
     expect(providerList.querySelectorAll(".rewards-sync-stop")).toHaveLength(1);
     const stop = providerList.querySelector(".rewards-summary-header .rewards-sync-stop");
     if (!(stop instanceof HTMLButtonElement)) throw new Error("Missing stop icon");

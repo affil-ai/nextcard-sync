@@ -226,7 +226,7 @@ it("reviews the wrong profile's data removal before confirming a household corre
   expect(memberSelect.value).toBe("jordan");
   expect(document.getElementById("householdProfileRefreshStatus")?.textContent).toContain("Provider sign-ins are unchanged");
   const loginHelp = document.getElementById("householdSyncTargetHelp");
-  expect(loginHelp?.textContent).toContain("Before syncing for Jordan");
+  expect(loginHelp?.textContent).toContain("Changing profiles doesn't switch the account open in your browser.");
   expect(loginHelp?.classList.contains("visually-hidden")).toBe(false);
 });
 

@@ -385,7 +385,7 @@ export function createRuntimeStateStore() {
     const ready = new Promise<void>(resolve => { accountReadyResolvers.set(key, resolve); });
     void updateProvider(providerId, {
       status: "waiting_for_login",
-      progressMessage: `Sign in to the account you want to sync for ${target.memberDisplayName}, then continue here.`,
+      progressMessage: "Waiting for account check",
       accountPreparation: { attemptId, memberDisplayName: target.memberDisplayName },
     });
     try {

@@ -197,6 +197,7 @@ export function createHomeRenderer(options: {
           state?.status === "extracting"
           || state?.status === "detecting_login"
           || state?.status === "waiting_for_login";
+        card.classList.toggle("is-syncing", isSyncing);
         const isSyncAllRunning = syncAllState.status === "running";
         const hasError =
           state?.pendingBackendPush
@@ -227,13 +228,13 @@ export function createHomeRenderer(options: {
               <strong>${escapeHtml(summary.programName)}</strong>
               ${providerLabel ? `<span>${escapeHtml(providerLabel)}</span>` : ""}
             </div>
-            <div class="provider-status-dot ${dotClass}" aria-label="${isSyncing ? "Syncing" : awaitingConfirmation ? "Ready to confirm" : hasError ? "Needs attention" : "Synced"}"></div>
+            ${!isSyncing ? `<div class="provider-status-dot ${dotClass}" aria-label="${awaitingConfirmation ? "Ready to confirm" : hasError ? "Needs attention" : "Synced"}"></div>` : ""}
           </div>
           <div class="rewards-summary-body">
             ${balance ? `<strong class="rewards-summary-balance" aria-label="Balance ${escapeHtml(balance)}">${escapeHtml(balance)}</strong>` : ""}
             ${summary.statusLevel ? `<span class="rewards-summary-status">${escapeHtml(summary.statusLevel)}</span>` : ""}
             ${meta ? `<div class="rewards-summary-meta">${escapeHtml(meta)}</div>` : ""}
-            <div class="provider-last-sync">${awaitingConfirmation ? "Not saved yet · Confirm the account below" : isSyncing ? "Updating your saved balance…" : `Synced ${lastSync ?? "recently"}`}</div>
+            <div class="provider-last-sync">${awaitingConfirmation ? "Not saved yet · Confirm the account below" : `Synced ${lastSync ?? "recently"}`}</div>
           </div>
           <div class="rewards-summary-actions">
             ${!isSyncing && !awaitingConfirmation ? `<button class="rewards-summary-primary rewards-summary-sync" type="button"${isSyncAllRunning ? " disabled" : ""}>${hasError ? "Try again" : "Sync again"}</button>` : ""}
@@ -242,6 +243,8 @@ export function createHomeRenderer(options: {
         `;
 
         appendSyncProgress(card, state, summary.provider, options.onAccountReady);
+        const actions = card.querySelector(".rewards-summary-actions");
+        if (actions) card.appendChild(actions);
         if (isSyncing) card.querySelector(".rewards-summary-header")?.appendChild(createStopButton(summary.provider));
         card
           .querySelector<HTMLButtonElement>(".rewards-summary-details")
@@ -382,14 +385,20 @@ function appendSyncProgress(
   progress.setAttribute("role", "status");
   progress.setAttribute("aria-live", "polite");
   const message = document.createElement("p");
-  message.textContent = detail;
+  message.className = "rewards-sync-title";
+  message.textContent = state.accountPreparation
+    ? `Sync for ${state.accountPreparation.memberDisplayName}`
+    : detail;
   progress.appendChild(message);
   if (active) {
     const help = document.createElement("p");
     help.className = "rewards-sync-help";
-    help.textContent = state.status === "waiting_for_login"
-      ? "Sign in to the correct account in the provider tab. For another household member, sign out of the previous account first."
-      : "You can browse other tabs or close this panel. Keep the provider tab open until syncing finishes, then return here to confirm the account.";
+    const providerName = providerRegistry[providerId].name;
+    help.textContent = state.accountPreparation
+      ? `Check the account in the ${providerName} tab. Switch accounts if needed.`
+      : state.status === "waiting_for_login"
+        ? `Finish sign-in and verification in the ${providerName} tab.`
+        : `Keep the ${providerName} tab open until sync finishes.`;
     progress.appendChild(help);
   }
   if (active && state.accountPreparation) {
@@ -397,7 +406,7 @@ function appendSyncProgress(
     const button = document.createElement("button");
     button.type = "button";
     button.className = "rewards-account-ready rewards-summary-primary";
-    button.textContent = `I'm signed in for ${preparation.memberDisplayName}. Continue sync`;
+    button.textContent = "Continue sync";
     button.addEventListener("click", async () => {
       button.disabled = true;
       try {
