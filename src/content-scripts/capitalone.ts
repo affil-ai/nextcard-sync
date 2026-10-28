@@ -404,7 +404,10 @@ monitor.start();
 const initialState = monitor.getState();
 chrome.runtime.sendMessage({ type: "GET_PROVIDER_STATUS", provider: "capitalone" }, (r) => {
   const s = r?.status;
-  if ((s === "extracting" || s === "detecting_login" || s === "waiting_for_login") && initialState === "logged_in") {
+  if (r?.accountPreparation) {
+    syncActive = true;
+    showOverlay("account_check", "capitalone");
+  } else if ((s === "extracting" || s === "detecting_login" || s === "waiting_for_login") && initialState === "logged_in") {
     syncActive = true;
     showOverlay("extracting", "capitalone");
     if (typeof r?.progressMessage === "string") updateOverlayProgress(r.progressMessage);
