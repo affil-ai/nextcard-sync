@@ -1,10 +1,10 @@
+import type { ProviderSyncTabOpener } from "../core/tab-utils";
 import type {
   ChaseBenefit,
   ChaseURData,
   ProviderId,
   PushToNextCardResult,
 } from "../../lib/types";
-import type { ProviderDefinition } from "../../providers/provider-registry";
 import type { createRuntimeStateStore } from "../core/runtime-state";
 import {
   waitForTabLoad,
@@ -33,7 +33,7 @@ type ChasePoints = {
 };
 
 interface ChaseSyncDeps {
-  providerRegistry: Record<ProviderId, ProviderDefinition>;
+  openSyncTab: ProviderSyncTabOpener;
   stateStore: RuntimeStateStore;
   extensionNavigatingTabs: Set<number>;
   isProviderAttemptMessage: (
@@ -890,7 +890,6 @@ export function createChaseSync(options: ChaseSyncDeps) {
 
   return async function startChaseSync() {
     const attemptId = options.stateStore.beginSyncRun("chase").attemptId;
-    const definition = options.providerRegistry.chase;
     options.stateStore.updateProvider("chase", {
       status: "detecting_login",
       error: null,
@@ -898,15 +897,8 @@ export function createChaseSync(options: ChaseSyncDeps) {
     });
 
     try {
-      const tab = await chrome.tabs.create({ url: definition.syncUrl, active: true });
-      const tabId = tab.id;
-      if (!tabId) {
-        throw new Error("Could not create tab");
-      }
-
+      const tabId = await options.openSyncTab("chase", attemptId);
       progressTabId = tabId;
-      options.stateStore.recordRunTab("chase", attemptId, tabId, { owned: true });
-      await waitForTabLoad(tabId, 30000);
 
       const alreadyLoaded = await chaseDashboardHasContent(tabId);
       if (!alreadyLoaded) {

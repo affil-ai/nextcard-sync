@@ -22,6 +22,107 @@ export function isUrlAllowedForProvider(url: string, definition: ProviderDefinit
   return false;
 }
 
+function sameSyncPage(value: string, target: string) {
+  try {
+    const page = new URL(value);
+    const expected = new URL(target);
+    for (const url of [page, expected]) {
+      for (const key of [...url.searchParams.keys()]) {
+        if (key === "lid" || key.startsWith("utm_")) url.searchParams.delete(key);
+      }
+    }
+    return page.origin === expected.origin
+      && page.pathname.replace(/\/+$/, "") === expected.pathname.replace(/\/+$/, "")
+      && page.search === expected.search
+      && page.hash === expected.hash;
+  } catch {
+    return false;
+  }
+}
+
+/** Borrow only known sync entry pages. Same-provider booking/payment pages are not candidates. */
+export function createProviderSyncTabOpener(options: {
+  providerRegistry: Record<ProviderId, ProviderDefinition>;
+  stateStore: RuntimeStateStore;
+  getReservedTabIds: () => Promise<readonly number[]>;
+}) {
+  function isReserved(tabId: number, reserved: readonly number[]) {
+    return reserved.includes(tabId) || Object.values(options.providerRegistry).some(definition => {
+      const run = options.stateStore.getRun(definition.id);
+      return run && !run.cancelled && run.observedTabIds.has(tabId);
+    });
+  }
+  return async (providerId: ProviderId, attemptId: string) => {
+    const waitUntilLoaded = async (tabId: number) => {
+      const cancellation = options.stateStore.createRunCancelSignal(providerId, attemptId);
+      const controller = new AbortController();
+      void cancellation.promise.catch(() => controller.abort());
+      try {
+        await waitForTabLoad(tabId, 30000, controller.signal);
+      } finally {
+        cancellation.cancel();
+      }
+    };
+    const definition = options.providerRegistry[providerId];
+    const startUrl = (definition.syncStrategy === "hyatt" || definition.syncStrategy === "bilt")
+      ? definition.accountUrl ?? definition.syncUrl
+      : definition.syncUrl;
+    const accountUrl = definition.accountUrl ?? definition.syncUrl;
+    const eligible = (tab: chrome.tabs.Tab) => tab.id !== undefined && !!tab.url
+      && [definition.syncUrl, accountUrl].some(url => sameSyncPage(tab.url ?? "", url))
+      && (!tab.pendingUrl || [definition.syncUrl, accountUrl].some(url => sameSyncPage(tab.pendingUrl ?? "", url)));
+    options.stateStore.assertRunActive(providerId, attemptId);
+    const [tabs, reserved] = await Promise.all([
+      chrome.tabs.query({ currentWindow: true }), options.getReservedTabIds()
+    ]);
+    options.stateStore.assertRunActive(providerId, attemptId);
+    const candidates = tabs.filter(tab => eligible(tab) && tab.id !== undefined && !isReserved(tab.id, reserved));
+    const selected = candidates.find(tab => tab.active) ?? (candidates.length === 1 ? candidates[0] : undefined);
+    const current = selected?.id !== undefined ? await chrome.tabs.get(selected.id).catch(() => null) : null;
+    options.stateStore.assertRunActive(providerId, attemptId);
+    if (current?.id !== undefined && eligible(current) && !isReserved(current.id, reserved)) {
+      const tabId = current.id;
+      options.stateStore.recordRunTab(providerId, attemptId, tabId, { owned: false });
+      const activated = await chrome.tabs.update(tabId, { active: true });
+      options.stateStore.assertRunActive(providerId, attemptId);
+      if (!eligible(activated)) throw new Error("The account tab changed before sync started. Try again.");
+      if (activated.status !== "complete" || activated.discarded || activated.pendingUrl) await waitUntilLoaded(tabId);
+      options.stateStore.assertRunActive(providerId, attemptId);
+      return tabId;
+    }
+    const tab = await chrome.tabs.create({ url: startUrl, active: true });
+    if (tab.id === undefined) throw new Error("Could not create sync tab");
+    if (!options.stateStore.isRunActive(providerId, attemptId)) {
+      await chrome.tabs.remove(tab.id).catch(() => {});
+      options.stateStore.assertRunActive(providerId, attemptId);
+    }
+    options.stateStore.recordRunTab(providerId, attemptId, tab.id, { owned: true });
+    if (tab.status !== "complete") await waitUntilLoaded(tab.id);
+    options.stateStore.assertRunActive(providerId, attemptId);
+    return tab.id;
+  };
+}
+
+export type ProviderSyncTabOpener = ReturnType<typeof createProviderSyncTabOpener>;
+
+/** Cancellation owns the run, not every tab the run happened to read. */
+export function createSyncRunCanceller(stateStore: RuntimeStateStore) {
+  return async (providerId: ProviderId, error: string | null = null) => {
+    const run = stateStore.markRunCancelled(providerId);
+    stateStore.updateProvider(providerId, { status: "cancelled", error });
+    stateStore.setTabId(providerId, null);
+    if (!run) return;
+    stateStore.notifyRunCancelled(providerId, run.attemptId);
+    for (const tabId of run.observedTabIds) {
+      void sendToTab(tabId, { type: "ABORT_SYNC_RUN", provider: providerId, attemptId: run.attemptId }).catch(() => {});
+    }
+    if (run.ownedTabId !== null) {
+      await chrome.tabs.remove(run.ownedTabId).catch(() => {});
+    }
+    stateStore.finishSyncRun(providerId, run.attemptId);
+  };
+}
+
 export function createExtensionNavigationState() {
   return new Set<number>();
 }
@@ -55,28 +156,39 @@ export function registerNavigationGuard(options: {
   });
 }
 
-export function waitForTabLoad(tabId: number, timeoutMs = 30000): Promise<void> {
+export function waitForTabLoad(tabId: number, timeoutMs = 30000, signal?: AbortSignal): Promise<void> {
   return new Promise((resolve, reject) => {
     const timeout = setTimeout(() => {
       cleanup();
       reject(new Error("Timed out waiting for tab to load"));
     }, timeoutMs);
 
+    let completed = false;
     function onUpdated(updatedTabId: number, changeInfo: chrome.tabs.TabChangeInfo) {
-      if (updatedTabId === tabId && changeInfo.status === "complete") {
+      if (!completed && updatedTabId === tabId && changeInfo.status === "complete") {
+        completed = true;
         cleanup();
         setTimeout(resolve, 500);
       }
     }
 
     function onRemoved(removedTabId: number) {
-      if (removedTabId === tabId) {
+      if (!completed && removedTabId === tabId) {
+        completed = true;
         cleanup();
         reject(new Error("Tab was closed"));
       }
     }
 
+    function onAbort() {
+      if (completed) return;
+      completed = true;
+      cleanup();
+      reject(new Error("Sync cancelled while loading the tab"));
+    }
+
     function cleanup() {
+      signal?.removeEventListener("abort", onAbort);
       clearTimeout(timeout);
       chrome.tabs.onUpdated.removeListener(onUpdated);
       chrome.tabs.onRemoved.removeListener(onRemoved);
@@ -84,6 +196,11 @@ export function waitForTabLoad(tabId: number, timeoutMs = 30000): Promise<void> 
 
     chrome.tabs.onUpdated.addListener(onUpdated);
     chrome.tabs.onRemoved.addListener(onRemoved);
+    signal?.addEventListener("abort", onAbort, { once: true });
+    if (signal?.aborted) onAbort();
+    void chrome.tabs.get(tabId).then(tab => {
+      if (tab.status === "complete" && !tab.discarded && !tab.pendingUrl) onUpdated(tabId, { status: "complete" });
+    }).catch(() => onRemoved(tabId));
   });
 }
 

@@ -1,8 +1,8 @@
+import type { ProviderSyncTabOpener } from "../core/tab-utils";
 import type { AmexLoyaltyData, PushToNextCardResult } from "../../lib/types";
 import { extractLastFourDigits } from "../../lib/card-digits";
-import type { ProviderDefinition } from "../../providers/provider-registry";
 import type { createRuntimeStateStore } from "../core/runtime-state";
-import { sendRunMessageToTab, triggerExtraction, waitForTabLoad } from "../core/tab-utils";
+import { sendRunMessageToTab, triggerExtraction } from "../core/tab-utils";
 
 type RuntimeStateStore = ReturnType<typeof createRuntimeStateStore>;
 
@@ -21,7 +21,7 @@ type AmexCardData = {
 };
 
 interface AmexSyncDeps {
-  providerRegistry: Record<"amex", ProviderDefinition> & Record<string, ProviderDefinition>;
+  openSyncTab: ProviderSyncTabOpener;
   stateStore: RuntimeStateStore;
   waitForGenericLoginAndExtract: (
     providerId: "amex",
@@ -89,18 +89,13 @@ export function createAmexSync(options: AmexSyncDeps) {
 
   return async function startAmexSync() {
     const attemptId = options.stateStore.beginSyncRun("amex").attemptId;
-    const definition = options.providerRegistry.amex;
     options.stateStore.updateProvider("amex", {
       status: "detecting_login",
       error: null,
     });
 
     try {
-      const tab = await chrome.tabs.create({ url: definition.syncUrl, active: true });
-      const tabId = tab.id;
-      if (!tabId) throw new Error("Could not create tab");
-      options.stateStore.recordRunTab("amex", attemptId, tabId, { owned: true });
-      await waitForTabLoad(tabId, 30000);
+      const tabId = await options.openSyncTab("amex", attemptId);
 
       await new Promise((resolve) => setTimeout(resolve, 2000));
       const currentTab = await chrome.tabs.get(tabId);

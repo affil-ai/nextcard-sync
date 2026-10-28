@@ -305,8 +305,8 @@ export function createRuntimeStateStore() {
     tabId: number,
     options: { owned: boolean },
   ) {
-    runRegistry.recordObservedTab(providerId, attemptId, tabId, options);
-    states[providerId].tabId = tabId;
+    const run = runRegistry.recordObservedTab(providerId, attemptId, tabId, options);
+    if (run) states[providerId].tabId = tabId;
   }
 
   function createRunCancelSignal(providerId: ProviderId, attemptId: string) {
