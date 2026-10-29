@@ -1,3 +1,4 @@
+import { createProviderSyncTabOpener } from "../core/tab-utils";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { providerRegistry } from "../../providers/provider-registry";
 import { createRuntimeStateStore } from "../core/runtime-state";
@@ -38,6 +39,8 @@ beforeEach(() => {
     },
     tabs: {
       create: vi.fn(async () => ({ id: 42 })),
+      query: vi.fn(async () => []),
+      update: vi.fn(async () => ({ ...tab, status: "complete", url: "https://www.bilt.com/wallet" })),
       get: vi.fn(async () => ({ id: 42, status: "complete", url: "https://www.bilt.com/wallet" })),
       onUpdated: {
         addListener: (listener: TabListener) => tabUpdates.add(listener),
@@ -70,6 +73,7 @@ async function startSync() {
   const stateStore = createRuntimeStateStore();
   const pushToNextCard = vi.fn(async () => ({ ok: true }));
   const options = {
+    openSyncTab: createProviderSyncTabOpener({ providerRegistry, stateStore, getReservedTabIds: async () => [] }),
     providerRegistry,
     stateStore,
     extensionNavigatingTabs: new Set<number>(),
@@ -93,6 +97,14 @@ async function startSync() {
 }
 
 describe("Bilt read-error handling", () => {
+  it("reuses an already loaded Bilt wallet without creating or taking ownership of a user tab", async () => {
+    vi.mocked(chrome.tabs.query).mockResolvedValue([{ ...tab, status: "complete", url: "https://www.bilt.com/wallet" }]);
+    const { sync } = await startSync();
+    await sync;
+    expect(chrome.tabs.create).not.toHaveBeenCalled();
+    expect(chrome.tabs.update).toHaveBeenCalledWith(42, { active: true });
+  });
+
   it("surfaces an initial extraction error without reentering the login wait or saving data", async () => {
     const { stateStore, pushToNextCard, sync } = await startSync();
     await sync;

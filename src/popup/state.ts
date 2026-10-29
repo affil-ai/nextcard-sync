@@ -30,10 +30,17 @@ import {
 import { orderedProviderIds } from "../providers/provider-groups";
 import type { HouseholdExtensionContext, HouseholdOperationScope } from "../lib/household-context";
 
+let displayedRewardsMemberId: string | null = null;
+
+export function getDisplayedRewardsMemberId() {
+  return displayedRewardsMemberId;
+}
+
 let displayedHouseholdScope: HouseholdOperationScope | null | undefined;
 
 export function setDisplayedHouseholdScope(context: HouseholdExtensionContext | null, memberId: string | null) {
   const member = context?.members.find((candidate) => candidate.id === memberId);
+  displayedRewardsMemberId = member && !member.isPrimary ? member.id : null;
   displayedHouseholdScope = context && member ? {
     accountScopeId: context.accountScopeId,
     memberId: member.id,
@@ -178,11 +185,17 @@ function normalizeProviderState<T>(
       ? value.lastBackendPushAttemptAt
       : null;
 
+  const preparation = value.accountPreparation;
+  const accountPreparation = isRecord(preparation)
+    && typeof preparation.attemptId === "string" && typeof preparation.memberDisplayName === "string"
+    ? { attemptId: preparation.attemptId, memberDisplayName: preparation.memberDisplayName }
+    : null;
   const parsed = "data" in value ? schema.safeParse(value.data) : { success: false as const };
 
   return {
     status,
     data: parsed.success ? parsed.data : null,
+    accountPreparation,
     error,
     lastSyncedAt,
     progressMessage,

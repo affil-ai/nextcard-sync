@@ -12,7 +12,7 @@
  *   hideOverlay();                      // done — auto-fades after brief "Done"
  */
 
-type OverlayStatus = "waiting_for_login" | "mfa_challenge" | "extracting" | "done" | "cancelled" | "error";
+type OverlayStatus = "account_check" | "waiting_for_login" | "mfa_challenge" | "extracting" | "done" | "cancelled" | "error";
 
 const HOST_ID = "nextcard-sync-overlay";
 const ICON_URL = chrome.runtime.getURL("src/icons/icon128.png");
@@ -27,11 +27,19 @@ let lastProgressMessage: string | null = null;
 let isMinimized = false;
 
 function isLoginStatus(status: OverlayStatus): boolean {
-  return status === "waiting_for_login" || status === "mfa_challenge";
+  return status === "account_check" || status === "waiting_for_login" || status === "mfa_challenge";
 }
 
 function getStatusConfig(status: OverlayStatus) {
   switch (status) {
+    case "account_check":
+      return {
+        heading: "Check the signed-in account",
+        steps: ["Switch accounts if needed, then select Continue sync in the sidebar."],
+        dotClass: "dot-waiting",
+        showShield: false,
+        showProgressMessage: false,
+      };
     case "waiting_for_login":
       return {
         heading: "nextcard is waiting for you to sign in",
@@ -500,7 +508,7 @@ function buildBanner(status: OverlayStatus): string {
     ? `
       <div class="nc-compact-status">
         <span class="nc-dot ${cfg.dotClass}"></span>
-        <span>${status === "mfa_challenge" ? "Security check waiting" : "Sign-in sync waiting"}</span>
+        <span>${status === "account_check" ? "Account check paused" : status === "mfa_challenge" ? "Security check waiting" : "Sign-in sync waiting"}</span>
       </div>
       <button class="nc-minimize-button" type="button" aria-expanded="true">Minimize</button>
     `
@@ -613,7 +621,9 @@ function startPollIfNeeded() {
       if (chrome.runtime.lastError) return;
       const s = r?.status;
       // Keep long-running multi-page flows visually in sync as the worker advances.
-      if (s === "extracting" && currentStatus !== "extracting") {
+      if (r?.accountPreparation) {
+        updateOverlay("account_check");
+      } else if (s === "extracting" && currentStatus !== "extracting") {
         updateOverlay("extracting");
       } else if (s === "waiting_for_login" && currentStatus !== "waiting_for_login" && currentStatus !== "mfa_challenge") {
         updateOverlay("waiting_for_login");

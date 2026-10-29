@@ -1,3 +1,4 @@
+import { createProviderSyncTabOpener, createSyncRunCanceller } from "./core/tab-utils";
 import { registerBofaOffers } from "./bofa-offers";
 import { registerDoorDashTest } from "./doordash";
 registerDoorDashTest();
@@ -87,6 +88,7 @@ const PENDING_HOUSEHOLD_CONFIRMATION_KEY =
   "pending_household_sync_confirmation_v2";
 
 const stateStore = createRuntimeStateStore();
+const cancelRun = createSyncRunCanceller(stateStore);
 const offerOperations = createOfferOperationStore();
 let bofaOffers: ReturnType<typeof registerBofaOffers> | null = null;
 let legacyOfferStarting = false;
@@ -175,36 +177,6 @@ function isProviderAttemptMessage(
     return false;
   }
   return true;
-}
-
-async function cancelRun(providerId: ProviderId, error: string | null = null) {
-  const run = stateStore.markRunCancelled(providerId);
-  stateStore.updateProvider(providerId, { status: "cancelled", error });
-  stateStore.setTabId(providerId, null);
-
-  if (!run) {
-    return;
-  }
-
-  stateStore.notifyRunCancelled(providerId, run.attemptId);
-
-  for (const tabId of run.observedTabIds) {
-    void sendToTab(tabId, {
-      type: "ABORT_SYNC_RUN",
-      provider: providerId,
-      attemptId: run.attemptId,
-    }).catch(() => {
-      // Tabs can disappear during cancel, so best-effort cleanup is enough here.
-    });
-  }
-
-  if (run.ownedTabId != null) {
-    void chrome.tabs.remove(run.ownedTabId).catch(() => {
-      // Users can close the sync tab themselves before the worker gets here.
-    });
-  }
-
-  stateStore.finishSyncRun(providerId, run.attemptId);
 }
 
 async function hydrateFromNextCard() {
@@ -376,7 +348,7 @@ async function switchHouseholdMember(memberId: string) {
   }
   await offerCoordinator.clearAccountState();
   activeHouseholdTargets.clear();
-  await chrome.storage.local.remove(PENDING_HOUSEHOLD_CONFIRMATION_KEY);
+  await cancelPendingHouseholdSync();
   await chrome.storage.local.remove([
     "offerUrlCache",
     "detectedOfferUrlCache",
@@ -524,24 +496,31 @@ async function confirmPendingHouseholdSync(correction?: { operationId: string })
     if (!collisionTarget) {
       return { ok: false, error: "member_unavailable" };
     }
+    const authGeneration = getAuthGeneration();
+    const isContextCurrent = () => providerPushContextIsCurrent(target.provider, collisionTarget, null, authGeneration, null);
     const collisionResult = await pushToNextCard(
       target.provider,
       validated.data,
-      { target: collisionTarget },
+      { target: collisionTarget, isContextCurrent },
     );
+    if (!await isContextCurrent()) return { ok: false, error: "sync_cancelled" };
     updateProviderFromBackendPush(target.provider, collisionResult);
     if (!collisionResult.ok) return collisionResult;
     await hydrateFromNextCard();
     return { ok: true };
   }
   activeHouseholdTargets.set(target.provider, target);
+  const authGeneration = getAuthGeneration();
+  const isContextCurrent = () => providerPushContextIsCurrent(target.provider, target, null, authGeneration, null);
   const result = await pushToNextCard(target.provider, validated.data, {
     target,
+    isContextCurrent,
     identityConfirmed: true,
     manualConversionConfirmed:
       "manualConversionRequired" in pending &&
       pending.manualConversionRequired === true,
   });
+  if (!await isContextCurrent()) return { ok: false, error: "sync_cancelled" };
   if (result.manualConversionRequired) {
     await chrome.storage.local.set({
       [PENDING_HOUSEHOLD_CONFIRMATION_KEY]: {
@@ -854,7 +833,10 @@ async function pushScrapedData(providerId: ProviderId, data: unknown) {
     return { ok: false, error: validated.error };
   }
 
-  const result = await pushToNextCard(providerId, validated.data, { target });
+  const result = await pushToNextCard(providerId, validated.data, {
+    target,
+    isContextCurrent: () => providerPushContextIsCurrent(providerId, target, fallbackScope, authGeneration, attemptId),
+  });
   if (!await providerPushContextIsCurrent(
     providerId,
     target,
@@ -1063,7 +1045,17 @@ async function openUpgradeTab() {
   }
 }
 
+const openSyncTab = createProviderSyncTabOpener({
+  providerRegistry,
+  stateStore,
+  getReservedTabIds: async () => {
+    const active = (await offerOperations.getSnapshot()).active;
+    return active?.ownedTabId != null ? [active.ownedTabId] : [];
+  },
+});
+
 const genericHandlers = createGenericSyncHandlers({
+  openSyncTab,
   providerRegistry,
   stateStore,
   extensionNavigatingTabs,
@@ -1075,7 +1067,7 @@ const syncHandlers = {
   generic: genericHandlers.startSync,
   atmos: genericHandlers.startAtmosSync,
   "chase-v1": createChaseSync({
-    providerRegistry,
+    openSyncTab,
     stateStore,
     extensionNavigatingTabs,
     isProviderAttemptMessage,
@@ -1083,13 +1075,14 @@ const syncHandlers = {
     refreshOfferUrlCache: pullPrimaryOfferUrlCache,
   }),
   amex: createAmexSync({
-    providerRegistry,
+    openSyncTab,
     stateStore,
     waitForGenericLoginAndExtract: genericHandlers.waitForGenericLoginAndExtract,
     isProviderAttemptMessage,
     pushToNextCard: pushScrapedData,
   }),
   capitalone: createCapitalOneSync({
+    openSyncTab,
     providerRegistry,
     stateStore,
     extensionNavigatingTabs,
@@ -1098,6 +1091,7 @@ const syncHandlers = {
     pushToNextCard: pushScrapedData,
   }),
   hyatt: createHyattSync({
+    openSyncTab,
     providerRegistry,
     stateStore,
     extensionNavigatingTabs,
@@ -1106,6 +1100,7 @@ const syncHandlers = {
     pushToNextCard: pushScrapedData,
   }),
   bilt: createBiltSync({
+    openSyncTab,
     providerRegistry,
     stateStore,
     extensionNavigatingTabs,

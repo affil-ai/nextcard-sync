@@ -1,3 +1,4 @@
+import { createProviderSyncTabOpener } from "../core/tab-utils";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createCapitalOneSync } from "./capitalone";
 import { createGenericSyncHandlers } from "./generic";
@@ -96,6 +97,7 @@ describe("Capital One sign-in and cancellation", () => {
       } },
       tabs: {
         create: vi.fn(async () => ({ id: 42 })),
+        query: vi.fn(async () => []),
         get: vi.fn(async () => ({ ...tab, status: "complete" })), update: navigate,
         onUpdated: { addListener: (listener: TabListener) => updates.add(listener), removeListener: (listener: TabListener) => updates.delete(listener) },
         onRemoved: { addListener: vi.fn(), removeListener: vi.fn() },
@@ -116,6 +118,7 @@ describe("Capital One sign-in and cancellation", () => {
     const stateStore = createRuntimeStateStore();
     const pushToNextCard = vi.fn(async () => ({ ok: true }));
     const options = {
+      openSyncTab: createProviderSyncTabOpener({ providerRegistry, stateStore, getReservedTabIds: async () => [] }),
       stateStore, providerRegistry, extensionNavigatingTabs: new Set<number>(), pushToNextCard,
       isProviderAttemptMessage: (message: Record<string, unknown>, provider: string, attemptId: string, type?: string) =>
         message.provider === provider && message.attemptId === attemptId && (!type || message.type === type),
@@ -128,13 +131,17 @@ describe("Capital One sign-in and cancellation", () => {
     return { sync, stateStore, pushToNextCard };
   }
   it("waits through 2FA on the account URL and only reads after verification", async () => {
+    vi.mocked(chrome.tabs.query).mockResolvedValue([{ ...tab, status: "complete" }]);
+    navigate.mockResolvedValue({ ...tab, status: "complete" });
     const { sync, stateStore, pushToNextCard } = await start();
     await vi.advanceTimersByTimeAsync(125_000);
     expect(extract).not.toHaveBeenCalled();
     expect(stateStore.states.capitalone.status).toBe("waiting_for_login");
+    expect(stateStore.getRun("capitalone")?.ownedTabId).toBeNull();
     for (const listener of [...updates]) listener(42, { status: "complete" }, { ...tab, url: "https://verified.capitalone.com/auth" });
     await vi.advanceTimersByTimeAsync(5_000);
-    expect(navigate).not.toHaveBeenCalled();
+    expect(navigate).toHaveBeenCalledTimes(1);
+    expect(navigate).toHaveBeenCalledWith(42, { active: true });
     loginState = "logged_in";
     emit({ type: "LOGIN_STATE", provider: "capitalone", state: "logged_in" });
     await vi.advanceTimersByTimeAsync(3_000);

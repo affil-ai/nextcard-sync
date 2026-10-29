@@ -1,15 +1,16 @@
+import type { ProviderSyncTabOpener } from "../core/tab-utils";
 import type { ProviderId, PushToNextCardResult } from "../../lib/types";
 import type { ProviderDefinition } from "../../providers/provider-registry";
 import type { createRuntimeStateStore } from "../core/runtime-state";
 import {
   navigateAndWait,
   sendRunMessageToTab,
-  waitForTabLoad,
 } from "../core/tab-utils";
 
 type RuntimeStateStore = ReturnType<typeof createRuntimeStateStore>;
 
 interface HyattSyncDeps {
+  openSyncTab: ProviderSyncTabOpener;
   providerRegistry: Record<ProviderId, ProviderDefinition>;
   stateStore: RuntimeStateStore;
   extensionNavigatingTabs: Set<number>;
@@ -64,14 +65,7 @@ export function createHyattSync(options: HyattSyncDeps) {
         throw new Error("Missing Hyatt account URL");
       }
 
-      const tab = await chrome.tabs.create({ url: accountUrl, active: true });
-      const tabId = tab.id;
-      if (!tabId) {
-        throw new Error("Could not create tab");
-      }
-
-      options.stateStore.recordRunTab("hyatt", attemptId, tabId, { owned: true });
-      await waitForTabLoad(tabId, 30000);
+      const tabId = await options.openSyncTab("hyatt", attemptId);
       setHyattProgress("Checking Hyatt sign-in...", "detecting_login");
 
       setHyattProgress("Waiting for Hyatt sign-in...", "waiting_for_login");

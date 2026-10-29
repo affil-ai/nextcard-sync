@@ -65,10 +65,11 @@ export function createSyncRunRegistry() {
     options: { owned: boolean },
   ) {
     const run = runs.get(provider);
-    if (!run || run.attemptId !== attemptId) return null;
+    if (!run || run.cancelled || run.attemptId !== attemptId) return null;
 
+    const alreadyObserved = run.observedTabIds.has(tabId);
     run.observedTabIds.add(tabId);
-    if (options.owned) {
+    if (options.owned && !alreadyObserved) {
       // We only close tabs the extension created so cancel stays user-safe.
       run.ownedTabId = tabId;
     }

@@ -1,3 +1,4 @@
+import type { ProviderSyncTabOpener } from "../core/tab-utils";
 import type {
   AALoyaltyData,
   AmexLoyaltyData,
@@ -27,6 +28,7 @@ import {
 type RuntimeStateStore = ReturnType<typeof createRuntimeStateStore>;
 
 interface GenericSyncDeps {
+  openSyncTab: ProviderSyncTabOpener;
   providerRegistry: Record<ProviderId, ProviderDefinition>;
   stateStore: RuntimeStateStore;
   extensionNavigatingTabs: Set<number>;
@@ -343,7 +345,6 @@ export function createGenericSyncHandlers(options: GenericSyncDeps) {
 
   async function startAtmosSync() {
     const attemptId = options.stateStore.beginSyncRun("atmos").attemptId;
-    const config = options.providerRegistry.atmos;
     options.stateStore.updateProvider("atmos", {
       status: "detecting_login",
       error: null,
@@ -351,11 +352,7 @@ export function createGenericSyncHandlers(options: GenericSyncDeps) {
     });
 
     try {
-      const tab = await chrome.tabs.create({ url: config.syncUrl, active: true });
-      const tabId = tab.id;
-      if (!tabId) throw new Error("Could not create tab");
-      options.stateStore.recordRunTab("atmos", attemptId, tabId, { owned: true });
-      await waitForTabLoad(tabId, 30000);
+      const tabId = await options.openSyncTab("atmos", attemptId);
       setProviderProgress("atmos", "Reading Alaska Atmos overview...");
 
       let overview = waitForAtmosMessage(attemptId, "ATMOS_OVERVIEW_DONE");
@@ -605,7 +602,7 @@ export function createGenericSyncHandlers(options: GenericSyncDeps) {
           }
           options.extensionNavigatingTabs.delete(arrivalTabId);
           options.stateStore.recordRunTab(providerId, attemptId, arrivalTabId, {
-            owned: arrivalTabId === tabId,
+            owned: options.stateStore.getRun(providerId)?.ownedTabId === arrivalTabId,
           });
           options.stateStore.updateProvider(providerId, { status: "extracting", progressMessage: `Reading ${definition.name} rewards...` });
           extractionTimer = setTimeout(() => {
@@ -815,11 +812,7 @@ export function createGenericSyncHandlers(options: GenericSyncDeps) {
     });
 
     try {
-      const tab = await chrome.tabs.create({ url: definition.syncUrl, active: true });
-      const tabId = tab.id;
-      if (!tabId) throw new Error("Could not create tab");
-      options.stateStore.recordRunTab(providerId, attemptId, tabId, { owned: true });
-      await waitForTabLoad(tabId, 30000);
+      const tabId = await options.openSyncTab(providerId, attemptId);
 
       let currentTab = await chrome.tabs.get(tabId);
       let landingUrl = currentTab.url ?? "";

@@ -32,6 +32,7 @@ import {
 } from "../contracts/loyalty-provider-data";
 import type { StandardizedLoyaltyData, StandardizedIssuerData, QualifyingMetric, Stat } from "../contracts/loyalty-provider-data";
 import { getAuth } from "./auth";
+import { redactLoyaltyIdentifiers } from "./loyalty-privacy";
 import { normalizeRewardsSummaries } from "./rewards-summary";
 import type { HouseholdSyncTarget } from "./household-context";
 
@@ -722,6 +723,7 @@ export async function pushToNextCard(
     target?: HouseholdSyncTarget | null;
     identityConfirmed?: boolean;
     manualConversionConfirmed?: boolean;
+    isContextCurrent?: () => Promise<boolean>;
   },
 ): Promise<PushToNextCardResult> {
   const auth = await getAuth();
@@ -737,15 +739,18 @@ export async function pushToNextCard(
 
   const standardized = toStandardizedProviderData(provider, validatedProviderData.data);
   const commonFields = extractCommonFields(provider, validatedProviderData.data);
-  const body = maskSensitiveFields({
+  const body = maskSensitiveFields(redactLoyaltyIdentifiers({
     provider,
     loyaltyProgramSlug: PROVIDER_TO_SLUG[provider],
     ...commonFields,
     providerData: standardized,
     rawProviderData: data,
-  });
+  }));
 
   try {
+    if (options?.isContextCurrent && !await options.isContextCurrent()) {
+      return { ok: false, error: "sync_cancelled" };
+    }
     if (options?.target) {
       const preflightResponse = await fetch(
         `${__CONVEX_SITE_URL__}/extension/v2/preflight`,
@@ -792,6 +797,11 @@ export async function pushToNextCard(
       }
     }
 
+    // Preflight can outlive a cancelled run or a household switch. Recheck at
+    // the commit boundary so a stale operation cannot issue a follow-up save.
+    if (options?.target && options.isContextCurrent && !await options.isContextCurrent()) {
+      return { ok: false, error: "sync_cancelled" };
+    }
     const endpoint = options?.target
       ? "/extension/v2/sync"
       : "/extension/sync";

@@ -92,6 +92,7 @@ it("lets a saved program cancel its active sync directly from the summary card",
     states.capitalone = { ...states.capitalone, ...syncedState, status: "waiting_for_login" };
     const onSummaryCancelRequested = vi.fn();
     const onSummarySyncRequested = vi.fn();
+    const onAccountReady = vi.fn(async () => true);
     const providerList = document.createElement("div");
     const render = createHomeRenderer({
       providerList, tourTooltip: document.createElement("div"),
@@ -99,11 +100,32 @@ it("lets a saved program cancel its active sync directly from the summary card",
       getRewardsSummaries: () => [{ ...summary, provider: "capitalone", programName: "Capital One Miles" }],
       getSyncAllState: () => ({ status: "idle", providerIds: [], currentProviderId: null, processedCount: 0, failedCount: 0, startedAt: null, updatedAt: null }),
       markFirstSyncCompleted() {}, onProviderSelected() {}, onLockedProviderSelected() {},
-      onSummarySelected() {}, onSummarySyncRequested, onSummaryCancelRequested,
+      onSummarySelected() {}, onSummarySyncRequested, onSummaryCancelRequested, onAccountReady,
       onSyncAllRequested() {}, onSyncAllCancelRequested() {},
     });
     render(states);
-    expect(providerList.querySelector(".rewards-summary-secondary")).toBeNull();
+    expect(providerList.querySelector(".rewards-summary-sync")).toBeNull();
+    expect(providerList.querySelector(".rewards-sync-progress")?.textContent).toContain("Finish sign-in and verification in the Capital One tab");
+    states.capitalone.accountPreparation = { attemptId: "member-run", memberDisplayName: "Mom" };
+    render(states);
+    const continueButton = providerList.querySelector(".rewards-sync-progress button");
+    if (!(continueButton instanceof HTMLButtonElement)) throw new Error("Missing account preparation action");
+    expect(continueButton.textContent).toBe("Continue sync");
+    expect(providerList.querySelector(".rewards-sync-title")?.textContent).toBe("Sync for Mom");
+    expect(providerList.querySelector(".rewards-sync-help")?.textContent).toBe("Check the account in the Capital One tab. Switch accounts if needed.");
+    expect(providerList.querySelector(".rewards-summary-card")?.textContent).not.toContain("Updating your saved balance");
+    continueButton.click();
+    expect(onAccountReady).toHaveBeenCalledWith("capitalone", "member-run");
+    states.capitalone.accountPreparation = null;
+    states.capitalone.status = "extracting";
+    states.capitalone.progressMessage = "Reading card 2 of 4 <account>";
+    render(states);
+    expect(providerList.querySelector(".rewards-sync-progress")?.textContent).toContain("Reading card 2 of 4 <account>");
+    expect(providerList.querySelector(".rewards-sync-progress account")).toBeNull();
+    states.capitalone.progressMessage = "Reading card 3 of 4";
+    render(states);
+    expect(providerList.querySelector(".rewards-sync-progress")?.textContent).toContain("Reading card 3 of 4");
+    expect(providerList.querySelector(".rewards-sync-progress")?.textContent).toContain("Keep the Capital One tab open");
     expect(providerList.querySelectorAll(".rewards-sync-stop")).toHaveLength(1);
     const stop = providerList.querySelector(".rewards-summary-header .rewards-sync-stop");
     if (!(stop instanceof HTMLButtonElement)) throw new Error("Missing stop icon");
@@ -114,7 +136,7 @@ it("lets a saved program cancel its active sync directly from the summary card",
     expect(onSummarySyncRequested).not.toHaveBeenCalled();
     states.capitalone.status = "done";
     render(states);
-    const retry = providerList.querySelector(".rewards-summary-secondary");
+    const retry = providerList.querySelector(".rewards-summary-sync");
     if (!(retry instanceof HTMLButtonElement)) throw new Error("Missing sync action");
     expect(retry.textContent).toBe("Sync again");
     expect(providerList.querySelector(".rewards-summary-header .rewards-sync-stop")).toBeNull();
@@ -126,5 +148,14 @@ it("lets a saved program cancel its active sync directly from the summary card",
     expect(onSummaryCancelRequested).toHaveBeenCalledWith("aa");
     retry.click();
     expect(onSummarySyncRequested).toHaveBeenCalledWith("capitalone");
+    expect(retry.classList.contains("rewards-summary-primary")).toBe(true);
+    states.capitalone.status = "awaiting_confirmation";
+    render(states);
+    expect(providerList.querySelector(".rewards-summary-sync")).toBeNull();
+    expect(providerList.querySelector(".rewards-summary-card")?.textContent).toContain("Not saved yet");
+    expect(providerList.querySelector(".rewards-summary-card")?.textContent).toContain("Nothing is saved until you confirm");
+    states.aa.status = "awaiting_confirmation";
+    render(states);
+    expect(providerList.querySelector('[data-sync-provider="aa"] button')?.hasAttribute("disabled")).toBe(true);
   } finally { vi.unstubAllGlobals(); }
 });

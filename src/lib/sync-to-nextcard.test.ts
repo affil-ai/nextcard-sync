@@ -121,8 +121,10 @@ describe("pushToNextCard", () => {
 
   it("commits only after the household preflight succeeds", async () => {
     const requestedUrls: string[] = [];
-    vi.stubGlobal("fetch", vi.fn(async (url: string) => {
+    const bodies: unknown[] = [];
+    vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
       requestedUrls.push(url);
+      bodies.push(JSON.parse(String(init?.body)));
       return {
         ok: true,
         status: 200,
@@ -147,6 +149,10 @@ describe("pushToNextCard", () => {
       "/extension/v2/preflight",
       "/extension/v2/sync",
     ]);
+    expect(bodies[0]).toMatchObject({ memberId: "member-a", operationId: "operation-1", identityConfirmed: true,
+      identityEvidence: { memberNumber: "12345678" }, input: { memberNumber: "****5678" } });
+    expect(bodies[1]).toMatchObject({ operationId: "operation-1", input: { memberNumber: "****5678" } });
+    expect(JSON.stringify(bodies[1])).not.toContain("12345678");
   });
 
   it("requires a second explicit confirmation when conversion appears at commit", async () => {
@@ -211,4 +217,57 @@ it("ignores malformed card counts without failing an otherwise successful sync",
   const result = await pushToNextCard("hilton", hiltonData);
   expect(result.ok).toBe(true);
   expect(result.cardSync).toBeUndefined();
+});
+
+
+it("sends only redacted companion codes and nested copies to the database", async () => {
+  const bodies: string[] = [];
+  vi.stubGlobal("fetch", vi.fn(async (_url: string, init?: RequestInit) => {
+    bodies.push(String(init?.body));
+    return { ok: true, status: 200, json: async () => ({}) };
+  }));
+  await expect(pushToNextCard("atmos", {
+    availablePoints: 500, statusPoints: 10, statusLevel: null,
+    memberName: null, memberNumber: "123456789", rewards: [],
+    discounts: [{ name: "Companion fare", code: "FARE-ABC123", details: "Use FARE-ABC123 for 123456789", expiration: null }],
+  })).resolves.toEqual({ ok: true });
+  expect(bodies).toHaveLength(1);
+  expect(bodies[0]).not.toContain("FARE-ABC123");
+  expect(bodies[0]).not.toContain("123456789");
+  expect(JSON.parse(bodies[0])).toMatchObject({
+    memberNumber: "*****6789",
+    rawProviderData: { discounts: [{ code: "*******C123", details: "Use *******C123 for *****6789" }] },
+    providerData: { raw: { discounts: [{ code: "*******C123" }] } }
+  });
+});
+
+it("does not commit a household save if its run is cancelled during preflight", async () => {
+  let current = true;
+  let finishPreflight: (() => void) | undefined;
+  const preflightReady = new Promise<void>(resolve => { finishPreflight = resolve; });
+  const requests: string[] = [];
+  vi.stubGlobal("fetch", vi.fn(async (url: string) => {
+    requests.push(new URL(url).pathname);
+    if (url.endsWith("/preflight")) await preflightReady;
+    return { ok: true, status: 200, json: async () => ({}) };
+  }));
+  const pending = pushToNextCard("hilton", hiltonData, {
+    target: { accountScopeId: "owner", memberId: "mom", memberDisplayName: "Mom", memberLifecycleVersion: 1,
+      provider: "hilton", contextRevision: "revision-1", operationId: "mom-run" },
+    identityConfirmed: true,
+    isContextCurrent: async () => current,
+  });
+  await vi.waitFor(() => expect(requests).toEqual(["/extension/v2/preflight"]));
+  current = false;
+  finishPreflight?.();
+  await expect(pending).resolves.toMatchObject({ ok: false, error: "sync_cancelled" });
+  expect(requests).toEqual(["/extension/v2/preflight"]);
+});
+
+it("sends no request after the sync context has already changed", async () => {
+  const fetchMock = vi.fn();
+  vi.stubGlobal("fetch", fetchMock);
+  await expect(pushToNextCard("hilton", hiltonData, { isContextCurrent: async () => false }))
+    .resolves.toMatchObject({ ok: false, error: "sync_cancelled" });
+  expect(fetchMock).not.toHaveBeenCalled();
 });

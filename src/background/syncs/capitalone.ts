@@ -1,3 +1,4 @@
+import type { ProviderSyncTabOpener } from "../core/tab-utils";
 import type {
   CapitalOneLoyaltyData,
   ProviderId,
@@ -8,7 +9,6 @@ import type { createRuntimeStateStore } from "../core/runtime-state";
 import {
   navigateAndWait,
   triggerExtraction,
-  waitForTabLoad,
 } from "../core/tab-utils";
 
 type RuntimeStateStore = ReturnType<typeof createRuntimeStateStore>;
@@ -25,6 +25,7 @@ interface CapitalOneSummaryCard {
 }
 
 interface CapitalOneSyncDeps {
+  openSyncTab: ProviderSyncTabOpener;
   providerRegistry: Record<ProviderId, ProviderDefinition>;
   stateStore: RuntimeStateStore;
   extensionNavigatingTabs: Set<number>;
@@ -384,16 +385,7 @@ export function createCapitalOneSync(options: CapitalOneSyncDeps) {
     });
 
     try {
-      const tab = await chrome.tabs.create({ url: definition.syncUrl, active: true });
-      const tabId = tab.id;
-      if (!tabId) {
-        throw new Error("Could not create tab");
-      }
-
-      options.stateStore.recordRunTab("capitalone", attemptId, tabId, {
-        owned: true,
-      });
-      await waitForTabLoad(tabId, 30000);
+      const tabId = await options.openSyncTab("capitalone", attemptId);
 
       // The account URL can appear before authentication and 2FA have finished.
       // Wait for the content script's authenticated page evidence instead.

@@ -60,6 +60,7 @@ export interface PushToNextCardResult {
   awaitingConfirmation?: boolean;
   existingMemberId?: string;
   isLimited?: boolean;
+  accountPreparation?: { attemptId: string; memberDisplayName: string } | null;
   cardSync?: CardSyncSummary;
   syncedRewardsPrograms?: RewardsProgramSyncSummary[];
   skippedRewardsPrograms?: RewardsProgramSyncSummary[];
@@ -88,6 +89,7 @@ export interface ProviderSyncState<T = unknown> {
   error: string | null;
   lastSyncedAt: string | null;
   progressMessage: string | null;
+  accountPreparation?: { attemptId: string; memberDisplayName: string } | null;
   cardSync?: CardSyncSummary;
   backendSyncStatus?: BackendSyncStatus | null;
   backendSyncError?: string | null;

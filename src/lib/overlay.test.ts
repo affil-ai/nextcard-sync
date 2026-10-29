@@ -12,8 +12,9 @@ it("keeps sign-in nonblocking and offers cancellation during login and reading",
     return root;
   });
   let polledStatus = "extracting";
-  const sendMessage = vi.fn((_message: unknown, reply?: (response: { status: string }) => void) => {
-    reply?.({ status: polledStatus });
+  let accountPreparation = false;
+  const sendMessage = vi.fn((_message: unknown, reply?: (response: { status: string; accountPreparation: { attemptId: string; memberDisplayName: string } | null }) => void) => {
+    reply?.({ status: polledStatus, accountPreparation: accountPreparation ? { attemptId: "run-1", memberDisplayName: "Mom" } : null });
     return Promise.resolve({ ok: true });
   });
   vi.stubGlobal("chrome", { runtime: { getURL: (path: string) => path, sendMessage } });
@@ -26,6 +27,17 @@ it("keeps sign-in nonblocking and offers cancellation during login and reading",
   expect(currentRoot().querySelector(".nc-cancel-button")?.textContent).toBe("Cancel sync");
   overlay.updateOverlay("extracting", "capitalone");
   await vi.advanceTimersByTimeAsync(300);
+  polledStatus = "waiting_for_login";
+  accountPreparation = true;
+  await vi.advanceTimersByTimeAsync(2300);
+  expect(currentRoot().textContent).toContain("Check the signed-in account");
+  expect(currentRoot().textContent).toContain("Continue sync in the sidebar");
+  expect(currentRoot().textContent).not.toContain("read your data automatically");
+  expect(currentRoot().textContent).not.toContain("Don't click anything");
+  accountPreparation = false;
+  polledStatus = "extracting";
+  await vi.advanceTimersByTimeAsync(2300);
+  expect(currentRoot().textContent).toContain("nextcard is reading your account");
   polledStatus = "awaiting_confirmation";
   await vi.advanceTimersByTimeAsync(2000);
   expect(document.getElementById("nextcard-sync-overlay")).toBeNull();

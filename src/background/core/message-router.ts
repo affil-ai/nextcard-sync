@@ -752,6 +752,15 @@ export function createMessageRouter(options: {
         sendResponse({ ok: false });
         return true;
 
+      case "CONTINUE_HOUSEHOLD_SYNC": {
+        const providerId = message.provider;
+        const attemptId = message.attemptId;
+        sendResponse({ ok: options.stateStore.isProviderId(providerId)
+          && typeof attemptId === "string"
+          && options.stateStore.confirmAccountReady(providerId, attemptId) });
+        return true;
+      }
+
       case "CANCEL_SYNC": {
         const providerId = message.provider;
         if (!options.stateStore.isProviderId(providerId)) {

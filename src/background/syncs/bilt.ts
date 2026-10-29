@@ -1,3 +1,4 @@
+import type { ProviderSyncTabOpener } from "../core/tab-utils";
 import type { ProviderId, PushToNextCardResult } from "../../lib/types";
 import type { ProviderDefinition } from "../../providers/provider-registry";
 import type { createRuntimeStateStore } from "../core/runtime-state";
@@ -5,12 +6,12 @@ import {
   navigateAndWait,
   sendRunMessageToTab,
   triggerExtraction,
-  waitForTabLoad,
 } from "../core/tab-utils";
 
 type RuntimeStateStore = ReturnType<typeof createRuntimeStateStore>;
 
 interface BiltSyncDeps {
+  openSyncTab: ProviderSyncTabOpener;
   providerRegistry: Record<ProviderId, ProviderDefinition>;
   stateStore: RuntimeStateStore;
   extensionNavigatingTabs: Set<number>;
@@ -67,14 +68,7 @@ export function createBiltSync(options: BiltSyncDeps) {
         throw new Error("Missing Bilt account URL");
       }
 
-      const tab = await chrome.tabs.create({ url: accountUrl, active: true });
-      const tabId = tab.id;
-      if (!tabId) {
-        throw new Error("Could not create tab");
-      }
-
-      options.stateStore.recordRunTab("bilt", attemptId, tabId, { owned: true });
-      await waitForTabLoad(tabId, 30000);
+      const tabId = await options.openSyncTab("bilt", attemptId);
       setBiltProgress("Checking Bilt sign-in...", "detecting_login");
 
       const firstMessage = await new Promise<Record<string, unknown>>((resolve) => {

@@ -48,6 +48,7 @@ import {
   getOnboardingCompletionAction,
 } from "./onboarding";
 import { createHomeRenderer } from "./home/render-home";
+import { placeSyncConfirmation } from "./home/sync-confirmation";
 import type { RewardsSyncAllState } from "./home/home-state";
 import {
   getOffersSetupCompletedStorageKey,
@@ -101,6 +102,9 @@ const householdMemberSelect = householdMemberSelectElement instanceof HTMLSelect
 const householdSelectedMemberLabel = document.getElementById(
   "householdSelectedMemberLabel",
 );
+const householdProfileActions = document.getElementById("householdProfileActions");
+const refreshHouseholdProfiles = document.getElementById("refreshHouseholdProfiles");
+const householdProfileRefreshStatus = document.getElementById("householdProfileRefreshStatus");
 const manageHouseholdBtn = document.getElementById("manageHouseholdBtn");
 const householdSyncConfirmation = document.getElementById(
   "householdSyncConfirmation",
@@ -131,6 +135,7 @@ const correctionElement = document.getElementById("householdSyncCorrection");
 const householdSyncCorrection = correctionElement instanceof HTMLButtonElement ? correctionElement : null;
 let correctionReviewOperationId: string | null = null;
 let householdConfirmationBusy = false;
+let householdSwitchInFlight = false;
 let displayedConfirmation: HouseholdPopupState["pendingConfirmation"] = null;
 
 type HouseholdPopupState = {
@@ -222,7 +227,7 @@ async function refreshHouseholdUi() {
       type: "GET_HOUSEHOLD_STATE",
     });
   } catch {
-    return;
+    return false;
   }
   const availability = isHouseholdPopupState(response)
     ? getHouseholdSyncAvailability(response.context, response.selectedMemberId)
@@ -232,7 +237,9 @@ async function refreshHouseholdUi() {
     isHouseholdPopupState(response) ? response.selectedMemberId : null,
   );
   if (!availability?.householdVisible || !isHouseholdPopupState(response)) {
+    displayedConfirmation = null;
     if (householdSyncTarget) householdSyncTarget.hidden = true;
+    if (householdProfileActions) householdProfileActions.hidden = true;
     if (householdSyncConfirmation) householdSyncConfirmation.hidden = true;
     householdSyncWritesEnabled = true;
     householdIssuerSyncEnabled = true;
@@ -243,10 +250,11 @@ async function refreshHouseholdUi() {
       offersTabButton.disabled = false;
       offersTabButton.title = "";
     }
-    return;
+    return false;
   }
 
   if (householdSyncTarget) householdSyncTarget.hidden = false;
+  if (householdProfileActions) householdProfileActions.hidden = false;
   if (householdMemberSelect) {
     householdMemberSelect.replaceChildren();
     if (response.selectedMemberId === null) {
@@ -264,7 +272,7 @@ async function refreshHouseholdUi() {
       option.selected = member.id === response.selectedMemberId;
       householdMemberSelect.appendChild(option);
     }
-    householdMemberSelect.disabled = householdConfirmationBusy;
+    householdMemberSelect.disabled = householdConfirmationBusy || householdSwitchInFlight;
   }
   const help = document.getElementById("householdSyncTargetHelp");
   const selected = response.context.members.find(
@@ -290,9 +298,9 @@ async function refreshHouseholdUi() {
         : "Household rewards sync is temporarily unavailable. Switch to Primary to keep syncing."
       : selected && !selected.isPrimary
         ? response.context.capabilities.memberIssuerCardSync
-          ? "This bank or rewards login and all of its synced data belong to this profile."
+          ? "Changing profiles doesn't switch the account open in your browser."
           : "Bank sync is not enabled for this profile yet. Airlines and hotels remain available."
-        : "Choose which household profile owns this login and its synced data.";
+        : "Changing profiles doesn't switch the account open in your browser.";
   }
   const offersTabButtonElement = document.getElementById("offersTab");
   const offersTabButton = offersTabButtonElement instanceof HTMLButtonElement
@@ -344,7 +352,7 @@ async function refreshHouseholdUi() {
       householdSyncConfirmationText.textContent = reviewingCorrection
         ? `Clear ${!["chase", "amex", "capitalone", "bilt", "discover", "citi"].includes(confirmation.provider) ? "saved sync data and balance history" : "synced rewards, cards, offers, and history"} for ${providerName} from ${confirmation.collisionMemberDisplayName}, then sync this login to ${confirmation.memberDisplayName}? Manually saved rewards are kept. Your account with the provider is unchanged.`
         : confirmation.collisionMemberDisplayName
-        ? `This ${providerName} login was previously synced to ${confirmation.collisionMemberDisplayName}. Choose where to sync it now.`
+        ? `This ${providerName} login was previously synced to ${confirmation.collisionMemberDisplayName}. If this is the wrong login, cancel, sign out at ${providerName}, and sign in to the correct account before syncing again. Only move it if the earlier profile assignment was wrong.`
         : confirmation.manualConversionRequired
           ? `Convert the manual balance and sync ${providerName} for ${confirmation.memberDisplayName}?`
           : `Does this ${providerName} account belong to ${confirmation.memberDisplayName}? Nothing is saved until you confirm.`;
@@ -356,15 +364,19 @@ async function refreshHouseholdUi() {
         ? `Keep on ${confirmation.collisionMemberDisplayName}`
         : "Confirm and save";
     }
+    positionSyncConfirmation();
     if (!householdConfirmationWasVisible && householdSyncConfirmation) {
-      householdSyncConfirmation.focus({ preventScroll: false });
+      householdSyncConfirmation.focus({ preventScroll: true });
     }
   }
   householdConfirmationWasVisible = Boolean(confirmation);
+  return true;
 }
 
 householdMemberSelect?.addEventListener("change", async () => {
   householdMemberSelect.disabled = true;
+  householdSwitchInFlight = true;
+  if (householdProfileRefreshStatus) householdProfileRefreshStatus.textContent = "Switching profile…";
   try {
     const result = await chrome.runtime.sendMessage({
       type: "SWITCH_HOUSEHOLD_MEMBER",
@@ -373,11 +385,32 @@ householdMemberSelect?.addEventListener("change", async () => {
     if (!result?.ok) throw new Error(result?.error ?? "Could not switch wallets.");
     await refreshHouseholdUi();
     await refreshPopupState();
+    if (householdProfileRefreshStatus) householdProfileRefreshStatus.textContent = "Profile switched. Provider sign-ins are unchanged.";
   } catch (error) {
     console.error("[NextCard Popup] Household wallet switch failed:", error);
+    if (householdProfileRefreshStatus) householdProfileRefreshStatus.textContent = error instanceof Error
+      ? error.message : "Could not switch profiles. Try again.";
     await refreshHouseholdUi();
   } finally {
+    householdSwitchInFlight = false;
     householdMemberSelect.disabled = householdConfirmationBusy;
+  }
+});
+
+refreshHouseholdProfiles?.addEventListener("click", async () => {
+  if (!(refreshHouseholdProfiles instanceof HTMLButtonElement)) return;
+  refreshHouseholdProfiles.disabled = true;
+  refreshHouseholdProfiles.textContent = "Refreshing…";
+  if (householdProfileRefreshStatus) householdProfileRefreshStatus.textContent = "";
+  try {
+    const refreshed = await refreshHouseholdUi();
+    await refreshPopupState();
+    if (householdProfileRefreshStatus) householdProfileRefreshStatus.textContent = refreshed
+      ? "Profiles refreshed"
+      : "Could not refresh profiles. Try again.";
+  } finally {
+    refreshHouseholdProfiles.disabled = false;
+    refreshHouseholdProfiles.textContent = "Refresh profiles";
   }
 });
 
@@ -3626,6 +3659,7 @@ function showView(name: ViewName) {
     element.classList.toggle("active", key === name);
   }
   currentView = name;
+  positionSyncConfirmation();
 }
 
 function showNextcardAuthWait() {
@@ -3867,6 +3901,7 @@ async function recordOfferConsent() {
 async function startSyncFlow(
   providerId: ProviderId,
 ) {
+  if (householdSwitchInFlight) return false;
   if (!firstSyncCompleted || rewardsGuideQaPreviewActive) {
     tourSyncProvider = providerId;
     tourSyncBaselineLastSyncedAt =
@@ -3981,7 +4016,7 @@ function resetRewardsSyncAllState() {
 }
 
 async function runRewardsSyncAll(providerIds: ProviderId[]) {
-  if (rewardsSyncAllState.status === "running") return;
+  if (householdSwitchInFlight || rewardsSyncAllState.status === "running") return;
 
   const state = await startTravelSync(providerIds);
   if (!state) return;
@@ -4024,7 +4059,7 @@ function handleLockedProviderSelected(_providerId: ProviderId) {
   }, 2500);
 }
 
-const renderHome = createHomeRenderer({
+const renderHomeContent = createHomeRenderer({
   providerList: homeElements.providerList,
   tourTooltip: homeElements.tourTooltip,
   getFirstSyncCompleted: () => firstSyncCompleted,
@@ -4044,6 +4079,11 @@ const renderHome = createHomeRenderer({
     resetRewardsSyncAllState();
     void requestSync(providerId);
   },
+  onAccountReady: async (providerId, attemptId) => {
+    const response: unknown = await chrome.runtime.sendMessage({ type: "CONTINUE_HOUSEHOLD_SYNC", provider: providerId, attemptId });
+    await refreshPopupState();
+    return typeof response === "object" && response !== null && "ok" in response && response.ok === true;
+  },
   onSummaryCancelRequested: (providerId) => {
     void chrome.runtime.sendMessage({ type: "CANCEL_SYNC", provider: providerId })
       .then(() => refreshPopupState());
@@ -4053,6 +4093,22 @@ const renderHome = createHomeRenderer({
     void cancelRewardsSyncAll();
   },
 });
+
+function positionSyncConfirmation() {
+  if (!householdSyncConfirmation || !syncTabPanel) return;
+  placeSyncConfirmation({
+    confirmation: householdSyncConfirmation,
+    provider: displayedConfirmation?.provider ?? null,
+    homeList: homeElements.providerList,
+    fallback: syncTabPanel,
+    detailView: document.getElementById(`${currentView}View`),
+  });
+}
+
+function renderHome(states: Record<ProviderId, ProviderSyncState>) {
+  renderHomeContent(states);
+  positionSyncConfirmation();
+}
 
 function getInitials(name: string | null) {
   if (!name) return "?";
