@@ -15,8 +15,8 @@ export function placeSyncConfirmation(options: {
   const target = detail ?? card ?? fallback;
   if (confirmation.parentElement === target) return;
   if (detail) {
-    const syncButton = detail.querySelector(".sync-btn");
-    detail.insertBefore(confirmation, syncButton);
+    const syncAction = detail.querySelector(":scope > .sync-actions, :scope > .sync-btn");
+    detail.insertBefore(confirmation, syncAction);
   } else if (card) {
     card.appendChild(confirmation);
   } else {

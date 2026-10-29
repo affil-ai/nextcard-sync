@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import { expect, it, vi } from "vitest";
+import { readFileSync } from "node:fs";
 import { placeSyncConfirmation } from "./sync-confirmation";
 
 it("keeps the same confirmation and its listeners inside the matching program across rerenders", () => {
@@ -35,4 +36,20 @@ it("puts confirmation before the sync action in the active provider detail, then
   expect(confirmation.nextElementSibling?.className).toBe("sync-btn");
   placeSyncConfirmation({ ...options, detailView: null });
   expect(confirmation.parentElement?.dataset.syncProvider).toBe("aa");
+});
+
+it.each(["discover", "citi"])("keeps confirmation accessible above %s's nested sync actions", provider => {
+  document.documentElement.innerHTML = readFileSync(`${process.cwd()}/src/popup/popup.html`, "utf8");
+  const detailView = document.getElementById(`${provider}View`);
+  const confirmation = document.getElementById("householdSyncConfirmation");
+  const homeList = document.getElementById("providerList");
+  const fallback = document.getElementById("syncTabPanel");
+  if (!detailView || !confirmation || !homeList || !fallback) throw new Error("Missing real popup elements");
+  const confirm = vi.fn();
+  confirmation.querySelector("button")?.addEventListener("click", confirm);
+  placeSyncConfirmation({ confirmation, provider, homeList, fallback, detailView });
+  expect(confirmation.parentElement).toBe(detailView);
+  expect(confirmation.nextElementSibling).toBe(detailView.querySelector(".sync-actions"));
+  confirmation.querySelector("button")?.click();
+  expect(confirm).toHaveBeenCalledOnce();
 });
