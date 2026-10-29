@@ -121,8 +121,10 @@ describe("pushToNextCard", () => {
 
   it("commits only after the household preflight succeeds", async () => {
     const requestedUrls: string[] = [];
-    vi.stubGlobal("fetch", vi.fn(async (url: string) => {
+    const bodies: unknown[] = [];
+    vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
       requestedUrls.push(url);
+      bodies.push(JSON.parse(String(init?.body)));
       return {
         ok: true,
         status: 200,
@@ -147,6 +149,10 @@ describe("pushToNextCard", () => {
       "/extension/v2/preflight",
       "/extension/v2/sync",
     ]);
+    expect(bodies[0]).toMatchObject({ memberId: "member-a", operationId: "operation-1", identityConfirmed: true,
+      identityEvidence: { memberNumber: "12345678" }, input: { memberNumber: "****5678" } });
+    expect(bodies[1]).toMatchObject({ operationId: "operation-1", input: { memberNumber: "****5678" } });
+    expect(JSON.stringify(bodies[1])).not.toContain("12345678");
   });
 
   it("requires a second explicit confirmation when conversion appears at commit", async () => {
@@ -233,4 +239,35 @@ it("sends only redacted companion codes and nested copies to the database", asyn
     rawProviderData: { discounts: [{ code: "*******C123", details: "Use *******C123 for *****6789" }] },
     providerData: { raw: { discounts: [{ code: "*******C123" }] } }
   });
+});
+
+it("does not commit a household save if its run is cancelled during preflight", async () => {
+  let current = true;
+  let finishPreflight: (() => void) | undefined;
+  const preflightReady = new Promise<void>(resolve => { finishPreflight = resolve; });
+  const requests: string[] = [];
+  vi.stubGlobal("fetch", vi.fn(async (url: string) => {
+    requests.push(new URL(url).pathname);
+    if (url.endsWith("/preflight")) await preflightReady;
+    return { ok: true, status: 200, json: async () => ({}) };
+  }));
+  const pending = pushToNextCard("hilton", hiltonData, {
+    target: { accountScopeId: "owner", memberId: "mom", memberDisplayName: "Mom", memberLifecycleVersion: 1,
+      provider: "hilton", contextRevision: "revision-1", operationId: "mom-run" },
+    identityConfirmed: true,
+    isContextCurrent: async () => current,
+  });
+  await vi.waitFor(() => expect(requests).toEqual(["/extension/v2/preflight"]));
+  current = false;
+  finishPreflight?.();
+  await expect(pending).resolves.toMatchObject({ ok: false, error: "sync_cancelled" });
+  expect(requests).toEqual(["/extension/v2/preflight"]);
+});
+
+it("sends no request after the sync context has already changed", async () => {
+  const fetchMock = vi.fn();
+  vi.stubGlobal("fetch", fetchMock);
+  await expect(pushToNextCard("hilton", hiltonData, { isContextCurrent: async () => false }))
+    .resolves.toMatchObject({ ok: false, error: "sync_cancelled" });
+  expect(fetchMock).not.toHaveBeenCalled();
 });

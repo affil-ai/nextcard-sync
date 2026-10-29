@@ -9,6 +9,7 @@ const updates = new Set<UpdateListener>();
 const removals = new Set<RemoveListener>();
 let tabs: chrome.tabs.Tab[];
 let reserved: number[];
+const stored = new Map<string, unknown>();
 
 function tab(id: number, url: string, active = false): chrome.tabs.Tab {
   return { id, url, active, status: "complete", index: 0, pinned: false, highlighted: active,
@@ -18,9 +19,17 @@ function tab(id: number, url: string, active = false): chrome.tabs.Tab {
 beforeEach(() => {
   tabs = [];
   reserved = [];
+  stored.clear();
   updates.clear(); removals.clear();
   vi.stubGlobal("chrome", {
-    storage: { local: { set: vi.fn(async () => {}) } },
+    storage: { local: {
+      get: vi.fn(async (keys: string | string[]) => Object.fromEntries(
+        (Array.isArray(keys) ? keys : [keys]).map(key => [key, stored.get(key)]),
+      )),
+      set: vi.fn(async (values: Record<string, unknown>) => {
+        for (const [key, value] of Object.entries(values)) stored.set(key, value);
+      }),
+    } },
     runtime: {},
     tabs: {
       query: vi.fn(async () => tabs),
@@ -199,4 +208,32 @@ it.each(["cancel", "close"])("stops household preparation without starting extra
   expect(state.states.atmos.accountPreparation).toBeNull();
   expect(removals.size).toBe(0);
   expect(chrome.tabs.remove).not.toHaveBeenCalled();
+});
+
+it("cannot resume Mom or Dad's cancelled preparation after switching to Primary", async () => {
+  tabs = [tab(10, providerRegistry.atmos.syncUrl, true)];
+  const { state, open, cancel } = setup();
+  const reads: string[] = [];
+  const oldAttempts: string[] = [];
+  for (const memberId of ["mom", "dad", "primary"]) {
+    await state.setHouseholdScope({ accountScopeId: "owner", memberId, memberLifecycleVersion: 1, isPrimary: memberId === "primary" });
+    await state.updateProvider("atmos", { syncTarget: {
+      accountScopeId: "owner", memberId, memberDisplayName: memberId, memberLifecycleVersion: 1,
+      contextRevision: "revision-1", operationId: `${memberId}-operation`, provider: "atmos",
+    } });
+    const { attemptId } = state.beginSyncRun("atmos");
+    const pending = open("atmos", attemptId).then(() => { reads.push(memberId); });
+    const completion = memberId === "primary" ? pending : expect(pending).rejects.toThrow("cancelled");
+    await vi.waitFor(() => expect(state.states.atmos.accountPreparation?.memberDisplayName).toBe(memberId));
+    for (const oldAttempt of oldAttempts) expect(state.confirmAccountReady("atmos", oldAttempt)).toBe(false);
+    if (memberId === "primary") expect(state.confirmAccountReady("atmos", attemptId)).toBe(true);
+    else {
+      oldAttempts.push(attemptId);
+      await cancel("atmos");
+    }
+    await completion;
+  }
+  expect(reads).toEqual(["primary"]);
+  expect(chrome.tabs.remove).not.toHaveBeenCalled();
+  expect(removals.size).toBe(0);
 });

@@ -178,3 +178,23 @@ describe("runtime household state", () => {
     expect(state.states.united.tabId).toBe(42);
   });
 });
+
+it("keeps Mom, Dad, and Primary balances separate through repeated profile switches", async () => {
+  const state = createRuntimeStateStore();
+  const members = [
+    { memberId: "mom", isPrimary: false, points: 10000 },
+    { memberId: "dad", isPrimary: false, points: 25000 },
+    { memberId: "primary", isPrimary: true, points: 50000 },
+  ];
+  for (const member of members) {
+    await state.setHouseholdScope({ accountScopeId: "owner", memberLifecycleVersion: 1, ...member });
+    expect(state.states.chase.data).toBeNull();
+    await state.updateProvider("chase", { status: "done", data: { availablePoints: member.points }, lastSyncedAt: "2026-10-28T12:00:00Z" });
+  }
+  for (const member of [...members].reverse()) {
+    await state.setHouseholdScope({ accountScopeId: "owner", memberLifecycleVersion: 1, ...member });
+    expect(state.states.chase.status).toBe("done");
+    expect(state.states.chase.data).toEqual({ availablePoints: member.points });
+    expect(state.states.chase.tabId).toBeNull();
+  }
+});

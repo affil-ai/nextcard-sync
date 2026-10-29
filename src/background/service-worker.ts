@@ -496,24 +496,31 @@ async function confirmPendingHouseholdSync(correction?: { operationId: string })
     if (!collisionTarget) {
       return { ok: false, error: "member_unavailable" };
     }
+    const authGeneration = getAuthGeneration();
+    const isContextCurrent = () => providerPushContextIsCurrent(target.provider, collisionTarget, null, authGeneration, null);
     const collisionResult = await pushToNextCard(
       target.provider,
       validated.data,
-      { target: collisionTarget },
+      { target: collisionTarget, isContextCurrent },
     );
+    if (!await isContextCurrent()) return { ok: false, error: "sync_cancelled" };
     updateProviderFromBackendPush(target.provider, collisionResult);
     if (!collisionResult.ok) return collisionResult;
     await hydrateFromNextCard();
     return { ok: true };
   }
   activeHouseholdTargets.set(target.provider, target);
+  const authGeneration = getAuthGeneration();
+  const isContextCurrent = () => providerPushContextIsCurrent(target.provider, target, null, authGeneration, null);
   const result = await pushToNextCard(target.provider, validated.data, {
     target,
+    isContextCurrent,
     identityConfirmed: true,
     manualConversionConfirmed:
       "manualConversionRequired" in pending &&
       pending.manualConversionRequired === true,
   });
+  if (!await isContextCurrent()) return { ok: false, error: "sync_cancelled" };
   if (result.manualConversionRequired) {
     await chrome.storage.local.set({
       [PENDING_HOUSEHOLD_CONFIRMATION_KEY]: {
@@ -826,7 +833,10 @@ async function pushScrapedData(providerId: ProviderId, data: unknown) {
     return { ok: false, error: validated.error };
   }
 
-  const result = await pushToNextCard(providerId, validated.data, { target });
+  const result = await pushToNextCard(providerId, validated.data, {
+    target,
+    isContextCurrent: () => providerPushContextIsCurrent(providerId, target, fallbackScope, authGeneration, attemptId),
+  });
   if (!await providerPushContextIsCurrent(
     providerId,
     target,
