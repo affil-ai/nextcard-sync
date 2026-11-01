@@ -130,6 +130,23 @@ it("discovers offered campaigns from account-local stores without a cart", async
   expect(fetcher.mock.calls.some(([path]) => path.includes("partner_plan_benefit_validation"))).toBe(false);
 });
 
+it("checks grocery stores when the only cart is from a restaurant", async () => {
+  const fetcher = mockReads();
+  const original = fetcher.getMockImplementation();
+  if (!original) throw new Error("Missing mocked reads");
+  fetcher.mockImplementation(async (path: string, init: RequestInit) => {
+    if (path === "/home") return new Response('<a href="/convenience/store/123/">A</a><a href="/convenience/store/456/">B</a><a href="/convenience/store/789/">C</a>');
+    return original(path, init);
+  });
+  const result = await readDoorDashSession(doorDashQueries);
+  const normalized = normalizeDoorDashReads(doorDashReadSchema.array().parse(result.reads), new Date().toISOString(), result.accountKey);
+  expect(normalized.contexts?.map((context) => [context.source, context.nonRestaurant])).toEqual([
+    ["placements:checkout:1", false],
+    ["placements:store:1", true],
+    ["placements:store:2", true],
+  ]);
+});
+
 it.each(["placements", "carts"])("rejects malformed %s instead of treating missing data as an exhausted campaign", async (part) => {
   const fetcher = mockReads({ noCarts: true });
   const original = fetcher.getMockImplementation();
@@ -149,7 +166,8 @@ it("only runs the captured read operations and hashes the account identifier", a
   const result = await readDoorDashSession(doorDashQueries);
   expect(result.accountKey).toHaveLength(16);
   expect(result.accountKey).not.toContain("first-account");
-  expect(fetcher).toHaveBeenCalledTimes(7);
+  // The restaurant cart also triggers the read-only store lookup and one store placement read.
+  expect(fetcher).toHaveBeenCalledTimes(9);
   for (const [path, init] of fetcher.mock.calls) {
     expect(init.credentials).toBe("include");
     if (init.method === "POST") {
@@ -160,7 +178,7 @@ it("only runs the captured read operations and hashes the account identifier", a
       );
     } else
       expect(path).toMatch(
-        /get_active_subscription_status|partner_plan_benefit_validation/,
+        /get_active_subscription_status|partner_plan_benefit_validation|^\/home$/,
       );
   }
 });

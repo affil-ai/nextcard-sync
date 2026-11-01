@@ -179,13 +179,17 @@ export async function readDoorDashSession(queries: typeof doorDashQueries) {
     );
   }
   // Store placements expose account campaigns without creating a cart.
-  // Keep grocery/retail provenance so a complete empty check can infer exhaustion.
-  if (Array.isArray(cartData) && cartData.length === 0) {
+  // Restaurant checkouts hide non-restaurant promos, so check grocery/retail
+  // stores unless a grocery/retail cart already provides that context.
+  // Keep provenance so a complete check can infer exhaustion.
+  const checkedCarts = reads.filter((item) => item.source.startsWith("context:")).length;
+  if (Array.isArray(cartData) && !carts.some((cart) => record(cart).isConvenienceCart === true) && checkedCarts < 3) {
     const stores = await read("stores", "/home", undefined, true);
     reads.push(stores);
     const storeContexts = record(stores.data).stores;
     if (Array.isArray(storeContexts)) {
-      for (const [index, value] of storeContexts.entries()) {
+      // The backend accepts at most three checkout and store contexts.
+      for (const [index, value] of storeContexts.slice(0, 3 - checkedCarts).entries()) {
         const store = record(value);
         const storeId = text(store.id);
         if (!storeId) continue;
