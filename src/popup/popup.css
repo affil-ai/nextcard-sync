@@ -2257,7 +2257,8 @@
 .offers-guided-setup > #bofaOffersCard,
 .offers-guided-setup > #chaseOffersCard,
 .offers-guided-setup > #amexOffersCard,
-.offers-guided-setup > #citiOffersCard {
+.offers-guided-setup > #citiOffersCard,
+.offers-guided-setup > #capitaloneOffersCard {
   display: none;
 }
 
