@@ -22,6 +22,7 @@ import {
   setStoredExtensionProfile,
 } from "../lib/extension-profile";
 import {
+  archiveRewardsAccountFromNextCard,
   deleteFromNextCard,
   deleteHouseholdProviderFromNextCard,
   pullFromNextCard,
@@ -922,6 +923,29 @@ async function pushScrapedData(providerId: ProviderId, data: unknown) {
   return result;
 }
 
+async function archiveRewardsAccount(accountId: string, expectedScope: HouseholdOperationScope | null) {
+  const generation = getAuthGeneration();
+  const context = await refreshHouseholdContext();
+  const member = context ? await getSelectedHouseholdMember(context) : null;
+  if (!context || !member) return { ok: false, error: "Refresh your profile and try again." };
+  const currentScope = {
+    accountScopeId: context.accountScopeId, memberId: member.id,
+    memberDisplayName: member.displayName, memberLifecycleVersion: member.lifecycleVersion,
+    contextRevision: context.contextRevision,
+  };
+  if (generation !== getAuthGeneration() || (expectedScope
+    ? !householdOperationScopesMatch(expectedScope, currentScope)
+    : context.householdActivated)) return { ok: false, error: "Your profile changed. Refresh and try again." };
+  const household = context.householdActivated && context.capabilities.householdReads && context.members.length > 1;
+  if (!household && !member.isPrimary) return { ok: false, error: "Refresh your profile and try again." };
+  const result = await archiveRewardsAccountFromNextCard(accountId, household ? currentScope : undefined);
+  if (result.ok) {
+    try { await hydrateFromNextCard(); }
+    catch { /* The archive committed. A later refresh reloads the remaining rows. */ }
+  }
+  return result;
+}
+
 async function deleteProviderFromNextCard(providerId: ProviderId, expectedScope?: HouseholdOperationScope) {
   // Deletion is its own immutable operation. Never reuse the operation ID from
   // the sync that originally created the provider account.
@@ -1261,6 +1285,7 @@ chrome.runtime.onMessage.addListener(
     getCachedAuth,
     recordConsent,
     pushToNextCard: pushScrapedData,
+    archiveRewardsAccount,
     deleteFromNextCard: deleteProviderFromNextCard,
     isProviderLocked: providerIsLocked,
     prepareSyncTarget: async (providerId, expectedScope) =>

@@ -61,6 +61,7 @@ export function createHomeRenderer(options: {
   markFirstSyncCompleted: () => void;
   onProviderSelected: (providerId: ProviderId) => void;
   onLockedProviderSelected: (providerId: ProviderId) => void;
+  onSummaryRemoveRequested: (summary: ExtensionRewardsSummary) => Promise<{ ok: boolean }>;
   onSummarySelected: (summary: ExtensionRewardsSummary) => void;
   onSummarySyncRequested: (providerId: ProviderId) => void;
   onSummaryCancelRequested: (providerId: ProviderId) => void;
@@ -69,6 +70,9 @@ export function createHomeRenderer(options: {
   onSyncAllCancelRequested: () => void;
 }) {
   let lastHomeSnapshot = "";
+  let removalId: string | null = null;
+  let removalPending = false;
+  let removalError = false;
 
   function createStopButton(providerId: ProviderId) {
     const button = document.createElement("button");
@@ -84,7 +88,7 @@ export function createHomeRenderer(options: {
     return button;
   }
 
-  return (allStates: Record<ProviderId, ProviderSyncState>) => {
+  return function render(allStates: Record<ProviderId, ProviderSyncState>): void {
     const firstSyncCompleted = options.getFirstSyncCompleted();
     const previewRewardsGuide = options.getRewardsGuidePreview?.() ?? false;
     const extensionProfile = options.getExtensionProfile();
@@ -252,6 +256,61 @@ export function createHomeRenderer(options: {
         card
           .querySelector<HTMLButtonElement>(".rewards-summary-sync")
           ?.addEventListener("click", () => options.onSummarySyncRequested(summary.provider));
+        const remove = document.createElement("button");
+        remove.type = "button";
+        remove.className = "rewards-summary-secondary rewards-summary-remove";
+        remove.textContent = "Remove program";
+        remove.disabled = isSyncing || awaitingConfirmation || isSyncAllRunning || removalPending;
+        remove.addEventListener("click", () => {
+          removalId = summary.loyaltyAccountId;
+          removalError = false;
+          lastHomeSnapshot = "";
+          render(allStates);
+          options.providerList.querySelector<HTMLButtonElement>(".rewards-remove-cancel")?.focus();
+        });
+        actions?.appendChild(remove);
+        if (removalId === summary.loyaltyAccountId) {
+          const confirmation = document.createElement("div");
+          confirmation.className = "rewards-remove-confirmation";
+          confirmation.setAttribute("role", "group");
+          confirmation.setAttribute("aria-label", `Remove ${summary.programName}`);
+          const help = document.createElement("p");
+          help.textContent = `Remove ${summary.programName} from this profile? Your history stays saved and future syncs keep it hidden. Restore it from Rewards on the website.`;
+          const cancel = document.createElement("button");
+          cancel.type = "button";
+          cancel.className = "rewards-summary-secondary rewards-remove-cancel";
+          cancel.textContent = "Cancel";
+          cancel.disabled = removalPending;
+          cancel.onclick = () => { removalId = null; removalError = false; lastHomeSnapshot = ""; render(allStates); };
+          const confirm = document.createElement("button");
+          confirm.type = "button";
+          confirm.className = "rewards-summary-secondary rewards-remove-confirm";
+          confirm.textContent = removalPending ? "Removing…" : "Remove program";
+          confirm.disabled = removalPending || isSyncing || awaitingConfirmation || isSyncAllRunning;
+          confirm.onclick = () => {
+            if (removalPending) return;
+            removalPending = true;
+            removalError = false;
+            lastHomeSnapshot = "";
+            render(allStates);
+            void options.onSummaryRemoveRequested(summary).then((result) => {
+              if (result.ok) removalId = null;
+              else removalError = true;
+            }).catch(() => { removalError = true; }).finally(() => {
+              removalPending = false;
+              lastHomeSnapshot = "";
+              render(allStates);
+            });
+          };
+          confirmation.append(help, cancel, confirm);
+          if (removalError) {
+            const error = document.createElement("p");
+            error.setAttribute("role", "alert");
+            error.textContent = "Couldn't remove this program. Refresh your profile and try again.";
+            confirmation.append(error);
+          }
+          card.appendChild(confirmation);
+        }
         options.providerList.appendChild(card);
       }
     }

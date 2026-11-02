@@ -3116,3 +3116,9 @@
   cursor: wait;
   opacity: 0.6;
 }
+
+.rewards-summary-actions { flex-wrap: wrap; }
+.rewards-summary-remove { flex-basis: 100%; }
+.rewards-remove-confirmation { padding: 12px; color: #342019; }
+.rewards-remove-confirmation p { margin: 0 0 12px; line-height: 1.5; }
+.rewards-remove-confirmation button { padding: 8px; margin-right: 8px; }

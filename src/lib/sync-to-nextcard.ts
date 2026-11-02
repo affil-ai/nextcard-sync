@@ -34,7 +34,7 @@ import type { StandardizedLoyaltyData, StandardizedIssuerData, QualifyingMetric,
 import { getAuth } from "./auth";
 import { redactLoyaltyIdentifiers } from "./loyalty-privacy";
 import { normalizeRewardsSummaries } from "./rewards-summary";
-import type { HouseholdSyncTarget } from "./household-context";
+import type { HouseholdOperationScope, HouseholdSyncTarget } from "./household-context";
 
 function getExtensionVersion() {
   return typeof chrome === "undefined"
@@ -953,4 +953,42 @@ export async function deleteHouseholdProviderFromNextCard(
       error: error instanceof Error ? error.message : "Network error",
     };
   }
+}
+
+// Archive one rewards row. Provider clear-data intentionally has different semantics.
+export async function archiveRewardsAccountFromNextCard(
+  loyaltyAccountId: string,
+  scope?: HouseholdOperationScope,
+): Promise<{ ok: boolean; error?: string }> {
+  const auth = await getAuth();
+  if (!auth) return { ok: false, error: "Not signed in" };
+  const response = await fetch(
+    `${__CONVEX_SITE_URL__}/extension/v2/rewards/archive`,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${auth.token}`,
+        "X-Nextcard-Extension-Version": getExtensionVersion(),
+        "X-Nextcard-Protocol-Version": "2",
+      },
+      body: JSON.stringify({
+        loyaltyAccountId,
+        ...(scope
+          ? {
+              memberId: scope.memberId,
+              contextRevision: scope.contextRevision,
+              memberLifecycleVersion: scope.memberLifecycleVersion,
+            }
+          : {}),
+      }),
+    },
+  );
+  if (!response.ok)
+    return {
+      ok: false,
+      error:
+        "Couldn't remove this program. Refresh your profile and try again.",
+    };
+  return { ok: true };
 }

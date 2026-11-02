@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { getAuth } from "./auth";
-import { pushToNextCard } from "./sync-to-nextcard";
+import { archiveRewardsAccountFromNextCard, pushToNextCard } from "./sync-to-nextcard";
 
 const hiltonData = {
   pointsBalance: 100_000,
@@ -270,4 +270,45 @@ it("sends no request after the sync context has already changed", async () => {
   await expect(pushToNextCard("hilton", hiltonData, { isContextCurrent: async () => false }))
     .resolves.toMatchObject({ ok: false, error: "sync_cancelled" });
   expect(fetchMock).not.toHaveBeenCalled();
+});
+
+
+describe("archive one saved rewards account", () => {
+  it("targets the chosen row and household revision without deleting its provider", async () => {
+    vi.stubGlobal("chrome", {
+      runtime: { getManifest: () => ({ version: "0.9.4" }) },
+    });
+    const fetchMock = vi.fn(async () => ({ ok: true, status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+    await expect(
+      archiveRewardsAccountFromNextCard("account-1", {
+        accountScopeId: "owner",
+        memberId: "member-2",
+        memberDisplayName: "Spouse",
+        memberLifecycleVersion: 3,
+        contextRevision: "revision-2",
+      }),
+    ).resolves.toEqual({ ok: true });
+    expect(fetchMock.mock.calls).toHaveLength(1);
+    const call = vi.mocked(fetch).mock.calls[0];
+    expect(call?.[0]).toContain("/extension/v2/rewards/archive");
+    expect(JSON.parse(String(call?.[1]?.body))).toEqual({
+      loyaltyAccountId: "account-1",
+      memberId: "member-2",
+      memberLifecycleVersion: 3,
+      contextRevision: "revision-2",
+    });
+  });
+  it("retains the saved program on a server rejection", async () => {
+    vi.stubGlobal("chrome", {
+      runtime: { getManifest: () => ({ version: "0.9.4" }) },
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => ({ ok: false, status: 409 })),
+    );
+    await expect(
+      archiveRewardsAccountFromNextCard("account-1"),
+    ).resolves.toMatchObject({ ok: false });
+  });
 });

@@ -256,6 +256,7 @@ export function createMessageRouter(options: {
   getCachedAuth: () => Promise<NextCardAuth | null>;
   recordConsent: (message: Record<string, unknown>) => Promise<void>;
   pushToNextCard: (providerId: ProviderId, data: unknown) => Promise<unknown>;
+  archiveRewardsAccount: (accountId: string, expectedScope: HouseholdOperationScope | null) => Promise<{ ok: boolean; error?: string }>;
   deleteFromNextCard: (providerId: ProviderId, expectedScope?: HouseholdOperationScope) => Promise<{ ok: boolean; error?: string }>;
   prepareSyncTarget?: (providerId: ProviderId, expectedScope?: HouseholdOperationScope) => Promise<boolean>;
   confirmHouseholdSync?: (correction?: { operationId: string }) => Promise<{ ok: boolean; error?: string }>;
@@ -779,6 +780,18 @@ export function createMessageRouter(options: {
             );
             sendResponse({ ok: false, error: cancelMessage });
           });
+        return true;
+      }
+
+      case "REMOVE_REWARDS_ACCOUNT": {
+        const scope = parseHouseholdOperationScope(message.expectedScope);
+        if (typeof message.loyaltyAccountId !== "string" || (message.expectedScope !== null && !scope)) {
+          sendResponse({ ok: false, error: "Refresh your profile and try again." });
+          return true;
+        }
+        void options.archiveRewardsAccount(message.loyaltyAccountId, scope ?? null)
+          .then(sendResponse)
+          .catch(() => sendResponse({ ok: false, error: "Couldn't remove this program. Try again." }));
         return true;
       }
 

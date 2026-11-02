@@ -402,7 +402,7 @@ it("leaves every DoorDash reply to its dedicated listener", () => {
     providerRegistry, stateStore: createRuntimeStateStore(),
     syncHandlers: { generic: unused, atmos: unused, "chase-v1": unused, amex: unused, capitalone: unused, hyatt: unused, bilt: unused },
     cancelRun: unused, startSignIn: unused, signOut: unused, getCachedAuth: unused,
-    recordConsent: unused, pushToNextCard: unused, deleteFromNextCard: unused,
+    recordConsent: unused, pushToNextCard: unused, archiveRewardsAccount: unused, deleteFromNextCard: unused,
     offerOperations: store,
     offerCoordinator: createOfferOperationCoordinator(store, async () => null, async () => true),
     travelSyncCoordinator: { start: unused, getStatus: unused, cancel: unused, resetResult: unused },

@@ -1,3 +1,4 @@
+import type { HouseholdOperationScope } from "./household-context";
 import type {
   CardSyncSummary,
   AtmosProviderData,
@@ -230,6 +231,7 @@ export type ExtensionMessage =
   | { type: "SIGN_IN_NEXTCARD" }
   | { type: "SIGN_OUT_NEXTCARD" }
   | { type: "GET_AUTH_STATE" }
+  | { type: "REMOVE_REWARDS_ACCOUNT"; loyaltyAccountId: string; expectedScope: HouseholdOperationScope | null }
   | { type: "GET_EXTENSION_PROFILE" }
   | { type: "REFRESH_EXTENSION_PROFILE" }
   | { type: "GET_OFFER_OPERATION_STATUS" }

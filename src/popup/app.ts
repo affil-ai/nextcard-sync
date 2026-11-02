@@ -38,6 +38,7 @@ import {
   resetTravelSyncStatus,
   startProviderSync,
   setDisplayedHouseholdScope,
+  getDisplayedHouseholdScope,
   startTravelSync,
   subscribeToOnboardingFlags,
   subscribeToRewardsSummaries,
@@ -4075,6 +4076,18 @@ const renderHomeContent = createHomeRenderer({
   onProviderSelected: handleProviderSelected,
   onLockedProviderSelected: handleLockedProviderSelected,
   onSummarySelected: (summary) => openRewards(summary.dashboardPath),
+  onSummaryRemoveRequested: async (summary) => {
+    const expectedScope = getDisplayedHouseholdScope();
+    if (expectedScope === undefined) return { ok: false };
+    const result: unknown = await chrome.runtime.sendMessage({
+      type: "REMOVE_REWARDS_ACCOUNT", loyaltyAccountId: summary.loyaltyAccountId, expectedScope,
+    });
+    const ok = typeof result === "object" && result !== null && "ok" in result && result.ok === true;
+    if (ok) latestRewardsSummaries = latestRewardsSummaries.filter(
+      (entry) => entry.loyaltyAccountId !== summary.loyaltyAccountId,
+    );
+    return { ok };
+  },
   onSummarySyncRequested: (providerId) => {
     resetRewardsSyncAllState();
     void requestSync(providerId);

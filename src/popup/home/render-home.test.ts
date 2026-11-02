@@ -100,7 +100,7 @@ it("lets a saved program cancel its active sync directly from the summary card",
       getRewardsSummaries: () => [{ ...summary, provider: "capitalone", programName: "Capital One Miles" }],
       getSyncAllState: () => ({ status: "idle", providerIds: [], currentProviderId: null, processedCount: 0, failedCount: 0, startedAt: null, updatedAt: null }),
       markFirstSyncCompleted() {}, onProviderSelected() {}, onLockedProviderSelected() {},
-      onSummarySelected() {}, onSummarySyncRequested, onSummaryCancelRequested, onAccountReady,
+      onSummaryRemoveRequested: async () => ({ ok: true }), onSummarySelected() {}, onSummarySyncRequested, onSummaryCancelRequested, onAccountReady,
       onSyncAllRequested() {}, onSyncAllCancelRequested() {},
     });
     render(states);
@@ -158,4 +158,72 @@ it("lets a saved program cancel its active sync directly from the summary card",
     render(states);
     expect(providerList.querySelector('[data-sync-provider="aa"] button')?.hasAttribute("disabled")).toBe(true);
   } finally { vi.unstubAllGlobals(); }
+});
+
+
+it("confirms a program removal, keeps failed requests visible, and retries the exact row", async () => {
+  vi.stubGlobal("chrome", {
+    runtime: { getURL: (path: string) => path },
+    storage: { local: { set: vi.fn() } },
+  });
+  const { createHomeRenderer } = await import("./render-home");
+  const { createRuntimeStateStore } =
+    await import("../../background/core/runtime-state");
+  const states = createRuntimeStateStore().states;
+  const remove = vi
+    .fn()
+    .mockResolvedValueOnce({ ok: false })
+    .mockResolvedValueOnce({ ok: true });
+  const providerList = document.createElement("div");
+  const render = createHomeRenderer({
+    providerList,
+    tourTooltip: document.createElement("div"),
+    getFirstSyncCompleted: () => true,
+    getExtensionProfile: () => null,
+    getRewardsSummaries: () => [summary],
+    getSyncAllState: () => ({
+      status: "idle",
+      providerIds: [],
+      currentProviderId: null,
+      processedCount: 0,
+      failedCount: 0,
+      startedAt: null,
+      updatedAt: null,
+    }),
+    markFirstSyncCompleted() {},
+    onProviderSelected() {},
+    onLockedProviderSelected() {},
+    onSummarySelected() {},
+    onSummaryRemoveRequested: remove,
+    onSummarySyncRequested() {},
+    onSummaryCancelRequested() {},
+    onAccountReady: async () => true,
+    onSyncAllRequested() {},
+    onSyncAllCancelRequested() {},
+  });
+  const click = (selector: string) => {
+    const button = providerList.querySelector(selector);
+    if (!(button instanceof HTMLButtonElement))
+      throw new Error(`Missing ${selector}`);
+    button.click();
+  };
+  render(states);
+  click(".rewards-summary-remove");
+  expect(providerList.textContent).toContain("Your history stays saved");
+  expect(remove).not.toHaveBeenCalled();
+  click(".rewards-remove-cancel");
+  expect(providerList.querySelector(".rewards-remove-confirm")).toBeNull();
+  click(".rewards-summary-remove");
+  click(".rewards-remove-confirm");
+  await vi.waitFor(() =>
+    expect(providerList.querySelector('[role="alert"]')).not.toBeNull(),
+  );
+  expect(providerList.querySelector(".rewards-summary-card")).not.toBeNull();
+  click(".rewards-remove-confirm");
+  await vi.waitFor(() =>
+    expect(providerList.querySelector(".rewards-remove-confirm")).toBeNull(),
+  );
+  expect(remove).toHaveBeenNthCalledWith(1, summary);
+  expect(remove).toHaveBeenNthCalledWith(2, summary);
+  vi.unstubAllGlobals();
 });
