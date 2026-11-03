@@ -256,3 +256,63 @@ it("does not substitute another offer when a selected offer disappears", async (
   expect(complete.lastError).toContain("no longer available");
   expect(run.attempted).toHaveLength(0);
 });
+
+
+it.each([true, false])("imports the modern Amex listing without reconciling an unproven snapshot, enrolled offer returned: %s", async (includeEnrolled) => {
+  const messages: Message[] = [];
+  vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: false, status: 403 }));
+  vi.stubGlobal("chrome", {
+    runtime: {
+      lastError: undefined,
+      onMessage: {
+        addListener: (listener: NonNullable<typeof receive>) => { receive = listener; },
+      },
+      sendMessage: (message: Message, reply?: (value: unknown) => void) => {
+        messages.push(message);
+        if (message.type === "AMEX_OFFERS_READ_PRODUCTS") {
+          reply?.({ products: [{ accountNumberProxy: "card", description: "Example card", display_account_number: "12345" }] });
+        }
+        if (message.type === "AMEX_OFFERS_FETCH") {
+          if (String(message.url).includes("ReadOffersHubPresentation")) {
+            reply?.({ status: 500 });
+          } else {
+            const body: unknown = JSON.parse(String(message.body));
+            if (!body || typeof body !== "object" || !("status" in body) || !Array.isArray(body.status)) {
+              throw new Error("Missing requested statuses");
+            }
+            const statuses = body.status;
+            reply?.({ status: 200, data: {
+              offers: [
+                { id: "available", name: "Available merchant", type: "MERCHANT", status: "ELIGIBLE" },
+                { id: "already-added", name: "Previously activated merchant", type: "MERCHANT", status: "ENROLLED" },
+              ].filter(offer => statuses.includes(offer.status) && (includeEnrolled || offer.status !== "ENROLLED")),
+              count: { eligible: 1 },
+            } });
+          }
+        }
+        if (message.type === "AMEX_OFFERS_CACHED_TERMS") {
+          return Promise.resolve(["available", "already-added"]);
+        }
+        return Promise.resolve({ ok: true, saveStatus: "saved" });
+      },
+    },
+  });
+  await import("./amex-offers");
+  const ready = new Promise(resolve => {
+    receive?.({ type: "AMEX_OFFERS_DISCOVER", runId: "discovery" }, {}, resolve);
+  });
+  await expect(ready).resolves.toMatchObject({
+    offerCounts: { card: 1 },
+    offersByCard: { card: [{ id: "available" }] },
+  });
+  await vi.runAllTimersAsync();
+  const snapshots = messages.filter(message => message.type === "AMEX_OFFERS_DETECTED");
+  expect(snapshots[0]).toMatchObject({
+    snapshotComplete: false,
+    detectedOffers: [
+      { issuerOfferId: "available", status: "detected" },
+      ...(includeEnrolled ? [{ issuerOfferId: "already-added", status: "enrolled" }] : []),
+    ],
+  });
+  expect(messages.some(message => message.type === "AMEX_OFFERS_ENROLL_ONE")).toBe(false);
+});

@@ -617,7 +617,9 @@ async function listAllOffers(cardId: string, locale = "en-US", deadline?: number
   const firstPage = await listOffersLegacyPage(cardId, locale, 1, readTimeout());
   if (!firstPage) {
     if (readTimeout() === 0) return null;
-    return await listOffersModern(cardId, locale, ["ELIGIBLE"], readTimeout());
+    // Discovery must also observe offers added directly or through another app.
+    // Combined listings stay incomplete until Amex supplies a verifiable total.
+    return await listOffersModern(cardId, locale, ["ELIGIBLE", "ENROLLED"], readTimeout());
   }
   if (firstPage.rawOfferCount === 0) {
     return { ...firstPage, complete: true };
