@@ -1,3 +1,4 @@
+import { createRewardsSummaryCache } from "./core/rewards-cache";
 import { createProviderSyncTabOpener, createSyncRunCanceller } from "./core/tab-utils";
 import { registerBofaOffers } from "./bofa-offers";
 import { registerDoorDashTest } from "./doordash";
@@ -32,6 +33,7 @@ import {
 } from "../lib/sync-to-nextcard";
 import {
   createHouseholdSyncTarget,
+  getRewardsArchiveScope,
   getCurrentHouseholdMemberScope,
   getCurrentHouseholdOperationScope,
   getSelectedHouseholdMember,
@@ -45,7 +47,7 @@ import {
   type HouseholdOperationScope,
   type HouseholdSyncTarget,
 } from "../lib/household-context";
-import { REWARDS_SUMMARIES_STORAGE_KEY } from "../lib/rewards-summary";
+import { normalizeRewardsSummaries, REWARDS_SUMMARIES_STORAGE_KEY } from "../lib/rewards-summary";
 import { syncOffersToNextCard, syncDetectedOffersToNextCard, retryPendingOfferSyncs, pullOfferUrlCache } from "../lib/sync-offers-to-nextcard";
 import type { OfferSyncPayload, DetectedOfferSyncPayload } from "../lib/sync-offers-to-nextcard";
 import { retryPendingOfferActivationCompletions } from "../lib/offer-activation-usage";
@@ -101,7 +103,10 @@ const offerCoordinator = createOfferOperationCoordinator(
 );
 const extensionNavigatingTabs = createExtensionNavigationState();
 
+const rewardsCache = createRewardsSummaryCache({ storage: chrome.storage.local, getAuthGeneration });
+
 const persistedStateHydrated = (async () => {
+  const read = rewardsCache.capture();
   const context = await getStoredHouseholdContext();
   const selectedMember = context
     ? await getSelectedHouseholdMember(context)
@@ -123,10 +128,9 @@ const persistedStateHydrated = (async () => {
       selectedMember.lifecycleVersion,
     );
     const stored = await chrome.storage.local.get(scopedSummaryKey);
-    await chrome.storage.local.set({
-      [REWARDS_SUMMARIES_STORAGE_KEY]: Array.isArray(stored[scopedSummaryKey])
-        ? stored[scopedSummaryKey]
-        : [],
+    await rewardsCache.publish(read, normalizeRewardsSummaries(stored[scopedSummaryKey]), {
+      accountScopeId: context.accountScopeId, memberId: selectedMember.id,
+      memberLifecycleVersion: selectedMember.lifecycleVersion,
     });
     return;
   }
@@ -181,6 +185,7 @@ function isProviderAttemptMessage(
 }
 
 async function hydrateFromNextCard() {
+  const read = rewardsCache.capture();
   const context = await refreshHouseholdContext()
     ?? await getStoredHouseholdContext();
   const selectedMember = context
@@ -191,6 +196,7 @@ async function hydrateFromNextCard() {
     && context.members.length > 1
     && selectedMember,
   );
+  if (!rewardsCache.isCurrent(read)) return;
   if (context && selectedMember && useHousehold) {
     await stateStore.setHouseholdScope({
       accountScopeId: context.accountScopeId,
@@ -201,25 +207,21 @@ async function hydrateFromNextCard() {
   } else {
     await stateStore.setHouseholdScope(null);
   }
+  if (!rewardsCache.isCurrent(read)) return;
   const result = useHousehold && selectedMember
     ? await pullHouseholdMemberFromNextCard(selectedMember.id)
     : await pullFromNextCard();
-  if (!result.ok) {
+  if (!result.ok || !rewardsCache.isCurrent(read)) {
     return;
   }
 
   if (result.summaries) {
-    const updates: Record<string, unknown> = {
-      [REWARDS_SUMMARIES_STORAGE_KEY]: result.summaries,
-    };
-    if (context && selectedMember && useHousehold) {
-      updates[getHouseholdRewardsSummariesStorageKey(
-        context.accountScopeId,
-        selectedMember.id,
-        selectedMember.lifecycleVersion,
-      )] = result.summaries;
-    }
-    await chrome.storage.local.set(updates);
+    const published = await rewardsCache.publish(read, result.summaries,
+      context && selectedMember && useHousehold ? {
+        accountScopeId: context.accountScopeId, memberId: selectedMember.id,
+        memberLifecycleVersion: selectedMember.lifecycleVersion,
+      } : null);
+    if (!published) return;
   }
 
   if (!Array.isArray(result.accounts) || result.accounts.length === 0) {
@@ -233,6 +235,7 @@ async function hydrateFromNextCard() {
     firstSyncCompleted: true,
   });
 
+  if (!rewardsCache.isCurrent(read)) return;
   let hydratedCount = 0;
   for (const account of result.accounts) {
     const providerValue: unknown = account.provider;
@@ -334,6 +337,8 @@ async function getHouseholdPopupState() {
 }
 
 async function switchHouseholdMember(memberId: string) {
+  await rewardsCache.invalidateProfile();
+  const read = rewardsCache.capture();
   const context = await refreshHouseholdContext()
     ?? await getStoredHouseholdContext();
   const member = context?.members.find((candidate) => candidate.id === memberId);
@@ -354,8 +359,9 @@ async function switchHouseholdMember(memberId: string) {
     "offerUrlCache",
     "detectedOfferUrlCache",
   ]);
-  await chrome.storage.local.set({ [REWARDS_SUMMARIES_STORAGE_KEY]: [] });
+  if (!await rewardsCache.publish(read, [], null)) return {ok:false,error:"household_scope_changed"};
   await setSelectedHouseholdMember(member.id);
+  if (!rewardsCache.isCurrent(read)) return {ok:false,error:"household_scope_changed"};
   await stateStore.setHouseholdScope({
     accountScopeId: context.accountScopeId,
     memberId: member.id,
@@ -368,12 +374,9 @@ async function switchHouseholdMember(memberId: string) {
     member.lifecycleVersion,
   );
   const scopedSummaries = await chrome.storage.local.get(scopedSummaryKey);
-  await chrome.storage.local.set({
-    [REWARDS_SUMMARIES_STORAGE_KEY]: Array.isArray(
-      scopedSummaries[scopedSummaryKey],
-    )
-      ? scopedSummaries[scopedSummaryKey]
-      : [],
+  await rewardsCache.publish(read, normalizeRewardsSummaries(scopedSummaries[scopedSummaryKey]), {
+    accountScopeId: context.accountScopeId, memberId: member.id,
+    memberLifecycleVersion: member.lifecycleVersion,
   });
   await hydrateFromNextCard();
   await clearInjectedOfferAlerts();
@@ -735,7 +738,11 @@ async function recordConsent(message: Record<string, unknown>) {
 
 let accountTransition: Promise<void> = Promise.resolve();
 function transitionAccount(action: () => Promise<void>): Promise<void> {
-  const next = accountTransition.then(action);
+  const previousPublications = rewardsCache.invalidateProfile();
+  const next = accountTransition.then(async () => {
+    await previousPublications;
+    await action();
+  });
   accountTransition = next.catch(() => undefined);
   return next;
 }
@@ -924,25 +931,12 @@ async function pushScrapedData(providerId: ProviderId, data: unknown) {
 }
 
 async function archiveRewardsAccount(accountId: string, expectedScope: HouseholdOperationScope | null) {
+  const read = rewardsCache.capture();
   const generation = getAuthGeneration();
-  const context = await refreshHouseholdContext();
-  const member = context ? await getSelectedHouseholdMember(context) : null;
-  if (!context || !member) return { ok: false, error: "Refresh your profile and try again." };
-  const currentScope = {
-    accountScopeId: context.accountScopeId, memberId: member.id,
-    memberDisplayName: member.displayName, memberLifecycleVersion: member.lifecycleVersion,
-    contextRevision: context.contextRevision,
-  };
-  if (generation !== getAuthGeneration() || (expectedScope
-    ? !householdOperationScopesMatch(expectedScope, currentScope)
-    : context.householdActivated)) return { ok: false, error: "Your profile changed. Refresh and try again." };
-  const household = context.householdActivated && context.capabilities.householdReads && context.members.length > 1;
-  if (!household && !member.isPrimary) return { ok: false, error: "Refresh your profile and try again." };
-  const result = await archiveRewardsAccountFromNextCard(accountId, household ? currentScope : undefined);
-  if (result.ok) {
-    try { await hydrateFromNextCard(); }
-    catch { /* The archive committed. A later refresh reloads the remaining rows. */ }
-  }
+  const scope = await getRewardsArchiveScope(expectedScope);
+  if (generation !== getAuthGeneration()) return {ok:false,error:"Your account changed. Refresh and try again."};
+  const result = await archiveRewardsAccountFromNextCard(accountId, scope ?? undefined);
+  if (result.ok) await rewardsCache.remove(read, accountId, scope);
   return result;
 }
 

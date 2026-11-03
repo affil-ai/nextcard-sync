@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getAuth, getAuthGeneration } from "./auth";
 import {
   createHouseholdSyncTarget,
+  getRewardsArchiveScope,
   getCurrentHouseholdMemberScope,
   getCurrentHouseholdOperationScope,
   isLegacyHouseholdOperationMode,
@@ -471,5 +472,26 @@ describe("household extension context", () => {
     await expect(createHouseholdSyncTarget("united")).rejects.toThrow(
       "extension_writes_disabled",
     );
+  });
+});
+
+
+describe("saved rewards removal scope",()=>{
+  it("allows a personal account with no selectable household members",async()=>{
+    const personal={...context,householdActivated:false,members:[],capabilities:{...context.capabilities,householdReads:false,householdWrites:false,loyaltyReads:false,loyaltyWrites:false}};
+    vi.stubGlobal("fetch",vi.fn(async()=>({ok:true,json:async()=>personal})));
+    await expect(getRewardsArchiveScope(null)).resolves.toBeNull();
+  });
+  it("rejects a personal confirmation after household activation instead of guessing a profile",async()=>{
+    vi.stubGlobal("fetch",vi.fn(async()=>({ok:true,json:async()=>context})));
+    await expect(getRewardsArchiveScope(null)).rejects.toThrow("household_scope_changed");
+  });
+  it("matches the confirmed profile and rejects an intervening selection change",async()=>{
+    stored.nextcard_household_selected_member_v2="member-secondary";
+    vi.stubGlobal("fetch",vi.fn(async()=>({ok:true,json:async()=>context})));
+    const primary={accountScopeId:context.accountScopeId,memberId:"member-primary",memberDisplayName:"Vishal",memberLifecycleVersion:1,contextRevision:context.contextRevision};
+    await expect(getRewardsArchiveScope(primary)).rejects.toThrow("household_scope_changed");
+    const spouse={...primary,memberId:"member-secondary",memberDisplayName:"Family member",memberLifecycleVersion:3};
+    await expect(getRewardsArchiveScope(spouse)).resolves.toEqual(spouse);
   });
 });

@@ -591,3 +591,34 @@ export function getHouseholdScopedStorageKey(
     .map(encodeURIComponent)
     .join("::");
 }
+
+// Personal accounts expose no selectable members. Only a personal confirmation
+// may use the primary-only archive endpoint without a household scope.
+export async function getRewardsArchiveScope(
+  expectedScope: HouseholdOperationScope | null,
+): Promise<HouseholdOperationScope | null> {
+  const generation = getAuthGeneration();
+  const context = await refreshHouseholdContext();
+  if (!context) throw new Error("household_context_unavailable");
+  if (!context.householdActivated) {
+    if (expectedScope !== null || generation !== getAuthGeneration())
+      throw new Error("household_scope_changed");
+    return null;
+  }
+  const member = await getSelectedHouseholdMember(context);
+  if (!member || !context.capabilities.householdReads || expectedScope === null)
+    throw new Error("household_scope_changed");
+  const scope = {
+    accountScopeId: context.accountScopeId,
+    memberId: member.id,
+    memberDisplayName: member.displayName,
+    memberLifecycleVersion: member.lifecycleVersion,
+    contextRevision: context.contextRevision,
+  };
+  if (
+    generation !== getAuthGeneration() ||
+    !householdOperationScopesMatch(expectedScope, scope)
+  )
+    throw new Error("household_scope_changed");
+  return scope;
+}
