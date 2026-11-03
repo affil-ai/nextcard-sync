@@ -378,6 +378,7 @@ export function getOfferOperationStatusText(
         : "Offer check needs attention";
     }
     case "adding":
+      if (state.issuer === "amex") return getAmexOfferProgressText(state);
       if (state.issuer === "chase") return getChaseOfferProgressText(state.processed ?? 0, state.total, state.verifying === true);
       return state.total == null
         ? `Adding ${issuerName} offers…`
@@ -438,4 +439,30 @@ export function getOfferSaveStatusText(
 export function getChaseOfferProgressText(processed: number, total: number | null, verifying: boolean) {
   if (verifying) return "Verifying activations…";
   return total == null ? "Preparing offers…" : `Processing ${processed} of ${total}`;
+}
+
+
+export function getAmexOfferProgressText(
+  state: Pick<
+    OfferOperationState,
+    "added" | "failed" | "unverified" | "processed" | "total" | "verifying"
+  >,
+) {
+  const processed = Math.max(
+    state.processed ?? 0,
+    state.added + state.failed + (state.unverified ?? 0),
+  );
+  const progress = state.verifying
+    ? state.total == null
+      ? "Verifying Amex offers…"
+      : `Verifying · ${processed} of ${state.total} processed`
+    : state.total == null
+      ? `Processing ${processed} offers`
+      : `Processing ${processed} of ${state.total}`;
+  const outcomes = [
+    state.added > 0 ? `${state.added} activated` : null,
+    state.failed > 0 ? `${state.failed} failed` : null,
+    (state.unverified ?? 0) > 0 ? `${state.unverified} unverified` : null,
+  ].filter(Boolean);
+  return [progress, ...outcomes].join(" · ");
 }

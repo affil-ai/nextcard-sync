@@ -1353,28 +1353,30 @@ export function createMessageRouter(options: {
         return true;
       }
 
-      case "AMEX_OFFERS_PROGRESS":
+      case "AMEX_OFFERS_PROGRESS": {
         if (typeof message.runId !== "string") {
           sendResponse({ ok: true, legacy: true });
           return true;
         }
+        const added = typeof message.added === "number" ? Math.max(0, message.added) : undefined;
+        const failed = typeof message.failed === "number" ? Math.max(0, message.failed) : undefined;
+        const unverified = typeof message.unverified === "number" ? Math.max(0, message.unverified) : undefined;
+        const processed = typeof message.processed === "number" ? Math.max(0, message.processed)
+          : added !== undefined && failed !== undefined && unverified !== undefined ? added + failed + unverified : undefined;
+        const total = typeof message.total === "number" ? Math.max(0, message.total) : undefined;
         void options.offerOperations.patchActiveRun("amex", message.runId, {
           phase: "adding",
-          added: typeof message.added === "number" ? Math.max(0, message.added) : 0,
-          failed: typeof message.failed === "number" ? Math.max(0, message.failed) : 0,
-          total: typeof message.total === "number" ? Math.max(0, message.total) : null,
-          remaining:
-            typeof message.total === "number"
-              ? Math.max(
-                  0,
-                  message.total
-                    - (typeof message.added === "number" ? message.added : 0)
-                    - (typeof message.failed === "number" ? message.failed : 0),
-                )
-              : null,
+          ...(added === undefined ? {} : { added }),
+          ...(failed === undefined ? {} : { failed }),
+          ...(unverified === undefined ? {} : { unverified }),
+          ...(processed === undefined ? {} : { processed }),
+          ...(total === undefined ? {} : { total }),
+          ...(typeof message.verifying === "boolean" ? { verifying: message.verifying } : {}),
+          ...(total !== undefined && processed !== undefined ? { remaining: Math.max(0, total - processed) } : {}),
         });
         sendResponse({ ok: true });
         return true;
+      }
 
       case "AMEX_OFFERS_COMPLETE": {
         if (typeof message.runId !== "string") {
@@ -1384,7 +1386,8 @@ export function createMessageRouter(options: {
         const runId = message.runId;
         const enrolledByCard = Array.isArray(message.enrolledByCard) ? message.enrolledByCard : null;
         void (async () => {
-          if (!await options.offerOperations.getActiveRun("amex", runId)) {
+          const active = await options.offerOperations.getActiveRun("amex", runId);
+          if (!active) {
             sendResponse({ ok: false, error: "stale_offer_operation" });
             return;
           }
@@ -1407,9 +1410,13 @@ export function createMessageRouter(options: {
                 && ((cardResult as Record<string, unknown>).enrolledOffers as unknown[]).length > 0
               ))
             : Array.isArray(message.enrolledOffers) && message.enrolledOffers.length > 0;
+          const processed = (typeof message.added === "number" ? message.added : 0)
+            + (typeof message.failed === "number" ? message.failed : 0)
+            + (typeof message.unverified === "number" ? message.unverified : 0);
+          const total = typeof message.total === "number" ? message.total : active.total;
           await options.offerOperations.patchActiveRun("amex", runId, {
-            phase: message.sessionExpired === true || (typeof message.lastError === "string" && message.added === 0)
-              ? "failed" : message.cancelled === true ? "cancelled" : "completed",
+            phase: message.cancelled === true ? "cancelled" : message.sessionExpired === true || (typeof message.lastError === "string" && message.added === 0)
+              ? "failed" : "completed",
             added: typeof message.added === "number" ? Math.max(0, message.added) : 0,
             failed: typeof message.failed === "number" ? Math.max(0, message.failed) : 0,
             cancelled: message.cancelled === true,
@@ -1421,19 +1428,16 @@ export function createMessageRouter(options: {
                   ? message.lastError
                   : null,
             saveStatus: hasOffersToSave ? "saving" : "saved",
-            remaining:
-              typeof message.total === "number"
-                ? Math.max(
-                    0,
-                    message.total
-                      - (typeof message.added === "number" ? message.added : 0)
-                      - (typeof message.failed === "number" ? message.failed : 0),
-                  )
-                : null,
+            processed,
+            total,
+            verifying: false,
+            remaining: total === null ? null : Math.max(0, total - processed),
           });
 
-          let syncError: string | null = null;
-          let completionSaveStatus: OfferSaveStatus = "saved";
+          let syncError: string | null = message.observationSaveStatus === "failed"
+            ? "Some already-active offers could not be saved. Refresh offers to retry." : null;
+          let completionSaveStatus: OfferSaveStatus = message.observationSaveStatus === "failed" ? "failed"
+            : message.observationSaveStatus === "queued_for_retry" ? "queued_for_retry" : "saved";
           if (enrolledByCard) {
             for (const cardResult of enrolledByCard) {
               if (!cardResult || typeof cardResult !== "object") continue;
@@ -1444,8 +1448,8 @@ export function createMessageRouter(options: {
                   ...record,
                   runId,
                 });
-                if (result === "queued_for_retry") completionSaveStatus = result;
-                if (result === "failed") completionSaveStatus = result;
+                if (result === "queued_for_retry") completionSaveStatus = mergeOfferSaveStatus(completionSaveStatus, result);
+                if (result === "failed") completionSaveStatus = mergeOfferSaveStatus(completionSaveStatus, result);
               } catch (error) {
                 syncError = error instanceof Error ? error.message : "Could not save one or more verified Amex offers";
               }
@@ -1454,7 +1458,7 @@ export function createMessageRouter(options: {
             try {
               const result = await options.syncEnrolledOffers?.("amex", message);
               if (result === "queued_for_retry" || result === "failed") {
-                completionSaveStatus = result;
+                completionSaveStatus = mergeOfferSaveStatus(completionSaveStatus, result);
               }
             } catch (error) {
               syncError = error instanceof Error ? error.message : "Could not save verified Amex offers";

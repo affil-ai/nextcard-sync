@@ -358,3 +358,84 @@ it.each(["ended", "exhausted", "pro-mislabeled"])("handles the %s reservation wi
     expect(document.getElementById("offerLimitBody")?.textContent).not.toContain("100");
   }
 });
+
+it("keeps Amex progress truthful when live events and background polling overlap", async () => {
+  vi.resetModules();
+  vi.useFakeTimers();
+  document.documentElement.innerHTML = readFileSync(
+    `${process.cwd()}/src/popup/popup.html`,
+    "utf8",
+  );
+  const state: OfferOperationState = {
+    ...createOfferOperation("amex", "amex-progress"),
+    phase: "adding",
+    total: 14,
+    processed: 3,
+    added: 0,
+    failed: 1,
+    unverified: 2,
+    remaining: 11,
+  };
+  const listeners: Array<(message: Record<string, unknown>) => void> = [];
+  vi.stubGlobal("chrome", {
+    runtime: {
+      sendMessage: vi.fn(async (message: Record<string, unknown>) => {
+        if (message.type === "GET_AUTH_STATE")
+          return {
+            token: "test-token",
+            email: "test@example.com",
+            signedInAt: "test",
+          };
+        if (message.type === "GET_EXTENSION_PROFILE")
+          return { accountLevel: "pro", offersFirstUiEnabled: true };
+        if (message.type === "GET_OFFER_ACTIVATION_USAGE")
+          return { accountLevel: "pro", used: 0, remaining: null, limit: null };
+        if (message.type === "GET_OFFER_OPERATION_STATUS")
+          return { active: state, history: { amex: state } };
+        return null;
+      }),
+      onMessage: {
+        addListener: (listener: (typeof listeners)[number]) =>
+          listeners.push(listener),
+      },
+      getManifest: () => ({ version: "0.9.5" }),
+      getURL: (path: string) => path,
+    },
+    storage: {
+      local: {
+        get: async () => ({
+          consentGiven: true,
+          firstSyncCompleted: true,
+          offerConsentVersion: 100,
+        }),
+        set: async () => {},
+        remove: async () => {},
+      },
+      onChanged: { addListener: () => {}, removeListener: () => {} },
+    },
+    tabs: { create: vi.fn() },
+    windows: { getCurrent: async () => ({ id: 1 }) },
+  });
+  await import("./app");
+  const detail = document.getElementById("amexOffersProgressDetail");
+  await vi.waitFor(() =>
+    expect(detail?.textContent).toContain("Processing 3 of 14"),
+  );
+  const expected = detail?.textContent;
+  expect(expected).toContain("1 failed");
+  expect(expected).toContain("2 unverified");
+  listeners.forEach((listener) =>
+    listener({
+      type: "AMEX_OFFERS_PROGRESS",
+      runId: state.runId,
+      added: 0,
+      failed: 1,
+      unverified: 2,
+      processed: 3,
+      total: 14,
+    }),
+  );
+  expect(detail?.textContent).toBe(expected);
+  await vi.advanceTimersByTimeAsync(500);
+  expect(detail?.textContent).toBe(expected);
+});

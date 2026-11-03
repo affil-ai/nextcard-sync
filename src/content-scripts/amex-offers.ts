@@ -52,6 +52,10 @@ interface AmexOfferList {
 }
 
 const MAX_AMEX_OFFER_PAGES = 50;
+const AMEX_API_TIMEOUT_MS = 25_000;
+// Stop submitting offers when Amex cannot confirm their status reliably.
+const AMEX_VERIFICATION_TIMEOUT_MS = 30_000;
+const MAX_CONSECUTIVE_UNVERIFIED_OFFERS = 3;
 
 interface AmexApiResult {
   status: number;
@@ -293,14 +297,14 @@ function mergeDiscoveredCards(
 }
 
 /** Route an API call through the service worker's executeScript (MAIN world) */
-function amexApiFetch(url: string, options: { method: string; headers: Record<string, string>; body?: string }): Promise<AmexApiResult> {
+function amexApiFetch(url: string, options: { method: string; headers: Record<string, string>; body?: string }, timeoutMs = AMEX_API_TIMEOUT_MS): Promise<AmexApiResult> {
   return new Promise((resolve) => {
     let settled = false;
     const timeout = setTimeout(() => {
       if (settled) return;
       settled = true;
       resolve({ status: 0, data: null, error: "Timed out waiting for Amex API response" });
-    }, 25000);
+    }, timeoutMs);
 
     chrome.runtime.sendMessage(
       { type: "AMEX_OFFERS_FETCH", url, method: options.method, headers: options.headers, body: options.body },
@@ -506,6 +510,7 @@ async function listOffersLegacyPage(
   cardId: string,
   locale: string,
   pageNumber: number,
+  timeoutMs = AMEX_API_TIMEOUT_MS,
 ): Promise<AmexOfferList | null> {
   const pageKey = `page${pageNumber}`;
 
@@ -519,7 +524,7 @@ async function listOffersLegacyPage(
         offerPage: pageKey,
         requestType: "OFFERSHUB_LANDING",
       }),
-    });
+    }, timeoutMs);
 
     if (resp.status !== 200 || !resp.data) return null;
 
@@ -551,6 +556,7 @@ async function listOffersModern(
   cardId: string,
   locale: string,
   statuses: string[] = ["ELIGIBLE"],
+  timeoutMs = AMEX_API_TIMEOUT_MS,
 ): Promise<AmexOfferList | null> {
   try {
     const resp = await amexApiFetch("https://functions.americanexpress.com/ReadCardAccountOffersList.v1", {
@@ -570,7 +576,7 @@ async function listOffersModern(
         offerRequestType: "LIST",
         userOffset: getUserOffset(),
       }),
-    });
+    }, timeoutMs);
 
     if (resp.status !== 200 || !resp.data) return null;
 
@@ -605,10 +611,13 @@ async function listOffers(cardId: string, locale = "en-US"): Promise<AmexOfferLi
   return await listOffersModern(cardId, locale);
 }
 
-async function listAllOffers(cardId: string, locale = "en-US"): Promise<AmexOfferList | null> {
-  const firstPage = await listOffersLegacyPage(cardId, locale, 1);
+async function listAllOffers(cardId: string, locale = "en-US", deadline?: number): Promise<AmexOfferList | null> {
+  const readTimeout = () => deadline === undefined ? AMEX_API_TIMEOUT_MS : Math.max(0, Math.min(AMEX_API_TIMEOUT_MS, deadline - Date.now()));
+  if (readTimeout() === 0) return null;
+  const firstPage = await listOffersLegacyPage(cardId, locale, 1, readTimeout());
   if (!firstPage) {
-    return await listOffersModern(cardId, locale);
+    if (readTimeout() === 0) return null;
+    return await listOffersModern(cardId, locale, ["ELIGIBLE"], readTimeout());
   }
   if (firstPage.rawOfferCount === 0) {
     return { ...firstPage, complete: true };
@@ -620,7 +629,7 @@ async function listAllOffers(cardId: string, locale = "en-US"): Promise<AmexOffe
   }
 
   for (let pageNumber = 2; pageNumber <= MAX_AMEX_OFFER_PAGES; pageNumber += 1) {
-    const page = await listOffersLegacyPage(cardId, locale, pageNumber);
+    const page = readTimeout() > 0 ? await listOffersLegacyPage(cardId, locale, pageNumber, readTimeout()) : null;
     if (!page) {
       return {
         offers: Array.from(offersById.values()),
@@ -797,26 +806,27 @@ function enrollSharedOfferGroup(
   });
 }
 
-async function verifyEnrollment(cardId: string, offerId: string, locale: string): Promise<"enrolled" | "eligible" | "unknown"> {
+async function verifyEnrollment(cardId: string, offerId: string, locale: string, runId: string, attempts = 3): Promise<"enrolled" | "eligible" | "unknown"> {
+  const deadline = Date.now() + AMEX_VERIFICATION_TIMEOUT_MS;
   let observedEligible = false;
-  for (let attempt = 0; attempt < 3; attempt += 1) {
-    const modern = await listOffersModern(cardId, locale, ["ELIGIBLE", "ENROLLED"]);
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    if (activeOfferRunId !== runId || Date.now() >= deadline) return "unknown";
+    const modern = await listOffersModern(cardId, locale, ["ELIGIBLE", "ENROLLED"], Math.min(AMEX_API_TIMEOUT_MS, deadline - Date.now()));
+    if (activeOfferRunId !== runId) return "unknown";
     const modernMatch = modern?.offers.find((offer) => offer.offerId === offerId);
     if (modernMatch) {
       if (isAmexIssuerEnrolledStatus(modernMatch.status)) return "enrolled";
       observedEligible = true;
-    } else if (!modern) {
-      // Older Amex sessions may not support the modern endpoint. Only then
-      // fall back to the paginated legacy reader.
-      const legacy = await listAllOffers(cardId, locale);
+    } else if (!modern && Date.now() < deadline) {
+      const legacy = await listAllOffers(cardId, locale, deadline);
       const legacyMatch = legacy?.offers.find((offer) => offer.offerId === offerId);
       if (legacyMatch) {
         if (isAmexIssuerEnrolledStatus(legacyMatch.status)) return "enrolled";
         observedEligible = true;
       }
     }
-
-    if (attempt < 2) await delay(2000 + enrollJitter());
+    if (Date.now() >= deadline) return "unknown";
+    if (attempt < attempts - 1) await delay(Math.min(2000 + enrollJitter(), deadline - Date.now()));
   }
   return observedEligible ? "eligible" : "unknown";
 }
@@ -960,7 +970,7 @@ async function runSharedEnrollment(
     const remainingAllowance =
       maxOffers == null ? group.targets.length : Math.max(0, maxOffers - addedSoFar);
     if (remainingAllowance === 0) break;
-    sendProgress({ runId, status: "enrolling", added: addedSoFar, failed, total: totalTargets, round: index + 1 });
+    sendProgress({ runId, status: "enrolling", added: addedSoFar, failed, unverified, processed: addedSoFar + failed + unverified, verifying: false, total: totalTargets, round: index + 1 });
     const groupTargets = group.targets.slice(0, remainingAllowance);
     const targets = groupTargets.map(({ card, offer }) => ({
       cardId: card.id,
@@ -988,12 +998,13 @@ async function runSharedEnrollment(
     // the potentially slow verification phase after the user presses Cancel.
     if (!isRunActive(runId)) break;
 
+    sendProgress({ runId, added: addedSoFar, failed, unverified, processed: addedSoFar + failed + unverified, verifying: true, total: totalTargets });
     const verifiedTargets = await Promise.all(groupTargets.map(async (target, targetIndex) => ({
       target,
       result: results[targetIndex] ?? { result: "failed", error: "Missing enrollment result" },
       verification: results[targetIndex]?.result === "added" || results[targetIndex]?.result === "skipped"
         ? "enrolled"
-        : await verifyEnrollment(target.card.id, target.offer.offerId, locale),
+        : await verifyEnrollment(target.card.id, target.offer.offerId, locale, runId),
     })));
 
     for (const { target, result, verification } of verifiedTargets) {
@@ -1014,6 +1025,8 @@ async function runSharedEnrollment(
       }
     }
     completedGroups += 1;
+    const processedAdded = Array.from(enrolledByCard.values()).reduce((count, entry) => count + entry.offers.length, 0);
+    sendProgress({ runId, added: processedAdded, failed, unverified, processed: processedAdded + failed + unverified, verifying: false, total: totalTargets });
 
     if (isRunActive(runId) && !sessionExpired && index < groups.length - 1) {
       await delay(ENROLL_BASE_DELAY_MS + enrollJitter());
@@ -1042,6 +1055,7 @@ async function runSharedEnrollment(
 }
 
 function formatEnrollError(result: AmexEnrollResult): string | null {
+  if (result.failureReason === "already_enrolled_elsewhere") return "Amex reports this offer is already activated elsewhere and did not confirm it on this card.";
   const pieces = [
     result.status ? `HTTP ${result.status}` : null,
     typeof result.explanationCode === "string" ? result.explanationCode : null,
@@ -1066,30 +1080,47 @@ async function runEnrollment(
   let totalAlreadyAdded = 0;
   let totalFailed = 0;
   let totalUnverified = 0;
-  let totalEligible = 0;
+  let totalEligible = selectedIds?.length ?? 0;
   let round = 0;
   const MAX_ROUNDS = 50;
   const enrolledOffers: AmexOffer[] = [];
+  const observedActiveOffers: AmexOffer[] = [];
   const enrolledOfferIds = new Set<string>();
   const failedOfferIds = new Set<string>();
   let emptyBatchPolls = 0;
   let staleBatchPolls = 0;
   let lastError: string | null = null;
   let sessionExpired = false;
+  let consecutiveUnverified = 0;
+  let verificationUnavailable = false;
+  function reportProgress(details: Record<string, unknown> = {}) {
+    sendProgress({ runId, round, added: totalAdded, skipped: totalAlreadyAdded, failed: totalFailed,
+      unverified: totalUnverified, processed: enrolledOfferIds.size + failedOfferIds.size,
+      total: totalEligible || undefined, verifying: false, ...details });
+  }
 
   while (
     round < MAX_ROUNDS
     && isRunActive(runId)
     && !sessionExpired
-    && (maxOffers == null || totalAdded < maxOffers)
+    && !verificationUnavailable
+    && (maxOffers == null || totalAdded - totalAlreadyAdded < maxOffers)
   ) {
     round++;
-    sendProgress({ runId, status: "fetching", round, added: totalAdded });
+    reportProgress({ runId, status: "fetching", round, added: totalAdded });
 
     const offerList = selectedIds ? await listAllOffers(cardId, locale) : await listOffers(cardId, locale);
     if (!offerList) { lastError = "Could not check Amex offers. Check again."; break; }
     if (selectedIds && round === 1) {
-      try { selectEligibleOffers(offerList.offers.filter(isUnenrolledOffer), selectedIds); }
+      try {
+        for (const offer of selectEligibleOffers(offerList.offers, selectedIds)) {
+          if (!isAmexIssuerEnrolledStatus(offer.status) || enrolledOfferIds.has(offer.offerId)) continue;
+          enrolledOfferIds.add(offer.offerId);
+          observedActiveOffers.push(offer);
+          totalAdded++;
+          totalAlreadyAdded++;
+        }
+      }
       catch { lastError = "A selected offer is no longer available. Check offers again."; break; }
     }
 
@@ -1106,19 +1137,18 @@ async function runEnrollment(
       offerList.eligibleCount ?? 0,
       enrolledOfferIds.size + failedOfferIds.size + eligible.length,
     );
-    const displayedTotal =
-      maxOffers == null ? totalEligible : Math.min(totalEligible, maxOffers);
+    const displayedTotal = totalEligible;
 
     if (eligible.length === 0) {
       const completedOfferCount = enrolledOfferIds.size + failedOfferIds.size;
       if ((offerList.eligibleCount ?? 0) > completedOfferCount && emptyBatchPolls < MAX_EMPTY_BATCH_POLLS) {
         emptyBatchPolls++;
-        sendProgress({
+        reportProgress({
           runId,
           status: "checking_new",
           round,
           added: totalAdded,
-          total: maxOffers == null ? totalEligible : Math.min(totalEligible, maxOffers),
+          total: totalEligible,
         });
         await delay(OFFER_BATCH_REFETCH_DELAY_MS + enrollJitter());
         continue;
@@ -1126,29 +1156,36 @@ async function runEnrollment(
       break;
     }
 
-    sendProgress({ runId, status: "enrolling", round, added: totalAdded, total: displayedTotal });
+    reportProgress({ runId, status: "enrolling", round, added: totalAdded, total: displayedTotal });
 
     let roundAdded = 0;
 
     for (const offer of eligible) {
       if (!isRunActive(runId)) break;
-      if (maxOffers != null && totalAdded >= maxOffers) break;
+      if (maxOffers != null && totalAdded - totalAlreadyAdded >= maxOffers) break;
 
       const offerForSync = offer;
       const result = await enrollSingleOffer(cardId, offerForSync.offerId, locale, runId);
-      if (!isRunActive(runId)) break;
+      if (activeOfferRunId !== runId) return;
+      reportProgress({ verifying: result.status !== 401, total: displayedTotal });
       const verification = result.status === 401
         ? "eligible"
-        : await verifyEnrollment(cardId, offerForSync.offerId, locale);
+        : await verifyEnrollment(cardId, offerForSync.offerId, locale, runId, result.failureReason === "already_enrolled_elsewhere" ? 1 : 3);
+      if (activeOfferRunId !== runId) return;
 
       if (verification === "enrolled") {
         if (!enrolledOfferIds.has(offerForSync.offerId)) {
           enrolledOfferIds.add(offerForSync.offerId);
           totalAdded++;
           roundAdded++;
-          enrolledOffers.push(offerForSync);
+          if (result.result === "skipped" || result.failureReason === "already_enrolled_elsewhere") {
+            observedActiveOffers.push({ ...offerForSync, status: "ENROLLED" });
+          } else {
+            enrolledOffers.push(offerForSync);
+          }
         }
-        if (result.result === "skipped") totalAlreadyAdded++;
+        consecutiveUnverified = 0;
+        if (result.result === "skipped" || result.failureReason === "already_enrolled_elsewhere") totalAlreadyAdded++;
       } else {
         lastError = formatEnrollError(result);
         if (result.status === 401) {
@@ -1157,17 +1194,24 @@ async function runEnrollment(
           console.warn("[NextCard Amex Offers] Amex session expired during enrollment");
         } else if (verification === "unknown" || result.result === "unknown") {
           totalUnverified++;
+          consecutiveUnverified++;
           failedOfferIds.add(offerForSync.offerId);
         } else {
+          consecutiveUnverified = 0;
           totalFailed++;
           failedOfferIds.add(offerForSync.offerId);
         }
         console.warn("[NextCard Amex Offers] Amex enrollment could not be verified");
       }
 
-      sendProgress({ runId, added: totalAdded, skipped: totalAlreadyAdded, failed: totalFailed, unverified: totalUnverified, round, total: displayedTotal, error: lastError });
+      if (consecutiveUnverified >= MAX_CONSECUTIVE_UNVERIFIED_OFFERS) {
+        verificationUnavailable = true;
+        lastError = "Amex isn't confirming offer status. The remaining offers were not attempted. Some attempted offers may already be active; refresh Amex before trying again.";
+      }
 
-      if (sessionExpired) break;
+      reportProgress({ runId, added: totalAdded, skipped: totalAlreadyAdded, failed: totalFailed, unverified: totalUnverified, round, total: displayedTotal, error: lastError });
+
+      if (sessionExpired || verificationUnavailable || !isRunActive(runId)) break;
 
       // Proactive rate limiting
       enrollRequestsSincePause++;
@@ -1179,18 +1223,18 @@ async function runEnrollment(
       }
     }
 
-    if (sessionExpired) break;
+    if (sessionExpired || verificationUnavailable) break;
 
     if (roundAdded === 0) {
       const completedOfferCount = enrolledOfferIds.size + failedOfferIds.size;
       if ((offerList.eligibleCount ?? totalEligible) > completedOfferCount && staleBatchPolls < MAX_STALE_BATCH_POLLS) {
         staleBatchPolls++;
-        sendProgress({
+        reportProgress({
           runId,
           status: "checking_new",
           round,
           added: totalAdded,
-          total: maxOffers == null ? totalEligible : Math.min(totalEligible, maxOffers),
+          total: totalEligible,
         });
         await delay(OFFER_BATCH_REFETCH_DELAY_MS + enrollJitter());
         continue;
@@ -1203,9 +1247,19 @@ async function runEnrollment(
 
     if (selectedIds) break;
     if (round < MAX_ROUNDS && isRunActive(runId)) {
-      sendProgress({ runId, status: "checking_new", round, added: totalAdded });
+      reportProgress({ runId, status: "checking_new", round, added: totalAdded });
       await delay(OFFER_BATCH_REFETCH_DELAY_MS + enrollJitter());
     }
+  }
+
+  // Already-active offers are issuer observations, not new Nextcard activations.
+  let observationSaveStatus: "saved" | "queued_for_retry" | "failed" | undefined;
+  if (observedActiveOffers.length > 0) {
+    const saved: unknown = await syncDetectedSnapshot({ id: cardId, name: selectedCardName,
+      lastDigits: selectedCardLastDigits, accountKey: null }, observedActiveOffers, runId);
+    observationSaveStatus = isRecord(saved) && (saved.saveStatus === "saved" || saved.saveStatus === "queued_for_retry")
+      ? saved.saveStatus : "failed";
+    if (activeOfferRunId !== runId) return;
   }
 
   chrome.runtime.sendMessage({
@@ -1219,6 +1273,9 @@ async function runEnrollment(
     sessionExpired,
     cancelled: !isRunActive(runId),
     rounds: round,
+    observationSaveStatus,
+    total: totalEligible,
+    processed: enrolledOfferIds.size + failedOfferIds.size,
     cardId,
     cardName: selectedCardName,
     cardLastDigits: selectedCardLastDigits,

@@ -14,6 +14,7 @@ import type {
 import {
   getOfferOperationStatusText,
   getChaseOfferProgressText,
+  getAmexOfferProgressText,
   getOfferPostEnrollmentNextStep,
   getOfferSaveStatusText,
   isOfferCompletionContinuing,
@@ -1669,16 +1670,17 @@ function initAmexOffers() {
       && msg.runId !== activeOfferRunIds.get("amex")
     ) return;
     if (msg.type === "AMEX_OFFERS_PROGRESS") {
+      if (offersFirstUiEnabled) return;
       const added = msg.added ?? 0;
-      const skipped = msg.skipped ?? 0;
+      const unverified = msg.unverified ?? 0;
       const failed = msg.failed ?? 0;
       const total = msg.total ?? 0;
       const round = msg.round ?? 1;
-      const done = added + skipped + failed;
+      const done = msg.processed ?? added + failed + unverified;
       const pct = total > 0 ? Math.min(100, Math.round((done / total) * 100)) : 0;
 
       if (msg.status === "fetching") {
-        if (progressBar) progressBar.style.width = "0%";
+        if (progressBar) progressBar.style.width = `${pct}%`;
         if (progressDetail) progressDetail.textContent = round > 1 ? `Round ${round}: checking for new offers...` : "Fetching offers...";
       } else if (msg.status === "checking_new") {
         if (progressBar) progressBar.style.width = "100%";
@@ -1691,7 +1693,7 @@ function initAmexOffers() {
       } else {
         if (progressBar) progressBar.style.width = `${pct}%`;
         const suffix = failed > 0 && typeof msg.error === "string" ? ` - last error: ${msg.error}` : "";
-        if (progressDetail) progressDetail.textContent = `${added} of ${total} activated${suffix}`;
+        if (progressDetail) progressDetail.textContent = `${getAmexOfferProgressText({ added, failed, unverified, processed: done, total: total || null, verifying: msg.verifying === true })}${suffix}`;
       }
     }
     if (msg.type === "AMEX_OFFERS_SYNCED") {
@@ -3238,11 +3240,11 @@ function renderBackgroundOwnedIssuerState(snapshot: OfferOperationSnapshot) {
     }
     const progress = document.getElementById(`${issuer}OffersProgressDetail`);
     if (progress && state.phase === "adding") {
-      progress.textContent = issuer === "chase"
+      progress.textContent = issuer === "chase" || issuer === "amex"
         ? getOfferOperationStatusText(state)
         : state.total == null ? `${state.added} added` : `${state.added} of ${state.total} added`;
-      if (issuer === "chase") {
-        const bar = document.getElementById("chaseOffersProgressBar");
+      if (issuer === "chase" || issuer === "amex") {
+        const bar = document.getElementById(`${issuer}OffersProgressBar`);
         if (bar) bar.style.width = `${state.total ? Math.min(100, ((state.processed ?? 0) / state.total) * 100) : 0}%`;
       }
     }
