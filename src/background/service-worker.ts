@@ -184,7 +184,10 @@ function isProviderAttemptMessage(
   return true;
 }
 
+let householdProfileSwitching = false;
+
 async function hydrateFromNextCard() {
+  if (householdProfileSwitching) return;
   const read = rewardsCache.capture();
   const context = await refreshHouseholdContext()
     ?? await getStoredHouseholdContext();
@@ -337,6 +340,16 @@ async function getHouseholdPopupState() {
 }
 
 async function switchHouseholdMember(memberId: string) {
+  if (householdProfileSwitching) return { ok: false, error: "household_scope_changed" };
+  householdProfileSwitching = true;
+  const result = await applyHouseholdMemberSwitch(memberId).finally(() => {
+    householdProfileSwitching = false;
+  });
+  if (result.ok) await hydrateFromNextCard();
+  return result;
+}
+
+async function applyHouseholdMemberSwitch(memberId: string) {
   await rewardsCache.invalidateProfile();
   const read = rewardsCache.capture();
   const context = await refreshHouseholdContext()
@@ -378,7 +391,6 @@ async function switchHouseholdMember(memberId: string) {
     accountScopeId: context.accountScopeId, memberId: member.id,
     memberLifecycleVersion: member.lifecycleVersion,
   });
-  await hydrateFromNextCard();
   await clearInjectedOfferAlerts();
   return { ok: true };
 }
