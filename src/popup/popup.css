@@ -3119,6 +3119,8 @@
 
 .rewards-summary-actions { flex-wrap: wrap; }
 .rewards-summary-remove { flex-basis: 100%; }
-.rewards-remove-confirmation { padding: 12px; color: #342019; }
+.rewards-remove-confirmation { padding: 12px; color: #342019; font-size: 13px; }
 .rewards-remove-confirmation p { margin: 0 0 12px; line-height: 1.5; }
-.rewards-remove-confirmation button { padding: 8px; margin-right: 8px; }
+.rewards-remove-confirmation button { min-height: 36px; padding: 0 12px; margin-right: 8px; border-radius: 10px; color: #342019; font: 700 12px/1 system-ui, sans-serif; cursor: pointer; }
+.rewards-remove-confirmation button:focus-visible { outline: 3px solid rgba(246, 177, 86, 0.24); outline-offset: 1px; }
+.rewards-remove-confirmation button:disabled { cursor: wait; opacity: 0.6; }
