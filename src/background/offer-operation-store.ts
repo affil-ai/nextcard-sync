@@ -265,6 +265,8 @@ export function createOfferOperationStore() {
       cancelled: false,
       error: null,
       saveStatus: "not_started",
+      saveError: null,
+      pendingSaveRunId: null,
     });
     return state
       ? { ok: true as const, state }
@@ -280,7 +282,8 @@ export function createOfferOperationStore() {
       !completed
       || completed.phase !== "completed"
       || completed.added === 0
-      || completed.saveStatus !== "saved"
+      // A queued save retries in the background, so it must not strand the card picker.
+      || (completed.saveStatus !== "saved" && completed.saveStatus !== "queued_for_retry")
       || (completed.unverified ?? 0) > 0
       || completed.cards.length === 0
       || completed.selectedCardKeys.length === 0
@@ -310,6 +313,7 @@ export function createOfferOperationStore() {
       failed: completed.failed,
       saveStatus: completed.saveStatus,
       saveError: completed.saveError,
+      pendingSaveRunId: completed.saveStatus === "queued_for_retry" ? runId : null,
     };
     snapshot = {
       active: next,
@@ -317,6 +321,17 @@ export function createOfferOperationStore() {
     };
     await persist();
     return next;
+  }
+
+  // Records a background save retry on its activation run, or on the refreshed check that replaced it.
+  async function resolveQueuedSave(runId: string, changes: Pick<OperationPatch, "saveStatus" | "saveError">) {
+    const direct = await patch(runId, changes);
+    if (direct) return direct;
+    const carrier = Object.values(snapshot.history).find(
+      (state) => state?.pendingSaveRunId === runId && state.saveStatus === "queued_for_retry",
+    );
+    if (!carrier) return null;
+    return patch(carrier.runId, { ...changes, pendingSaveRunId: null });
   }
 
   async function cancel(runId?: string, closeTab = true) {
@@ -367,6 +382,7 @@ export function createOfferOperationStore() {
     getRun,
     beginEnrollment,
     continueAfterEnrollmentCompletion,
+    resolveQueuedSave,
     markReady,
     cancel,
     finishReview,

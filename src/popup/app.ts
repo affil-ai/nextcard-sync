@@ -3001,10 +3001,17 @@ function updateIssuerCardStatus(snapshot: OfferOperationSnapshot) {
       state.phase === "ready_to_add" && !isOfferResultFresh(state) && checkedDate
         ? ` · last checked ${checkedDate}`
         : "";
+    // The card's own Running panel shows activation progress, so the subtitle would only repeat it.
+    const progressShownInCard = state.phase === "adding" && issuerHasInlineActivationProgress(issuer);
+    description.toggleAttribute("hidden", progressShownInCard);
     description.textContent = state.phase === "failed" || state.phase === "interrupted"
       ? "Needs attention"
       : `${getOfferOperationStatusText(state)}${suffix}`;
   }
+}
+
+function issuerHasInlineActivationProgress(issuer: OfferIssuer) {
+  return issuer === "chase" || issuer === "amex" || issuer === "citi";
 }
 
 function renderBackgroundOwnedIssuerState(snapshot: OfferOperationSnapshot) {
@@ -3019,7 +3026,7 @@ function renderBackgroundOwnedIssuerState(snapshot: OfferOperationSnapshot) {
     const refreshingAfterCompletion =
       state.phase === "checking"
       && state.added > 0
-      && state.saveStatus === "saved";
+      && (state.saveStatus === "saved" || state.saveStatus === "queued_for_retry");
     const reviewFinished = state.phase === "ready_to_add" && snapshot.active?.runId !== state.runId;
     const targetPanel = reviewFinished ? "Done" :
       state.phase === "ready_to_add" || refreshingAfterCompletion
@@ -3240,7 +3247,9 @@ function renderBackgroundOwnedIssuerState(snapshot: OfferOperationSnapshot) {
     }
     const progress = document.getElementById(`${issuer}OffersProgressDetail`);
     if (progress && state.phase === "adding") {
-      progress.textContent = issuer === "chase" || issuer === "amex"
+      progress.textContent = state.cancelled
+        ? "Stopping after the current offer…"
+        : issuer === "chase" || issuer === "amex"
         ? getOfferOperationStatusText(state)
         : state.total == null ? `${state.added} added` : `${state.added} of ${state.total} added`;
       if (issuer === "chase" || issuer === "amex") {
@@ -3287,7 +3296,10 @@ function renderBackgroundOwnedIssuerState(snapshot: OfferOperationSnapshot) {
         };
         retrySave = button;
       }
-      const outcomeElement = targetPanel === "Error" ? errorElement : summary;
+      const outcomeElement =
+        targetPanel === "Error" ? errorElement
+        : targetPanel === "Ready" ? recentResult
+        : summary;
       outcomeElement?.insertAdjacentElement("afterend", retrySave);
     } else retrySave?.remove();
     const donePanel = document.getElementById(`${issuer}OffersDone`);
@@ -3499,7 +3511,10 @@ async function refreshOfferOperationUi() {
   const activityTitle = document.getElementById("offerActivityTitle");
   const activityDetail = document.getElementById("offerActivityDetail");
   const cancelButton = document.getElementById("offerActivityCancel") as HTMLButtonElement | null;
-  if (activity && activityTitle && activityDetail && active) {
+  // While adding, the issuer card's Running panel owns progress and Stop; the banner would repeat both.
+  const progressShownInCard =
+    active?.phase === "adding" && issuerHasInlineActivationProgress(active.issuer);
+  if (activity && activityTitle && activityDetail && active && !progressShownInCard) {
     activity.hidden = false;
     activity.setAttribute("data-operation-active", "true");
     activityTitle.textContent =
@@ -3513,12 +3528,12 @@ async function refreshOfferOperationUi() {
           : "Already-submitted offers can’t be undone. Stop to switch providers."
         : active.phase === "ready_to_add" ? "Choose offers, view your saved offers, or check another issuer."
         : "Cancel this check to choose another provider.";
-  } else if (activity?.dataset.operationActive === "true") {
+  } else if (activity && (activity.dataset.operationActive === "true" || progressShownInCard)) {
     activity.hidden = true;
     activity.removeAttribute("data-operation-active");
   }
   if (cancelButton) {
-    cancelButton.hidden = !active || active.cancelled;
+    cancelButton.hidden = !active || active.cancelled || progressShownInCard;
     cancelButton.disabled = false;
     cancelButton.textContent = active?.phase === "ready_to_add" ? "Done" : active?.phase === "adding" ? "Stop" : "Cancel";
   }

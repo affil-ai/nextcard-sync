@@ -180,6 +180,10 @@ describe("offer operation state", () => {
     expect(isOfferCompletionContinuing({
       ...completed,
       saveStatus: "queued_for_retry",
+    })).toBe(true);
+    expect(isOfferCompletionContinuing({
+      ...completed,
+      saveStatus: "failed",
     })).toBe(false);
     expect(isOfferCompletionContinuing({
       ...completed,

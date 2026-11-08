@@ -244,7 +244,7 @@ describe("background offer operation store", () => {
     expect((await store.getSnapshot()).active?.runId).toBe(continued?.runId);
   });
 
-  it("keeps queued save results attached to their original run until retry succeeds", async () => {
+  it("returns to the card picker while a save is queued, and records the retry on the refreshed check", async () => {
     const store = createOfferOperationStore();
     const started = await store.start("chase");
     getTab.mockResolvedValue({ id: 42 });
@@ -280,13 +280,46 @@ describe("background offer operation store", () => {
       started.state.runId,
     );
 
-    expect(continued).toBeNull();
-    expect((await store.getSnapshot()).history.chase).toMatchObject({
-      runId: started.state.runId, phase: "completed", saveStatus: "queued_for_retry", added: 81,
+    expect(continued).toMatchObject({
+      phase: "checking",
+      saveStatus: "queued_for_retry",
+      pendingSaveRunId: started.state.runId,
+      added: 81,
     });
-    await store.patch(started.state.runId, { saveStatus: "saved" });
-    expect(await store.continueAfterEnrollmentCompletion(started.state.runId)).toMatchObject({
-      phase: "checking", saveStatus: "saved", added: 81,
+    expect(continued?.runId).not.toBe(started.state.runId);
+
+    await store.resolveQueuedSave(started.state.runId, { saveStatus: "saved", saveError: null });
+    expect((await store.getSnapshot()).history.chase).toMatchObject({
+      runId: continued?.runId,
+      phase: "checking",
+      saveStatus: "saved",
+      pendingSaveRunId: null,
+    });
+  });
+
+  it("keeps a failed save on its completed run instead of refreshing", async () => {
+    const store = createOfferOperationStore();
+    const started = await store.start("chase");
+    getTab.mockResolvedValue({ id: 42 });
+    await store.patch(started.state.runId, { phase: "checking", ownedTabId: 42 });
+    await store.markReady(started.state.runId, [{
+      key: "sapphire",
+      name: "Sapphire Reserve",
+      lastDigits: "6949",
+      availableCount: 81,
+      countStatus: "complete",
+    }]);
+    await store.beginEnrollment(started.state.runId, ["sapphire"], 81);
+    await store.patchActiveRun("chase", started.state.runId, {
+      phase: "completed",
+      added: 81,
+      remaining: 0,
+      saveStatus: "failed",
+    });
+
+    expect(await store.continueAfterEnrollmentCompletion(started.state.runId)).toBeNull();
+    expect((await store.getSnapshot()).history.chase).toMatchObject({
+      runId: started.state.runId, phase: "completed", saveStatus: "failed",
     });
   });
 
