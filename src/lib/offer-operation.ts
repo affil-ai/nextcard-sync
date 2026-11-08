@@ -58,6 +58,8 @@ export interface OfferOperationState {
   error: string | null;
   saveStatus: OfferSaveStatus;
   saveError: string | null;
+  // Set when a refreshed check carries forward a queued save from the activation run that preceded it.
+  pendingSaveRunId?: string | null;
 }
 
 export interface OfferOperationSnapshot {
@@ -130,7 +132,11 @@ export function isOfferCompletionContinuing(state: OfferOperationState) {
     && (state.unverified ?? 0) === 0
     && state.cards.length > 0
     && state.selectedCardKeys.length > 0
-    && (state.saveStatus === "saving" || state.saveStatus === "saved")
+    && (
+      state.saveStatus === "saving"
+      || state.saveStatus === "saved"
+      || state.saveStatus === "queued_for_retry"
+    )
   );
 }
 
@@ -323,6 +329,8 @@ export function normalizeOfferOperation(value: unknown): OfferOperationState | n
       : "not_started",
     saveError:
       typeof value.saveError === "string" ? value.saveError.slice(0, 240) : null,
+    pendingSaveRunId:
+      typeof value.pendingSaveRunId === "string" ? value.pendingSaveRunId.slice(0, 100) : null,
   };
 }
 

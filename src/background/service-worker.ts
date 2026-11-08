@@ -1493,7 +1493,7 @@ async function retryQueuedOfferSyncs() {
     await getCurrentHouseholdOperationScope(),
   );
   await Promise.all(result.savedRunIds.map(async (runId) => {
-    await offerOperations.patch(runId, {
+    await offerOperations.resolveQueuedSave(runId, {
       saveStatus: "saved",
       saveError: null,
     });
@@ -1501,7 +1501,7 @@ async function retryQueuedOfferSyncs() {
     void offerCoordinator.resume();
   }));
   await Promise.all(result.failedRunIds.map((runId) =>
-    offerOperations.patch(runId, {
+    offerOperations.resolveQueuedSave(runId, {
       saveStatus: "failed",
       saveError:
         "This offer save no longer matches the selected household profile. Check offers again.",
