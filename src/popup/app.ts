@@ -80,6 +80,7 @@ const SIGNED_OUT_CONFIRMATION_POLLS = 3;
 const NEXTCARD_AUTH_WAIT_TIMEOUT_MS = 45_000;
 const OFFER_ACTIVATION_USAGE_REFRESH_MS = 3 * 60 * 1000;
 const activeOfferRunIds = new Map<OfferIssuer, string>();
+const advancedAfterEnrollmentRunIds = new Set<string>();
 let renderedAccountKey: string | null = null;
 let destinationRestored = false;
 let offerActivationUsage: {
@@ -3060,6 +3061,17 @@ function renderBackgroundOwnedIssuerState(snapshot: OfferOperationSnapshot) {
       select.value = state.cards.some((card) => card.key === previousValue)
         ? previousValue
         : state.cards[0].key;
+      // After a card is finished, move once to the next card that still has offers.
+      if (
+        state.phase === "ready_to_add"
+        && state.added > 0
+        && !advancedAfterEnrollmentRunIds.has(state.runId)
+      ) {
+        advancedAfterEnrollmentRunIds.add(state.runId);
+        const current = state.cards.find((card) => card.key === select.value);
+        const next = state.cards.find((card) => (card.availableCount ?? 0) > 0);
+        if (current?.availableCount === 0 && next) select.value = next.key;
+      }
       const runButton = document.getElementById(`${issuer}OffersRunBtn`) as HTMLButtonElement | null;
       renderOfferCardChoices({
         issuer,
