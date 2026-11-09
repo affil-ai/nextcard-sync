@@ -57,6 +57,7 @@ import {
   createMessageRouter,
   createExternalMessageRouter,
   resolveSyncStarter,
+  type OfferSaveRetryResult,
 } from "./core/message-router";
 import { createRuntimeStateStore } from "./core/runtime-state";
 import {
@@ -1478,7 +1479,7 @@ chrome.alarms.onAlarm.addListener((alarm) => {
   }
 });
 
-async function retryQueuedOfferSyncs() {
+async function retryQueuedOfferSyncs(): Promise<OfferSaveRetryResult> {
   const context = await getStoredHouseholdContext();
   const selectedMember = context
     ? await getSelectedHouseholdMember(context)
@@ -1488,7 +1489,7 @@ async function retryQueuedOfferSyncs() {
     selectedMember &&
     !selectedMember.isPrimary &&
     !context.capabilities.memberOfferWrites
-  ) return;
+  ) return { saved: 0, remaining: 0, failed: 0 };
   const result = await retryPendingOfferSyncs(
     await getCurrentHouseholdOperationScope(),
   );
@@ -1507,6 +1508,11 @@ async function retryQueuedOfferSyncs() {
         "This offer save no longer matches the selected household profile. Check offers again.",
     })
   ));
+  return {
+    saved: result.savedRunIds.length,
+    remaining: result.remainingRunIds.length,
+    failed: result.failedRunIds.length,
+  };
 }
 
 void getAuth().then((auth) => {

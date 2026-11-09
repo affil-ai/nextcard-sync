@@ -155,6 +155,17 @@ type HouseholdPopupState = {
   } | null;
 };
 
+function isOfferSaveRetrySettled(response: unknown) {
+  if (typeof response !== "object" || response === null) return false;
+  if (!("ok" in response) || response.ok !== true) return false;
+  const remaining = "remaining" in response ? response.remaining : null;
+  const saved = "saved" in response ? response.saved : null;
+  const failed = "failed" in response ? response.failed : null;
+  return remaining === 0
+    && typeof saved === "number" && typeof failed === "number"
+    && saved + failed > 0;
+}
+
 function isHouseholdPopupState(value: unknown): value is HouseholdPopupState {
   if (
     !value
@@ -3318,8 +3329,16 @@ function renderBackgroundOwnedIssuerState(snapshot: OfferOperationSnapshot) {
         button.textContent = "Retry saving to nextcard";
         button.onclick = async () => {
           button.disabled = true;
-          await chrome.runtime.sendMessage({ type: "RETRY_OFFER_SAVES" }).catch(() => null);
-          button.disabled = false; await refreshOfferOperationUi();
+          button.textContent = "Saving to nextcard…";
+          const response: unknown = await chrome.runtime
+            .sendMessage({ type: "RETRY_OFFER_SAVES" }).catch(() => null);
+          button.disabled = false;
+          // A save that still fails stays queued, so the button would otherwise
+          // look exactly as it did before the click.
+          button.textContent = isOfferSaveRetrySettled(response)
+            ? "Retry saving to nextcard"
+            : "Couldn’t save yet, nextcard retries every 5 minutes · Retry now";
+          await refreshOfferOperationUi();
         };
         retrySave = button;
       }
