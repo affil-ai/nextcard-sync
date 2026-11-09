@@ -181,8 +181,8 @@ export function createOfferOperationStore() {
       added: preserveRecentCompletion ? current.added : 0,
       failed: preserveRecentCompletion ? current.failed : 0,
       remaining: null,
-      saveStatus: preserveRecentCompletion ? "saved" : "not_started",
-      saveError: null,
+      saveStatus: current?.saveStatus ?? "not_started",
+      saveError: current?.saveError ?? null,
     });
   }
 

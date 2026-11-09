@@ -300,18 +300,18 @@ export function createMessageRouter(options: {
   ) => void | OfferSaveStatus | Promise<void | OfferSaveStatus>;
 }) {
   const amexEnrollmentFallbackRuns = new Map<string, AmexPrimaryFallbackState>();
+  const pendingDetectedSaves = new Map<string, number>();
 
   async function saveDetectedForRun(
     issuer: "chase" | "amex" | "citi" | "capitalone",
     runId: string,
     message: Record<string, unknown>,
   ) {
-    if (!await options.offerOperations.getActiveRun(issuer, runId)) {
-      return "failed";
-    }
-    await options.offerOperations.patchActiveRun(issuer, runId, {
-      saveStatus: "saving",
-      saveError: null,
+    const run = await options.offerOperations.getRun(issuer, runId);
+    if (!run) return "failed";
+    pendingDetectedSaves.set(runId, (pendingDetectedSaves.get(runId) ?? 0) + 1);
+    await options.offerOperations.patch(runId, {
+      saveStatus: mergeOfferSaveStatus(run.saveStatus, "saving"),
     });
     let saveStatus: OfferSaveStatus = "saved";
     try {
@@ -319,19 +319,22 @@ export function createMessageRouter(options: {
       if (result === "queued_for_retry" || result === "failed") saveStatus = result;
     } catch (error) {
       saveStatus = "failed";
-      await options.offerOperations.patchActiveRun(issuer, runId, {
+      await options.offerOperations.patch(runId, {
         saveError:
           error instanceof Error
             ? error.message
             : "Couldn’t save detected offers to nextcard.",
       });
     }
-    const snapshot = await options.offerOperations.getSnapshot();
-    const current = snapshot.active?.runId === runId
-      ? snapshot.active
-      : snapshot.history[issuer];
-    if (current?.runId === runId && (current.saveStatus !== "failed" || saveStatus === "failed")) {
-      await options.offerOperations.patchActiveRun(issuer, runId, { saveStatus });
+    const pending = Math.max(0, (pendingDetectedSaves.get(runId) ?? 1) - 1);
+    if (pending > 0) pendingDetectedSaves.set(runId, pending);
+    else pendingDetectedSaves.delete(runId);
+    const current = await options.offerOperations.getRun(issuer, runId);
+    if (current) {
+      const outcome = mergeOfferSaveStatus(current.saveStatus, saveStatus);
+      await options.offerOperations.patch(runId, {
+        saveStatus: outcome === "saved" && pending > 0 ? "saving" : outcome,
+      });
     }
     return saveStatus;
   }

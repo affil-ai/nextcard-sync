@@ -619,6 +619,24 @@ describe("retryPendingOfferSyncs", () => {
 });
 
 describe("syncDetectedOffersToNextCard", () => {
+  it("reconciles a complete snapshot only after every smaller request is saved", async () => {
+    const requests: unknown[] = [];
+    vi.stubGlobal("fetch", vi.fn(async (_input: string, init?: RequestInit) => {
+      requests.push(JSON.parse(String(init?.body)));
+      return { ok: true, json: async () => ({}) };
+    }));
+    const offers = Array.from({ length: 25 }, (_, index) => ({
+      ...detectedPayload.offers[0], issuerOfferId: `snapshot-${index}`,
+    }));
+    const snapshot = { complete: true, capturedAt: "2026-11-09T12:00:00.000Z",
+      observedIssuerOfferIds: offers.map((offer) => offer.issuerOfferId) } satisfies NonNullable<DetectedOfferSyncPayload["snapshot"]>;
+    await expect(syncDetectedOffersToNextCard({ ...detectedPayload, offers, snapshot })).resolves.toBe("saved");
+    expect(requests).toHaveLength(3);
+    expect(requests[0]).toMatchObject({ offers: offers.slice(0, 10), snapshot, reconcileSnapshot: false });
+    expect(requests[1]).toMatchObject({ offers: offers.slice(10, 20), snapshot, reconcileSnapshot: false });
+    expect(requests[2]).toMatchObject({ offers: offers.slice(20), snapshot, reconcileSnapshot: true });
+  });
+
   it("keeps ordinary accounts on the legacy detected-offer route", async () => {
     vi.mocked(getCurrentHouseholdOperationScope).mockResolvedValue(null);
     vi.mocked(isLegacyHouseholdOperationMode).mockResolvedValue(true);
