@@ -381,9 +381,10 @@ export function getOfferOperationStatusText(
         const count = completeCards[0].availableCount ?? 0;
         return count === 0 ? "No new offers found" : `${count} offers found`;
       }
-      return completeCards.length > 0
+      if (completeCards.length === 0) return "Offer check needs attention";
+      return completeCards.some((card) => (card.availableCount ?? 0) > 0)
         ? `Offers found on ${completeCards.length} cards`
-        : "Offer check needs attention";
+        : `No new offers on ${completeCards.length} cards`;
     }
     case "adding":
       if (state.issuer === "amex") return getAmexOfferProgressText(state);
