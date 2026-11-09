@@ -196,6 +196,13 @@ async function waitAfterAmexRateLimit(result: AmexEnrollmentResult) {
   return result;
 }
 
+/** Counts of queued offer saves after a manual or scheduled retry. */
+export type OfferSaveRetryResult = {
+  saved: number;
+  remaining: number;
+  failed: number;
+};
+
 export interface SyncHandlers {
   generic: (providerId: ProviderId) => Promise<void>;
   atmos: () => Promise<void>;
@@ -268,7 +275,7 @@ export function createMessageRouter(options: {
   refreshExtensionProfile?: () => Promise<ExtensionProfile | null>;
   openUpgrade?: () => Promise<void>;
   canWriteOffers?: () => Promise<boolean>;
-  retryOfferSaves?: () => Promise<void>;
+  retryOfferSaves?: () => Promise<OfferSaveRetryResult>;
   offerOperations: OfferOperationStore;
   offerCoordinator: OfferOperationCoordinator;
   startLegacyOfferOperation?: (
@@ -715,7 +722,7 @@ export function createMessageRouter(options: {
       }
 
       case "RETRY_OFFER_SAVES":
-        void options.retryOfferSaves?.().then(() => sendResponse({ ok: true }))
+        void options.retryOfferSaves?.().then((result) => sendResponse({ ok: true, ...result }))
           .catch(() => sendResponse({ ok: false }));
         if (!options.retryOfferSaves) sendResponse({ ok: false });
         return true;
