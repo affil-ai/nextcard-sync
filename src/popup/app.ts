@@ -3281,8 +3281,8 @@ function renderBackgroundOwnedIssuerState(snapshot: OfferOperationSnapshot) {
       );
       if (!recentResult.hidden) {
         const saveOutcome = getOfferSaveStatusText(state);
-        const nextStep = getOfferPostEnrollmentNextStep(state);
-        recentResult.textContent = `${state.added} ${state.added === 1 ? "offer" : "offers"} activated${state.failed > 0 ? ` · ${state.failed} failed` : ""}${saveOutcome ? ` · ${saveOutcome}` : ""}. ${nextStep}`;
+        const nextStep = refreshingAfterCompletion ? "" : getOfferPostEnrollmentNextStep(state);
+        recentResult.textContent = `${state.added} ${state.added === 1 ? "offer" : "offers"} activated${state.failed > 0 ? ` · ${state.failed} failed` : ""}${saveOutcome ? ` · ${saveOutcome}` : ""}.${nextStep ? ` ${nextStep}` : ""}`;
       }
     }
     const summary = document.getElementById(`${issuer}OffersSummary`);
