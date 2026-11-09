@@ -1,4 +1,4 @@
-import { redactLoyaltyIdentifier } from "../../lib/loyalty-privacy";
+import { redactLoyaltyIdentifier, redactLoyaltyIdentifiers } from "../../lib/loyalty-privacy";
 import type {
   HiltonLoyaltyData,
   HyattLoyaltyData,
@@ -255,7 +255,7 @@ export function createHotelRenderers(
     }
 
     marriottEls.rawToggle.style.display = "block";
-    marriottEls.rawData.textContent = JSON.stringify(data, null, 2);
+    marriottEls.rawData.textContent = JSON.stringify(redactLoyaltyIdentifiers(data), null, 2);
   }
 
   marriottEls.syncBtn.addEventListener("click", () => {
@@ -374,7 +374,7 @@ export function createHotelRenderers(
     }
 
     ihgEls.rawToggle.style.display = "block";
-    ihgEls.rawData.textContent = JSON.stringify(data, null, 2);
+    ihgEls.rawData.textContent = JSON.stringify(redactLoyaltyIdentifiers(data), null, 2);
   }
 
   ihgEls.syncBtn.addEventListener("click", () => {
@@ -510,7 +510,7 @@ export function createHotelRenderers(
     }
 
     hyattEls.rawToggle.style.display = "block";
-    hyattEls.rawData.textContent = JSON.stringify(data, null, 2);
+    hyattEls.rawData.textContent = JSON.stringify(redactLoyaltyIdentifiers(data), null, 2);
   }
 
   hyattEls.syncBtn.addEventListener("click", () => {
@@ -659,7 +659,7 @@ export function createHotelRenderers(
     }
 
     hiltonEls.rawToggle.style.display = "block";
-    hiltonEls.rawData.textContent = JSON.stringify(data, null, 2);
+    hiltonEls.rawData.textContent = JSON.stringify(redactLoyaltyIdentifiers(data), null, 2);
   }
 
   hiltonEls.syncBtn.addEventListener("click", () => {

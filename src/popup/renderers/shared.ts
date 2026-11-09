@@ -1,4 +1,4 @@
-import { redactLoyaltyIdentifier } from "../../lib/loyalty-privacy";
+import { redactLoyaltyIdentifier, redactLoyaltyIdentifiers } from "../../lib/loyalty-privacy";
 import type { ProviderId, ProviderSyncState, SyncStatus } from "../../lib/types";
 import { getDisplayedHouseholdScope, getDisplayedRewardsMemberId } from "../state";
 
@@ -353,7 +353,7 @@ export function renderAirline<T extends Record<string, unknown>>(
   }
 
   els.rawToggle.style.display = "block";
-  els.rawData.textContent = JSON.stringify(data, null, 2);
+  els.rawData.textContent = JSON.stringify(redactLoyaltyIdentifiers(data), null, 2);
 }
 
 export function wireAirlineEvents(

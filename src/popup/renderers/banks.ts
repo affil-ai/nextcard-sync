@@ -1,4 +1,4 @@
-import { redactLoyaltyIdentifier } from "../../lib/loyalty-privacy";
+import { redactLoyaltyIdentifier, redactLoyaltyIdentifiers } from "../../lib/loyalty-privacy";
 import type {
   AmexLoyaltyData,
   BiltLoyaltyData,
@@ -209,7 +209,7 @@ export function createBankRenderers(
         : [data];
     chaseEls.cardsContainer.innerHTML = allCards.map(renderChaseCardHtml).join("");
     chaseEls.rawToggle.style.display = "block";
-    chaseEls.rawData.textContent = JSON.stringify(data, null, 2);
+    chaseEls.rawData.textContent = JSON.stringify(redactLoyaltyIdentifiers(data), null, 2);
   }
 
   chaseEls.syncBtn.addEventListener("click", () => {
@@ -371,7 +371,7 @@ export function createBankRenderers(
         : [data];
     amexEls.cardsContainer.innerHTML = allCards.map(renderAmexCardHtml).join("");
     amexEls.rawToggle.style.display = "block";
-    amexEls.rawData.textContent = JSON.stringify(data, null, 2);
+    amexEls.rawData.textContent = JSON.stringify(redactLoyaltyIdentifiers(data), null, 2);
   }
 
   amexEls.syncBtn.addEventListener("click", () => {
@@ -525,7 +525,7 @@ export function createBankRenderers(
       .map(renderCapitalOneCardHtml)
       .join("");
     capitaloneEls.rawToggle.style.display = "block";
-    capitaloneEls.rawData.textContent = JSON.stringify(data, null, 2);
+    capitaloneEls.rawData.textContent = JSON.stringify(redactLoyaltyIdentifiers(data), null, 2);
   }
 
   capitaloneEls.syncBtn.addEventListener("click", () => {
@@ -682,7 +682,7 @@ export function createBankRenderers(
     }
 
     biltEls.rawToggle.style.display = "block";
-    biltEls.rawData.textContent = JSON.stringify(data, null, 2);
+    biltEls.rawData.textContent = JSON.stringify(redactLoyaltyIdentifiers(data), null, 2);
   }
 
   biltEls.syncBtn.addEventListener("click", () => {

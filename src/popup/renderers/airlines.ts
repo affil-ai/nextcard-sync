@@ -1,4 +1,5 @@
-import { redactLoyaltyIdentifier } from "../../lib/loyalty-privacy";
+import { atmosProviderDataSchema } from "../../contracts/loyalty-provider-data";
+import { redactLoyaltyIdentifier, redactLoyaltyIdentifiers } from "../../lib/loyalty-privacy";
 import type {
   AALoyaltyData,
   AtmosLoyaltyData,
@@ -58,7 +59,8 @@ export function createAirlineRenderers(
     const json = JSON.stringify(state);
     if (json === lastAtmosJson) return;
     lastAtmosJson = json;
-    const { status, data, error, lastSyncedAt, progressMessage } = state;
+    const { status, data: rawData, error, lastSyncedAt, progressMessage } = state;
+    const data = rawData ? atmosProviderDataSchema.parse(redactLoyaltyIdentifiers(rawData)) : rawData;
 
     atmosEls.statusDot.className = `status-dot ${getProviderStatusDotClass(state)}`;
     atmosEls.statusText.textContent = getProviderStatusLabel(state);
@@ -132,7 +134,7 @@ export function createAirlineRenderers(
       atmosEls.discountsList.innerHTML = data.discounts
         .map((discount, index) => {
           const meta: string[] = [];
-          if (discount.code) meta.push(`Code: ${escapeHtml(discount.code)}`);
+          if (discount.code) meta.push(`Code: ••••${escapeHtml(discount.code)}`);
           if (discount.expiration) meta.push(`Expires ${escapeHtml(discount.expiration)}`);
           const hasDetails = !!discount.details;
           const isOpen = openDiscountDetails.has(index);
@@ -170,7 +172,7 @@ export function createAirlineRenderers(
     }
 
     atmosEls.rawToggle.style.display = "block";
-    atmosEls.rawData.textContent = JSON.stringify(data, null, 2);
+    atmosEls.rawData.textContent = JSON.stringify(redactLoyaltyIdentifiers(data), null, 2);
   }
 
   atmosEls.syncBtn.addEventListener("click", () => {
