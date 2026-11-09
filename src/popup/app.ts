@@ -552,6 +552,7 @@ function renderOfferCardChoices(options: {
   select: HTMLSelectElement | null;
   selectWrap: HTMLElement | null;
   runButton: HTMLButtonElement | null;
+  refreshing?: boolean;
 }) {
   if (!offersFirstUiEnabled || !options.selectWrap || options.cards.length === 0) return;
   let container = document.getElementById(`${options.issuer}OfferCardChoices`);
@@ -561,7 +562,7 @@ function renderOfferCardChoices(options: {
     container.className = "offer-card-choices";
     options.selectWrap.insertAdjacentElement("beforebegin", container);
   }
-  const fingerprint = JSON.stringify([options.cards, options.counts]);
+  const fingerprint = JSON.stringify([options.cards, options.counts, options.refreshing === true]);
   if (container.dataset.cardsFingerprint === fingerprint) return;
   container.dataset.cardsFingerprint = fingerprint;
   container.innerHTML = "";
@@ -598,7 +599,7 @@ function renderOfferCardChoices(options: {
     button.setAttribute("aria-pressed", String(selected));
     button.innerHTML = `
       <span class="offer-card-choice-copy"><span class="offer-card-choice-name">${escapeHtml(card.name)}</span>${card.lastDigits ? `<span class="offer-card-choice-digits">•••• ${escapeHtml(card.lastDigits)}</span>` : ""}</span>
-      <strong>${typeof count === "number" ? `${count} ${count === 1 ? "offer" : "offers"}` : "Count unavailable"}</strong>
+      <strong>${typeof count === "number" ? `${count} ${count === 1 ? "offer" : "offers"}` : options.refreshing ? "Checking…" : "Count unavailable"}</strong>
     `;
     button.addEventListener("click", () => selectCard(card.id, button));
     container?.appendChild(button);
@@ -3081,11 +3082,12 @@ function renderBackgroundOwnedIssuerState(snapshot: OfferOperationSnapshot) {
           lastDigits: card.lastDigits,
         })),
         counts: Object.fromEntries(
-          state.cards.map((card) => [card.key, card.availableCount ?? 0]),
+          state.cards.flatMap((card) => card.availableCount == null ? [] : [[card.key, card.availableCount]]),
         ),
         select,
         selectWrap,
         runButton,
+        refreshing: refreshingAfterCompletion,
       });
     }
 
@@ -3102,7 +3104,9 @@ function renderBackgroundOwnedIssuerState(snapshot: OfferOperationSnapshot) {
       ) as HTMLButtonElement | null;
       const fresh = isOfferResultFresh(state) && latestOfferSnapshot.active?.runId === state.runId;
       const reviewHost = document.getElementById(`${issuer}OffersReview`);
-      if (reviewHost && selected) offerReview.render(reviewHost, state.runId, selected, updateSelection);
+      // While counts refresh there are no offers to choose yet, and nothing for the user to retry.
+      if (reviewHost && refreshingAfterCompletion) reviewHost.replaceChildren();
+      else if (reviewHost && selected) offerReview.render(reviewHost, state.runId, selected, updateSelection);
       const chosenCount = selected ? offerReview.selected(state.runId, selected).length : 0;
       const availableCount = selected?.availableCount ?? null;
       const allowanceKnown = offerActivationUsage !== null;
@@ -3523,10 +3527,9 @@ async function refreshOfferOperationUi() {
   const activityTitle = document.getElementById("offerActivityTitle");
   const activityDetail = document.getElementById("offerActivityDetail");
   const cancelButton = document.getElementById("offerActivityCancel") as HTMLButtonElement | null;
-  // While adding, the issuer card's Running panel owns progress and Stop; the banner would repeat both.
-  const progressShownInCard =
-    active?.phase === "adding" && issuerHasInlineActivationProgress(active.issuer);
-  if (activity && activityTitle && activityDetail && active && !progressShownInCard) {
+  // Chase, Amex, and Citi cards show their own run status, Stop, Cancel, and Done; the banner would repeat them.
+  const cardOwnsActiveRun = Boolean(active && issuerHasInlineActivationProgress(active.issuer));
+  if (activity && activityTitle && activityDetail && active && !cardOwnsActiveRun) {
     activity.hidden = false;
     activity.setAttribute("data-operation-active", "true");
     activityTitle.textContent =
@@ -3540,12 +3543,12 @@ async function refreshOfferOperationUi() {
           : "Already-submitted offers can’t be undone. Stop to switch providers."
         : active.phase === "ready_to_add" ? "Choose offers, view your saved offers, or check another issuer."
         : "Cancel this check to choose another provider.";
-  } else if (activity && (activity.dataset.operationActive === "true" || progressShownInCard)) {
+  } else if (activity && (activity.dataset.operationActive === "true" || cardOwnsActiveRun)) {
     activity.hidden = true;
     activity.removeAttribute("data-operation-active");
   }
   if (cancelButton) {
-    cancelButton.hidden = !active || active.cancelled || progressShownInCard;
+    cancelButton.hidden = !active || active.cancelled || cardOwnsActiveRun;
     cancelButton.disabled = false;
     cancelButton.textContent = active?.phase === "ready_to_add" ? "Done" : active?.phase === "adding" ? "Stop" : "Cancel";
   }
