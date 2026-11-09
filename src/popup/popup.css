@@ -1869,6 +1869,13 @@
 
 .tool-status { font-size: 13px; line-height: 1.6; color: #342019; margin-bottom: 8px; }
 
+.offer-recent-result .offer-recent-result-link {
+  display: inline;
+  margin-top: 4px;
+  color: #27663a;
+  font-weight: 600;
+}
+
 .offer-recent-result {
   margin-bottom: 10px;
   padding: 9px 10px;
