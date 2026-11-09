@@ -883,3 +883,43 @@ describe("shared Amex terms lookup", () => {
     expect(fetchMock).toHaveBeenCalledTimes(4);
   });
 });
+
+
+describe("bounded offer saves", () => {
+  it.each(["headers", "body"])("queues enrolled and detected saves when response %s never arrive", async (stage) => {
+    vi.useFakeTimers();
+    const digest = vi.spyOn(crypto.subtle, "digest").mockResolvedValue(new ArrayBuffer(32));
+    storageGet.mockResolvedValue({});
+    storageSet.mockResolvedValue(undefined);
+    const fetchMock = vi.fn((_url: string, init?: RequestInit) => {
+      const waitForAbort = () => new Promise<never>((_resolve, reject) => {
+        init?.signal?.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError")), { once: true });
+      });
+      return stage === "headers" ? waitForAbort() : Promise.resolve({
+        ok: true, json: waitForAbort,
+      });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    try {
+      const enrolled = syncOffersToNextCard(payload);
+      await vi.advanceTimersByTimeAsync(64_001);
+      await expect(enrolled).resolves.toEqual({
+        status: "queued_for_retry", error: "Saving offers to nextcard timed out.",
+      });
+      expect(storageSet).toHaveBeenCalledWith({
+        [enrolledStorageKey]: [expect.objectContaining({ runId: payload.runId })],
+      });
+      const detected = syncDetectedOffersToNextCard(detectedPayload);
+      await vi.advanceTimersByTimeAsync(64_001);
+      await expect(detected).resolves.toBe("queued_for_retry");
+      expect(storageSet).toHaveBeenCalledWith({
+        [detectedStorageKey]: [expect.objectContaining({ runId: detectedPayload.runId })],
+      });
+      expect(fetchMock).toHaveBeenCalledTimes(6);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      digest.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+});

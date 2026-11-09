@@ -62,17 +62,9 @@ export function createOfferOperationStore() {
       await persist();
       return snapshot;
     }
-    if (
-      active.phase === "adding"
-      && active.total != null
-      && active.added + active.failed >= active.total
-    ) {
-      await patch(active.runId, {
-        phase: active.cancelled ? "cancelled" : "completed",
-        remaining: 0,
-      });
-      return snapshot;
-    }
+    // Reaching the progress total is not completion: the issuer's COMPLETE
+    // message still carries the verified offers that must be saved. Polling
+    // here must not retire the run before that message can be accepted.
 
     if (active.ownedTabId == null) {
       const openingStartedAt = new Date(active.startedAt).getTime();
