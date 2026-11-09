@@ -81,6 +81,8 @@ const NEXTCARD_AUTH_WAIT_TIMEOUT_MS = 45_000;
 const OFFER_ACTIVATION_USAGE_REFRESH_MS = 3 * 60 * 1000;
 const activeOfferRunIds = new Map<OfferIssuer, string>();
 const advancedAfterEnrollmentRunIds = new Set<string>();
+// The dashboard's "Recently added" sort puts the offers just activated at the top.
+const RECENTLY_ADDED_OFFERS_URL = `https://www.nextcard.com/dashboard/offers?sort=${encodeURIComponent(JSON.stringify([{ id: "recent", desc: true }]))}`;
 let renderedAccountKey: string | null = null;
 let destinationRestored = false;
 let offerActivationUsage: {
@@ -3283,6 +3285,15 @@ function renderBackgroundOwnedIssuerState(snapshot: OfferOperationSnapshot) {
         const saveOutcome = getOfferSaveStatusText(state);
         const nextStep = refreshingAfterCompletion ? "" : getOfferPostEnrollmentNextStep(state);
         recentResult.textContent = `${state.added} ${state.added === 1 ? "offer" : "offers"} activated${state.failed > 0 ? ` · ${state.failed} failed` : ""}${saveOutcome ? ` · ${saveOutcome}` : ""}.${nextStep ? ` ${nextStep}` : ""}`;
+        // Only saved offers are on the dashboard yet. Opening them keeps this review open.
+        if (state.saveStatus === "saved") {
+          const seeAdded = document.createElement("button");
+          seeAdded.type = "button";
+          seeAdded.className = "tool-link-btn offer-recent-result-link";
+          seeAdded.textContent = `See the ${state.added === 1 ? "offer" : `${state.added}`} you added →`;
+          seeAdded.onclick = () => void chrome.tabs.create({ url: RECENTLY_ADDED_OFFERS_URL });
+          recentResult.append(" ", seeAdded);
+        }
       }
     }
     const summary = document.getElementById(`${issuer}OffersSummary`);
@@ -4545,7 +4556,7 @@ async function finishOfferReview(issuer: string, viewOffers = false) {
     if (!result?.ok) return;
     activeOfferRunIds.delete(active.issuer);
   }
-  if (viewOffers) await chrome.tabs.create({ url: "https://www.nextcard.com/dashboard/offers" });
+  if (viewOffers) await chrome.tabs.create({ url: RECENTLY_ADDED_OFFERS_URL });
   await refreshOfferOperationUi();
 }
 
