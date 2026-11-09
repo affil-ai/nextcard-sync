@@ -3,6 +3,7 @@ import {
   OFFER_OPERATION_STORAGE_KEY,
   OFFER_TERMINAL_HISTORY_FRESHNESS_MS,
   createOfferOperation,
+  type OfferIssuer,
 } from "../lib/offer-operation";
 import { createOfferOperationStore } from "./offer-operation-store";
 
@@ -454,26 +455,30 @@ describe("background offer operation store", () => {
     });
   });
 
-  it("repairs a persisted adding state whose work already reached its total", async () => {
+  it.each<OfferIssuer>(["amex", "chase"])("keeps %s active at its total until completion delivers the offers", async (issuer) => {
+    getTab.mockResolvedValue({ id: 42 });
     const store = createOfferOperationStore();
-    const started = await store.start("chase");
-    await store.patch(started.state.runId, {
-      phase: "checking",
-      ownedTabId: 42,
-    });
+    const started = await store.start(issuer);
+    await store.patch(started.state.runId, { phase: "checking", ownedTabId: 42 });
     await store.patch(started.state.runId, { phase: "ready_to_add" });
     await store.patch(started.state.runId, {
-      phase: "adding",
-      total: 32,
-      added: 32,
-      failed: 0,
-      remaining: 0,
+      phase: "adding", total: 100, added: 100, failed: 0, remaining: 0,
+      saveStatus: "saving",
     });
 
-    const snapshot = await store.getSnapshot();
-    expect(snapshot.active).toBeNull();
-    expect(snapshot.history.chase?.phase).toBe("completed");
-    expect(snapshot.history.chase?.remaining).toBe(0);
+    // Popup polling and detected-offer saves both read the snapshot before
+    // the issuer sends COMPLETE with its verified enrollment payload.
+    await store.getSnapshot();
+    expect(await store.getActiveRun(issuer, started.state.runId)).toMatchObject({
+      phase: "adding", added: 100,
+    });
+    expect(await store.patchActiveRun(issuer, started.state.runId, {
+      phase: "completed", saveStatus: "saving",
+    })).not.toBeNull();
+    await store.patch(started.state.runId, { saveStatus: "saved" });
+    expect((await store.getSnapshot()).history[issuer]).toMatchObject({
+      phase: "completed", added: 100, saveStatus: "saved",
+    });
   });
 
   it("releases stale ready results while retaining history", async () => {

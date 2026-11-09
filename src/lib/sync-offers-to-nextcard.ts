@@ -19,6 +19,28 @@ import {
   type HouseholdOperationScope,
 } from "./household-context";
 
+// Chrome can suspend the service worker while a fetch waits indefinitely.
+// Bound the entire response read so callers can persist and report a retry.
+const OFFER_SAVE_TIMEOUT_MS = 20_000;
+
+async function fetchOfferSave(url: string, init: RequestInit) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), OFFER_SAVE_TIMEOUT_MS);
+  try {
+    const response = await fetch(url, { ...init, signal: controller.signal });
+    const body: unknown = await response.json().catch((error: unknown) => {
+      if (controller.signal.aborted) throw error;
+      return {};
+    });
+    return { response, body };
+  } catch (error) {
+    if (controller.signal.aborted) throw new Error("Saving offers to nextcard timed out.");
+    throw error;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 function readOfferSyncError(value: unknown, status: number) {
   if (typeof value === "object" && value !== null) {
     if ("code" in value && typeof value.code === "string") return value.code;
@@ -368,7 +390,7 @@ async function postOfferSync(
     ? `${__CONVEX_SITE_URL__}/extension/v2/offers-sync`
     : `${__CONVEX_SITE_URL__}/extension/offers-sync`;
 
-  const response = await fetch(endpoint, {
+  const { response, body } = await fetchOfferSave(endpoint, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -397,11 +419,9 @@ async function postOfferSync(
   });
 
   if (!response.ok) {
-    const result = await response.json().catch(() => ({}));
-    return { ok: false, error: readOfferSyncError(result, response.status) };
+    return { ok: false, error: readOfferSyncError(body, response.status) };
   }
 
-  const body = await response.json().catch(() => ({}));
   const debug = (body as Record<string, unknown>).debug;
   if (debug) {
     console.info("[NextCard Offers Sync] summary:", debug);
@@ -689,7 +709,7 @@ async function postDetectedOfferSync(
     for (const offset of chunkOffsets) {
       const offers = payload.offers.slice(offset, offset + DETECTED_OFFER_SYNC_CHUNK_SIZE);
       const isLastChunk = offset + DETECTED_OFFER_SYNC_CHUNK_SIZE >= payload.offers.length;
-      const response = await fetch(endpoint, {
+      const { response, body } = await fetchOfferSave(endpoint, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -725,8 +745,7 @@ async function postDetectedOfferSync(
       });
 
       if (!response.ok) {
-        const result = await response.json().catch(() => ({}));
-        const error = readOfferSyncError(result, response.status);
+        const error = readOfferSyncError(body, response.status);
         console.warn("[NextCard Detected Offers] chunk sync failed:", {
           status: response.status,
           error,
@@ -736,7 +755,6 @@ async function postDetectedOfferSync(
         return { ok: false, error };
       }
 
-      const body = await response.json().catch(() => ({}));
       const debug = (body as Record<string, unknown>).debug;
       if (debug) {
         console.info("[NextCard Detected Offers] chunk summary:", {
