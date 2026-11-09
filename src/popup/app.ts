@@ -3271,7 +3271,7 @@ function renderBackgroundOwnedIssuerState(snapshot: OfferOperationSnapshot) {
         completionContinuing && state.saveStatus === "saved"
           ? "refreshing your cards…"
           : getOfferSaveStatusText(state);
-      const saveOutcome = state.added > 0 && saveStatusText ? ` · ${saveStatusText}` : "";
+      const saveOutcome = saveStatusText ? ` · ${saveStatusText}` : "";
       summary.textContent = `${outcome}${(state.unverified ?? 0) > 0 ? ` · ${state.unverified} unverified, check offers before retrying` : ""}${state.saveStatus === "failed" ? " · Check your nextcard sign-in and household profile, then check offers to sync them again. Do not repeat issuer activation." : ""}${state.error ? ` · ${state.error}` : ""}${saveOutcome}`;
     }
     let retrySave = document.getElementById(`${issuer}OffersRetrySave`);

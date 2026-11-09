@@ -424,7 +424,9 @@ export function getOfferSaveStatusText(
     case "saving":
       return "saving to nextcard";
     case "queued_for_retry":
-      return "activated at issuer; save to nextcard pending, retry saving";
+      return state.added > 0
+        ? "activated at issuer; save to nextcard pending, retry saving"
+        : "save to nextcard pending, retry saving";
     case "saved":
       return "saved to nextcard";
     case "failed": {

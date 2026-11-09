@@ -199,7 +199,8 @@ function hasOptionalRunId(value: unknown): value is { runId?: unknown } {
 }
 // Detected-offer upserts can require a substantial read of the user's offer
 // history. Keep each request well below Convex's per-function read limit.
-const DETECTED_OFFER_SYNC_CHUNK_SIZE = 50;
+// Keep old servers' catalog transactions small as well as the HTTP payload.
+const DETECTED_OFFER_SYNC_CHUNK_SIZE = 10;
 let detectedOfferSyncQueue: Promise<void> = Promise.resolve();
 let enrolledOfferSyncQueue: Promise<void> = Promise.resolve();
 
