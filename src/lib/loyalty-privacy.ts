@@ -1,9 +1,6 @@
 /** Loyalty identifiers are display-only suffixes. Full values must never be persisted. */
 export function redactLoyaltyIdentifier(value: string) {
-  const trimmed = value.trim();
-  return trimmed.length > 4
-    ? "*".repeat(trimmed.length - 4) + trimmed.slice(-4)
-    : trimmed;
+  return value.trim().replace(/[^a-z0-9]/gi, "").slice(-4);
 }
 
 const identifierKeys = new Set([
@@ -24,7 +21,7 @@ const identifierKeys = new Set([
 ]);
 
 function isIdentifierKey(key: string) {
-  return identifierKeys.has(key.toLowerCase().replace(/[^a-z]/g, ""));
+  return identifierKeys.has(key.toLowerCase().replace(/^field:/, "").replace(/[^a-z]/g, ""));
 }
 
 /** Covers nested/raw payloads, tracking edit history, and copies of codes in descriptions. */

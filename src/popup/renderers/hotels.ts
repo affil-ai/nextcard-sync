@@ -1,3 +1,4 @@
+import { redactLoyaltyIdentifier } from "../../lib/loyalty-privacy";
 import type {
   HiltonLoyaltyData,
   HyattLoyaltyData,
@@ -217,7 +218,7 @@ export function createHotelRenderers(
 
     const memberParts = [
       normalizeMarriottMemberName(data.memberName),
-      data.memberNumber,
+      data.memberNumber ? `••••${redactLoyaltyIdentifier(data.memberNumber)}` : null,
     ].filter(Boolean);
     renderValue(
       marriottEls.memberInfo,
@@ -354,7 +355,7 @@ export function createHotelRenderers(
     }
 
     if (data.memberNumber) {
-      renderValue(ihgEls.memberNumber, data.memberNumber);
+      renderValue(ihgEls.memberNumber, `••••${redactLoyaltyIdentifier(data.memberNumber)}`);
       ihgEls.memberNumberCard.style.display = "";
     } else {
       ihgEls.memberNumberCard.style.display = "none";
@@ -467,7 +468,7 @@ export function createHotelRenderers(
     }
 
     if (data.memberNumber) {
-      renderValue(hyattEls.memberNumber, data.memberNumber);
+      renderValue(hyattEls.memberNumber, `••••${redactLoyaltyIdentifier(data.memberNumber)}`);
       hyattEls.memberNumberCard.style.display = "";
     } else {
       hyattEls.memberNumberCard.style.display = "none";
@@ -594,7 +595,7 @@ export function createHotelRenderers(
     }
 
     if (data.memberNumber) {
-      renderValue(hiltonEls.memberNumber, data.memberNumber);
+      renderValue(hiltonEls.memberNumber, `••••${redactLoyaltyIdentifier(data.memberNumber)}`);
       hiltonEls.memberNumberCard.style.display = "";
     } else {
       hiltonEls.memberNumberCard.style.display = "none";

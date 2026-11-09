@@ -1,3 +1,4 @@
+import { redactLoyaltyIdentifier } from "../../lib/loyalty-privacy";
 import type { ProviderId, ProviderSyncState, SyncStatus } from "../../lib/types";
 import { getDisplayedHouseholdScope, getDisplayedRewardsMemberId } from "../state";
 
@@ -342,7 +343,7 @@ export function renderAirline<T extends Record<string, unknown>>(
     typeof data.eliteStatus === "string" ? data.eliteStatus : null,
   );
 
-  const memberParts = [data.memberName, data.memberNumber].filter(
+  const memberParts = [data.memberName, typeof data.memberNumber === "string" ? `••••${redactLoyaltyIdentifier(data.memberNumber)}` : null].filter(
     (part): part is string => typeof part === "string" && part.length > 0,
   );
   renderValue(els.memberInfo, memberParts.length > 0 ? memberParts.join(" - ") : null);

@@ -114,7 +114,7 @@ describe("pushToNextCard", () => {
       memberId: "member-a",
       identityEvidence: { memberNumber: "12345678" },
       input: {
-        memberNumber: "****5678",
+        memberNumber: "5678",
       },
     });
   });
@@ -150,8 +150,8 @@ describe("pushToNextCard", () => {
       "/extension/v2/sync",
     ]);
     expect(bodies[0]).toMatchObject({ memberId: "member-a", operationId: "operation-1", identityConfirmed: true,
-      identityEvidence: { memberNumber: "12345678" }, input: { memberNumber: "****5678" } });
-    expect(bodies[1]).toMatchObject({ operationId: "operation-1", input: { memberNumber: "****5678" } });
+      identityEvidence: { memberNumber: "12345678" }, input: { memberNumber: "5678" } });
+    expect(bodies[1]).toMatchObject({ operationId: "operation-1", input: { memberNumber: "5678" } });
     expect(JSON.stringify(bodies[1])).not.toContain("12345678");
   });
 
@@ -235,9 +235,9 @@ it("sends only redacted companion codes and nested copies to the database", asyn
   expect(bodies[0]).not.toContain("FARE-ABC123");
   expect(bodies[0]).not.toContain("123456789");
   expect(JSON.parse(bodies[0])).toMatchObject({
-    memberNumber: "*****6789",
-    rawProviderData: { discounts: [{ code: "*******C123", details: "Use *******C123 for *****6789" }] },
-    providerData: { raw: { discounts: [{ code: "*******C123" }] } }
+    memberNumber: "6789",
+    rawProviderData: { discounts: [{ code: "C123", details: "Use C123 for 6789" }] },
+    providerData: { raw: { discounts: [{ code: "C123" }] } }
   });
 });
 

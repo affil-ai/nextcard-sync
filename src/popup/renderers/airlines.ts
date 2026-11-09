@@ -1,3 +1,4 @@
+import { redactLoyaltyIdentifier } from "../../lib/loyalty-privacy";
 import type {
   AALoyaltyData,
   AtmosLoyaltyData,
@@ -101,7 +102,7 @@ export function createAirlineRenderers(
     renderValue(atmosEls.statusPoints, data.statusPoints?.toLocaleString() ?? null);
     renderValue(atmosEls.statusLevel, data.statusLevel);
 
-    const memberParts = [data.memberName, data.memberNumber].filter(Boolean);
+    const memberParts = [data.memberName, data.memberNumber ? `••••${redactLoyaltyIdentifier(data.memberNumber)}` : null].filter(Boolean);
     renderValue(
       atmosEls.memberInfo,
       memberParts.length > 0 ? memberParts.join(" - ") : null,

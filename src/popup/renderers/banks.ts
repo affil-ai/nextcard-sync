@@ -1,3 +1,4 @@
+import { redactLoyaltyIdentifier } from "../../lib/loyalty-privacy";
 import type {
   AmexLoyaltyData,
   BiltLoyaltyData,
@@ -633,7 +634,7 @@ export function createBankRenderers(
       biltEls.memberNameCard.style.display = "none";
     }
     if (data.memberNumber) {
-      renderValue(biltEls.memberNumber, data.memberNumber);
+      renderValue(biltEls.memberNumber, `••••${redactLoyaltyIdentifier(data.memberNumber)}`);
       biltEls.memberNumberCard.style.display = "";
     } else {
       biltEls.memberNumberCard.style.display = "none";
