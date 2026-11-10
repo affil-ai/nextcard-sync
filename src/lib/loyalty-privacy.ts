@@ -1,6 +1,6 @@
 /** Loyalty identifiers are display-only suffixes. Full values must never be persisted. */
 export function redactLoyaltyIdentifier(value: string) {
-  return value.trim().replace(/[^a-z0-9]/gi, "").slice(-4);
+  return value.trim().replace(/^[xX]{2,}(?=[a-z0-9]{4,5}$)/, "").replace(/[^a-z0-9]/gi, "").slice(-5);
 }
 
 const identifierKeys = new Set([
@@ -29,7 +29,7 @@ export function redactLoyaltyIdentifiers(value: unknown): unknown {
   const identifiers = new Set<string>();
   function collect(input: unknown, sensitive = false) {
     if (typeof input === "string" || typeof input === "number") {
-      if (sensitive && String(input).length > 4) identifiers.add(String(input));
+      if (sensitive && String(input).length > 5) identifiers.add(String(input));
       return;
     }
     if (!input || typeof input !== "object") return;
@@ -63,7 +63,7 @@ export function redactLoyaltyIdentifiers(value: unknown): unknown {
       return text;
     }
     if (typeof input === "number" && sensitive && Number.isFinite(input)) {
-      return Number(String(input).slice(-4));
+      return Number(String(input).slice(-5));
     }
     if (!input || typeof input !== "object") return input;
     if (Array.isArray(input))

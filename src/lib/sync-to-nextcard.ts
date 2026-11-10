@@ -47,7 +47,7 @@ function maskId(value: string | null | undefined): string | null {
   return "*".repeat(value.length - 4) + value.slice(-4);
 }
 
-const SENSITIVE_KEYS = new Set(["memberNumber", "memberName"]);
+const SENSITIVE_KEYS = new Set(["memberName"]);
 
 function maskSensitiveFields<T>(obj: T): T {
   if (obj === null || obj === undefined || typeof obj !== "object") return obj;
