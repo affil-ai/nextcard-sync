@@ -420,3 +420,41 @@ it.each([
     vi.useRealTimers();
   }
 });
+
+it.each(["https://citi.com", "https://www.citi.com"])("waits through the %s login redirect and resumes in the same tab", async origin => {
+  vi.useFakeTimers();
+  try {
+    getTab.mockResolvedValue({ id: 42, url: `${origin}/login?nextRoute=products-offers%2Fmerchantoffers`, status: "complete" });
+    const store = createOfferOperationStore();
+    const started = await store.start("citi");
+    await store.patch(started.state.runId, { phase: "checking", ownedTabId: 42 });
+    const coordinator = createOfferOperationCoordinator(store);
+    await coordinator.resume();
+    await vi.advanceTimersByTimeAsync(61_500);
+    expect((await store.getSnapshot()).active).toMatchObject({ phase: "waiting_for_login", ownedTabId: 42, error: null });
+    expect(sendMessage).not.toHaveBeenCalled();
+    getTab.mockResolvedValue({ id: 42, url: "https://online.citi.com/US/ag/products-offers/merchantoffers", status: "complete" });
+    sendMessage.mockImplementation((_id: number, _message: unknown, reply: (response: unknown) => void) => reply({ cards: [{ id: "card", name: "Citi card" }], offerCounts: { card: 2 } }));
+    await vi.advanceTimersByTimeAsync(3_000);
+    expect((await store.getSnapshot()).active).toMatchObject({ phase: "ready_to_add", ownedTabId: 42, cards: [{ key: "card", availableCount: 2 }] });
+    expect(sendMessage).toHaveBeenCalledWith(42, expect.objectContaining({ type: "CITI_OFFERS_DISCOVER" }), expect.any(Function));
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+it("still interrupts Citi discovery when the owned tab leaves Citi", async () => {
+  vi.useFakeTimers();
+  try {
+    getTab.mockResolvedValue({ id: 42, url: "https://example.com/login", status: "complete" });
+    const store = createOfferOperationStore();
+    const started = await store.start("citi");
+    await store.patch(started.state.runId, { phase: "checking", ownedTabId: 42 });
+    await createOfferOperationCoordinator(store).resume();
+    await vi.advanceTimersByTimeAsync(1_500);
+    expect((await store.getSnapshot()).history.citi).toMatchObject({ phase: "interrupted", error: "The issuer tab is no longer available." });
+    expect(sendMessage).not.toHaveBeenCalled();
+  } finally {
+    vi.useRealTimers();
+  }
+});

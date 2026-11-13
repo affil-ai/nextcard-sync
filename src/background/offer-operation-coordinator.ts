@@ -12,6 +12,7 @@ import type { OfferOperationStore } from "./offer-operation-store";
 const ISSUER_CONFIG: Record<OfferIssuer, {
   url: string;
   origins: string[];
+  loginOrigins?: string[];
   discoverMessage: string;
   runMessage: string | null;
   stopMessage: string | null;
@@ -39,6 +40,7 @@ const ISSUER_CONFIG: Record<OfferIssuer, {
   citi: {
     url: "https://online.citi.com/US/ag/products-offers/merchantoffers",
     origins: ["https://online.citi.com"],
+    loginOrigins: ["https://citi.com", "https://www.citi.com"],
     discoverMessage: "CITI_OFFERS_DISCOVER",
     runMessage: "CITI_OFFERS_RUN",
     stopMessage: "CITI_OFFERS_STOP",
@@ -68,10 +70,12 @@ function safeLastFour(value: unknown) {
   return digits.length >= 4 ? digits.slice(-4) : null;
 }
 
-function tabMatchesIssuer(url: string | undefined, issuer: OfferIssuer) {
+function tabMatchesIssuer(url: string | undefined, issuer: OfferIssuer, allowLogin = false) {
   if (!url) return false;
   try {
-    return ISSUER_CONFIG[issuer].origins.includes(new URL(url).origin);
+    const origin = new URL(url).origin;
+    return ISSUER_CONFIG[issuer].origins.includes(origin)
+      || (allowLogin && ISSUER_CONFIG[issuer].loginOrigins?.includes(origin) === true);
   } catch {
     return false;
   }
@@ -193,17 +197,26 @@ export function createOfferOperationCoordinator(
     await waitForTabComplete(tabId);
     await delay(1_500);
 
-    for (let attempt = 0; attempt < 15; attempt += 1) {
+    // Citi redirects to a separate login origin. Allow time for sign-in and MFA
+    // while keeping offer API calls restricted to the authenticated online origin.
+    const maxAttempts = issuer === "citi" ? 100 : 15;
+    for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
       const snapshot = await store.getSnapshot();
       if (snapshot.active?.runId !== runId) return;
       const tab = await chrome.tabs.get(tabId).catch(() => null);
-      if (!tab || !tabMatchesIssuer(tab.url, issuer)) {
+      if (!tab || !tabMatchesIssuer(tab.url, issuer, true)) {
         await store.patch(runId, {
           phase: "interrupted",
           error: "The issuer tab is no longer available.",
           ownedTabId: null,
         });
         return;
+      }
+
+      if (!tabMatchesIssuer(tab.url, issuer)) {
+        await store.patch(runId, { phase: "waiting_for_login", error: null });
+        await delay(3_000);
+        continue;
       }
 
       await store.patch(runId, {
