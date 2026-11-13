@@ -398,3 +398,25 @@ it("blocks another bank's checks and activation while the portal engine owns a r
   expect(createTab).not.toHaveBeenCalled();
   expect(sendMessage).not.toHaveBeenCalled();
 });
+
+it.each([
+  ["session_expired", "Sign in to Citi again, then check offers."],
+  ["request_failed", "Citi could not return your offers. Try checking again."],
+  ["invalid_response", "Citi returned an unexpected response. Try checking again."],
+])("surfaces Citi %s without presenting an empty offer review", async (code, message) => {
+  vi.useFakeTimers();
+  try {
+    getTab.mockResolvedValue({ id: 42, url: "https://online.citi.com/US/ag/products-offers/merchantoffers", status: "complete" });
+    sendMessage.mockImplementation((_tabId: number, _message: unknown, callback: (response: unknown) => void) => callback({ cards: [], error: code }));
+    const store = createOfferOperationStore();
+    const started = await store.start("citi");
+    await store.patch(started.state.runId, { phase: "checking", ownedTabId: 42 });
+    const coordinator = createOfferOperationCoordinator(store);
+    await coordinator.resume();
+    await vi.advanceTimersByTimeAsync(1_500);
+    expect((await store.getSnapshot()).history.citi).toMatchObject({ phase: "failed", error: message, cards: [] });
+    expect((await store.getSnapshot()).active).toBeNull();
+  } finally {
+    vi.useRealTimers();
+  }
+});

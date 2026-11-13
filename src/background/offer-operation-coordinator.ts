@@ -220,10 +220,17 @@ export function createOfferOperationCoordinator(
         await delay(1_500);
         continue;
       }
-      if (response?.error === "request_failed" || response?.error === "invalid_response") {
-        await store.patch(runId, { phase: "failed", error: response.error === "request_failed"
-          ? "Chase could not return your offers. Try checking again."
-          : "Chase returned an unexpected response. Try checking again." });
+      if (response?.error === "request_failed" || response?.error === "invalid_response"
+        || (issuer === "citi" && response?.error === "session_expired")) {
+        const issuerName = issuer === "amex" ? "Amex"
+          : issuer === "capitalone" ? "Capital One"
+          : issuer === "citi" ? "Citi" : "Chase";
+        const error = response.error === "session_expired"
+          ? `Sign in to ${issuerName} again, then check offers.`
+          : response.error === "request_failed"
+            ? `${issuerName} could not return your offers. Try checking again.`
+            : `${issuerName} returned an unexpected response. Try checking again.`;
+        await store.patch(runId, { phase: "failed", error });
         return;
       }
       const cards = response ? normalizeDiscoveryCards(issuer, response) : [];

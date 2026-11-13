@@ -1620,14 +1620,23 @@ export function createMessageRouter(options: {
 
         (async () => {
           try {
-            const tabs = await chrome.tabs.query({ url: "https://online.citi.com/*" });
-            const tabId = tabs[0]?.id;
-            if (!tabId) { sendResponse({ status: 0, data: null }); return; }
+            // Citi auth headers come from this page's cookies, so another open
+            // Citi tab must never supply the session for this request.
+            const tabId = sender.tab?.id;
+            const senderUrl = sender.url ?? sender.tab?.url;
+            if (tabId == null || !senderUrl
+              || new URL(senderUrl).origin !== "https://online.citi.com"
+              || new URL(citiUrl).origin !== "https://online.citi.com") {
+              sendResponse({ status: 0, data: null });
+              return;
+            }
 
             const results = await chrome.scripting.executeScript({
               target: { tabId },
               world: "MAIN",
               func: async (url: string, method: string, body: string | null) => {
+                // The tab may have navigated since it sent the message.
+                if (location.origin !== "https://online.citi.com") return { status: 0, data: null };
                 // Build auth headers from cookies
                 const getCookie = (name: string) => {
                   const match = document.cookie.match(new RegExp(`(?:^|;)\\s*${name}=([^;]*)`));
@@ -1650,6 +1659,7 @@ export function createMessageRouter(options: {
                     headers,
                     credentials: "include",
                     body: body ?? undefined,
+                    signal: AbortSignal.timeout(20_000),
                   });
                   let data = null;
                   try { data = await resp.json(); } catch { /* */ }
