@@ -282,7 +282,7 @@ export const providerRegistry = {
     tabUrlPattern: "https://*.citi.com/*",
     accountUrlPattern: "https://online.citi.com/US/ag/dashboard.*",
     accountUrl: "https://online.citi.com/US/ag/dashboard/summary",
-    manifestMatches: ["https://online.citi.com/*", "https://www.citi.com/*"],
+    manifestMatches: ["https://online.citi.com/*", "https://www.citi.com/*", "https://citi.com/*"],
     contentScriptPath: "src/content-scripts/citi.ts",
   },
 } satisfies Record<ProviderId, ProviderDefinition>;
