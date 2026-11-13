@@ -30,17 +30,41 @@ interface CitiOffer {
 
 // ── Helpers ────────────────────────────────────────────────
 
-/** Route a fetch through the service worker's executeScript MAIN world */
+class CitiReadError extends Error {
+  constructor(readonly code: "session_expired" | "request_failed" | "invalid_response") {
+    super(code === "session_expired" ? "Sign in to Citi again, then check offers."
+      : code === "invalid_response" ? "Citi returned an unexpected response. Check again."
+      : "Citi could not return your offers. Check again.");
+  }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+/** Use the requesting tab's Citi session. Never treat a failed read as an empty listing. */
 function citiFetch(url: string, method: string, body: string | null): Promise<{ status: number; data: unknown }> {
   return new Promise((resolve) => {
+    const timeout = setTimeout(() => resolve({ status: 0, data: null }), 30_000);
     chrome.runtime.sendMessage(
       { type: "CITI_OFFERS_FETCH", url, method, body },
-      (resp) => {
-        if (chrome.runtime.lastError || !resp) resolve({ status: 0, data: null });
-        else resolve(resp);
+      (resp: unknown) => {
+        clearTimeout(timeout);
+        if (chrome.runtime.lastError || !isRecord(resp) || typeof resp.status !== "number") {
+          resolve({ status: 0, data: null });
+        } else {
+          resolve({ status: resp.status, data: resp.data });
+        }
       },
     );
   });
+}
+
+function readCitiResponse(resp: { status: number; data: unknown }): Record<string, unknown> {
+  if (resp.status === 401 || resp.status === 403) throw new CitiReadError("session_expired");
+  if (resp.status !== 200) throw new CitiReadError("request_failed");
+  if (!isRecord(resp.data)) throw new CitiReadError("invalid_response");
+  return resp.data;
 }
 
 // ── Card Discovery ─────────────────────────────────────────
@@ -52,13 +76,18 @@ async function discoverCards(): Promise<CitiCard[]> {
     null,
   );
 
-  if (resp.status !== 200 || !resp.data) return [];
-
-  const data = resp.data as Record<string, unknown>;
-  const creditCard = data.creditCardAccount as Record<string, unknown> | undefined;
-  const accounts = (creditCard?.accountDetails ?? []) as Record<string, unknown>[];
-
-  if (accounts.length > 0) {
+  const data = readCitiResponse(resp);
+  const creditCard = data.creditCardAccount;
+  if (!isRecord(creditCard) || !Array.isArray(creditCard.accountDetails)) {
+    throw new CitiReadError("invalid_response");
+  }
+  const accounts: Record<string, unknown>[] = [];
+  for (const account of creditCard.accountDetails) {
+    if (!isRecord(account) || typeof account.accountStatus !== "string"
+      || typeof account.accountId !== "string" || !account.accountId) {
+      throw new CitiReadError("invalid_response");
+    }
+    accounts.push(account);
   }
 
   return accounts
@@ -83,20 +112,22 @@ async function listOffers(accountId: string): Promise<CitiOffer[]> {
     JSON.stringify({ accountId }),
   );
 
-  if (resp.status !== 200 || !resp.data) return [];
-
-  const data = resp.data as Record<string, unknown>;
-  const merchantOffers = (data.merchantOffers ?? []) as Record<string, unknown>[];
+  const data = readCitiResponse(resp);
+  if (!Array.isArray(data.merchantOffers)) throw new CitiReadError("invalid_response");
+  const merchantOffers = data.merchantOffers;
 
   // Flatten offers from all categories, deduplicate by offerId
   const seen = new Set<string>();
   const offers: CitiOffer[] = [];
 
   for (const group of merchantOffers) {
-    const groupOffers = (group.offers ?? []) as Record<string, unknown>[];
-    for (const o of groupOffers) {
-      const offerId = (o.offerId ?? "") as string;
-      if (!offerId || seen.has(offerId)) continue;
+    if (!isRecord(group) || !Array.isArray(group.offers)) throw new CitiReadError("invalid_response");
+    for (const o of group.offers) {
+      if (!isRecord(o) || typeof o.offerId !== "string" || !o.offerId) {
+        throw new CitiReadError("invalid_response");
+      }
+      const offerId = o.offerId;
+      if (seen.has(offerId)) continue;
       seen.add(offerId);
       offers.push({
         offerId,
@@ -300,7 +331,10 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
           }))])),
         error: undefined,
       });
-    })();
+    })().catch((error: unknown) => sendResponse({
+      type: "CITI_OFFERS_READY", cards: [], offerCounts: {},
+      error: error instanceof CitiReadError ? error.code : "request_failed",
+    }));
     return true;
   }
 
