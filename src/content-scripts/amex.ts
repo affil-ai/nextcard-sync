@@ -14,7 +14,7 @@
  */
 
 import type { LoginState } from "../lib/types";
-import { extractLastFourDigits } from "../lib/card-digits";
+import { extractCardSuffixDigits } from "../lib/card-digits";
 import { createContentScriptRunControl } from "../lib/content-script-run-control";
 import { showOverlay, updateOverlay, updateOverlayProgress, hideOverlay } from "../lib/overlay";
 import { createLoginStateMonitor } from "../lib/login-state-monitor";
@@ -117,7 +117,7 @@ async function getCardOptions(): Promise<CardOption[]> {
     const nameEl = item.querySelector('[data-testid="simple_switcher_display_name"]');
     const numberEl = item.querySelector('[data-testid="simple_switcher_display_number_val"]');
     const name = nameEl ? textOf(nameEl) : "";
-    const lastDigits = extractLastFourDigits(textOf(numberEl)) ?? "";
+    const lastDigits = extractCardSuffixDigits(textOf(numberEl)) ?? "";
 
     const fullText = textOf(item).toLowerCase();
     const isCancelled = fullText.includes("cancel") || fullText.includes("closed") || fullText.includes("terminated");
@@ -175,7 +175,7 @@ function scrapeAmexPage() {
     const name = textOf(cardNameEl);
     const rawNumber = cardNumberEl ? textOf(cardNumberEl) : "";
     const number = rawNumber.replace(/[^0-9•·.]/g, "");
-    data.lastFourDigits = extractLastFourDigits(rawNumber);
+    data.lastFourDigits = extractCardSuffixDigits(rawNumber);
     data.cardName = number ? `${name} (${number})` : name;
   }
 
