@@ -1,6 +1,6 @@
 import type { ProviderSyncTabOpener } from "../core/tab-utils";
 import type { AmexLoyaltyData, PushToNextCardResult } from "../../lib/types";
-import { extractLastFourDigits } from "../../lib/card-digits";
+import { extractCardSuffixDigits } from "../../lib/card-digits";
 import type { createRuntimeStateStore } from "../core/runtime-state";
 import { sendRunMessageToTab, triggerExtraction } from "../core/tab-utils";
 
@@ -212,7 +212,10 @@ export function createAmexSync(options: AmexSyncDeps) {
 
         for (let index = 0; index < cardOptions.length; index += 1) {
           const option = cardOptions[index];
-          const firstLastDigits = extractLastFourDigits(firstCard.cardName);
+          // Compare all five Amex digits: Aspire ••31003 and Business Gold
+          // ••61003 are different cards, so the second one must still sync.
+          const firstLastDigits =
+            firstCard.lastFourDigits ?? extractCardSuffixDigits(firstCard.cardName);
           if (firstLastDigits && option.lastDigits === firstLastDigits) {
             continue;
           }
