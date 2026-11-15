@@ -1,6 +1,6 @@
 import type { ProviderSyncTabOpener } from "../core/tab-utils";
 import type { AmexLoyaltyData, PushToNextCardResult } from "../../lib/types";
-import { extractCardSuffixDigits } from "../../lib/card-digits";
+import { extractCardSuffixDigits, sameCardSuffix } from "../../lib/card-digits";
 import type { createRuntimeStateStore } from "../core/runtime-state";
 import { sendRunMessageToTab, triggerExtraction } from "../core/tab-utils";
 
@@ -39,6 +39,31 @@ interface AmexSyncDeps {
     providerId: "amex",
     data: unknown,
   ) => Promise<PushToNextCardResult>;
+}
+
+/**
+ * The switcher option that is the card already scraped first, so the
+ * multi-card loop doesn't extract it again. Amex identifies cards by five
+ * digits and two cards can share their last 4 (Aspire ••31003, Business Gold
+ * ••61003), so the option must match the selected card's name and a
+ * compatible suffix, and must be the only one that does. An exact suffix
+ * breaks a tie. Anything else returns null and every option is extracted:
+ * a duplicate card in the payload is safer than a skipped one.
+ */
+export function findSelectedAmexCardOption(
+  cardOptions: readonly { name: string; lastDigits: string; index: number }[],
+  firstCard: { cardName?: string | null; lastFourDigits?: string | null },
+): number | null {
+  const suffix = firstCard.lastFourDigits ?? extractCardSuffixDigits(firstCard.cardName);
+  if (!suffix) return null;
+  const name = (firstCard.cardName ?? "").replace(/\s*\([^)]*\)\s*$/, "").trim().toLowerCase();
+  const compatible = cardOptions.filter((option) =>
+    option.lastDigits
+    && sameCardSuffix(option.lastDigits, suffix)
+    && (!name || option.name.trim().toLowerCase() === name));
+  if (compatible.length === 1) return compatible[0]!.index;
+  const exact = compatible.filter((option) => option.lastDigits === suffix);
+  return exact.length === 1 ? exact[0]!.index : null;
 }
 
 export function createAmexSync(options: AmexSyncDeps) {
@@ -210,13 +235,10 @@ export function createAmexSync(options: AmexSyncDeps) {
             index: number;
           }[]) ?? [];
 
+        const selectedOptionIndex = findSelectedAmexCardOption(cardOptions, firstCard);
         for (let index = 0; index < cardOptions.length; index += 1) {
           const option = cardOptions[index];
-          // Compare all five Amex digits: Aspire ••31003 and Business Gold
-          // ••61003 are different cards, so the second one must still sync.
-          const firstLastDigits =
-            firstCard.lastFourDigits ?? extractCardSuffixDigits(firstCard.cardName);
-          if (firstLastDigits && option.lastDigits === firstLastDigits) {
+          if (option.index === selectedOptionIndex) {
             continue;
           }
 
