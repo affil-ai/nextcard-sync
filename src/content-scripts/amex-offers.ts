@@ -1,3 +1,4 @@
+import { sameCardSuffix } from "../lib/card-digits";
 import { readOfferSelection, selectEligibleOffers } from "../lib/offer-selection";
 import { createAmexOfferContentLoader } from "./amex-offer-content";
 import { readOfferContent } from "../lib/offer-content";
@@ -270,7 +271,7 @@ function mergeDiscoveredCards(
       ?? dashboardCards.find((candidate) => (
         candidate.lastDigits
         && card.lastDigits
-        && candidate.lastDigits.slice(-4) === card.lastDigits.slice(-4)
+        && sameCardSuffix(candidate.lastDigits, card.lastDigits)
       ))
       ?? dashboardCards[index];
 
