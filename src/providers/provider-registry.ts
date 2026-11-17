@@ -372,7 +372,7 @@ export function buildProviderContentScripts() {
     run_at: "document_idle" as const,
   });
   scripts.push({
-    matches: ["https://online.citi.com/*", "https://www.citi.com/*"],
+    matches: ["https://online.citi.com/*", "https://www.citi.com/*", "https://citi.com/*"],
     js: ["src/content-scripts/citi-offers.ts"],
     run_at: "document_idle" as const,
   });
@@ -382,5 +382,17 @@ export function buildProviderContentScripts() {
     run_at: "document_idle" as const,
   });
 
+  scripts.push({
+    matches: Array.from(new Set([
+      ...scripts.flatMap(script => script.matches),
+      ...providerIds.flatMap(provider => {
+        const definition: ProviderDefinition = providerRegistry[provider];
+        return definition.allowedUrlPatterns ?? [];
+      }),
+      "https://secure.bankofamerica.com/*",
+    ])),
+    js: ["src/content-scripts/provider-overlay.ts"],
+    run_at: "document_idle",
+  });
   return scripts;
 }

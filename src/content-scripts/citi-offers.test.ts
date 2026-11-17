@@ -13,7 +13,7 @@ const response = (data: unknown, status = 200) => ({ status, data });
 
 beforeEach(async () => {
   vi.resetModules(); request.mockReset(); sendMessage.mockClear();
-  vi.stubGlobal("chrome", { runtime: { lastError: null, sendMessage, onMessage: {
+  vi.stubGlobal("chrome", { runtime: { id: "extension", lastError: null, sendMessage, onMessage: {
     addListener: (callback: typeof listener) => { listener = callback; },
   } } });
   await import("./citi-offers");
@@ -90,4 +90,33 @@ describe("Citi discovery and activation reads", () => {
     expect(request).toHaveBeenCalledTimes(4);
     expect(request.mock.calls[3][0]).toMatchObject({ body: JSON.stringify({ offerId: "chosen", accountId: "one" }) });
   });
+});
+
+
+it("keeps personal-card offers when a business-card request fails, with failed cards unavailable rather than empty", async () => {
+  const mixedAccounts = { creditCardAccount: { accountDetails: [
+    { accountId: "business", accountStatus: "ACTIVE", productName: "Business card" },
+    { accountId: "personal-one", accountStatus: "ACTIVE", productName: "Personal card one" },
+    { accountId: "personal-two", accountStatus: "ACTIVE", productName: "Personal card two" },
+  ] } };
+  request.mockReturnValueOnce(response(mixedAccounts))
+    .mockReturnValueOnce(response({ code: "serverUnavailable", failureCode: "INTERNAL_SERVER_ERROR" }, 500))
+    .mockReturnValueOnce(response({ merchantOffers: [{ offers: [
+      { offerId: "available", merchantName: "Merchant", offerStatus: "AVAILABLE" },
+      { offerId: "enrolled", merchantName: "Merchant", offerStatus: "ENROLLED" },
+    ] }] }))
+    .mockReturnValueOnce(response({ merchantOffers: [] }));
+  const result = await discover();
+  expect(result).toMatchObject({
+    cards: [{ id: "personal-one" }, { id: "personal-two" }, { id: "business" }],
+    offerCounts: { "personal-one": 1, "personal-two": 0 },
+    offersByCard: { "personal-one": [{ id: "available" }], "personal-two": [] },
+  });
+  expect(result).not.toHaveProperty("offerCounts.business");
+  expect(result).not.toHaveProperty("offersByCard.business");
+  expect(result).not.toHaveProperty("error", "request_failed");
+  expect(sendMessage).toHaveBeenCalledWith(expect.objectContaining({
+    type: "CITI_OFFERS_DETECTED", accountId: "personal-one", detectedOffers: expect.any(Array),
+  }));
+  expect(sendMessage).not.toHaveBeenCalledWith(expect.objectContaining({ type: "CITI_OFFERS_DETECTED", accountId: "business" }));
 });

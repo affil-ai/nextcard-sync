@@ -611,8 +611,13 @@ function renderOfferCardChoices(options: {
     const selected = card.id === initialCardId;
     button.setAttribute("aria-pressed", String(selected));
     button.innerHTML = `
-      <span class="offer-card-choice-copy"><span class="offer-card-choice-name">${escapeHtml(card.name)}</span>${card.lastDigits ? `<span class="offer-card-choice-digits">•••• ${escapeHtml(card.lastDigits)}</span>` : ""}</span>
-      <strong>${typeof count === "number" ? `${count} ${count === 1 ? "offer" : "offers"}` : options.refreshing ? "Checking…" : "Count unavailable"}</strong>
+      <span class="offer-card-choice-copy">
+        <span class="offer-card-choice-name">${escapeHtml(card.name)}</span>
+        <span class="offer-card-choice-meta">
+          ${card.lastDigits ? `<span class="offer-card-choice-digits">•••• ${escapeHtml(card.lastDigits)}</span>` : ""}
+          <strong>${typeof count === "number" ? `${count} ${count === 1 ? "offer" : "offers"}` : options.refreshing ? "Checking…" : "Offers unavailable"}</strong>
+        </span>
+      </span>
     `;
     button.addEventListener("click", () => selectCard(card.id, button));
     container?.appendChild(button);
@@ -3175,7 +3180,7 @@ function renderBackgroundOwnedIssuerState(snapshot: OfferOperationSnapshot) {
           refreshingAfterCompletion
             ? `Refreshing availability across your ${offerIssuerNames[issuer]} cards…`
             : availableCount == null
-            ? "Offer count unavailable for this card. Check again."
+            ? "Offers unavailable for this card. Check again."
             : availableCount > 0
               ? `${formatAvailableToActivate(availableCount)} on this card`
               : "No new offers to activate for this card";
@@ -3217,7 +3222,7 @@ function renderBackgroundOwnedIssuerState(snapshot: OfferOperationSnapshot) {
           !allowanceKnown
             ? "Loading activation allowance…"
             : enrollmentCount != null && enrollmentCount > 0
-            ? `Activate ${enrollmentCount} on ${selected ? formatCardDisplayName(selected) : "this card"}`
+            ? `Activate ${enrollmentCount} ${enrollmentCount === 1 ? "offer" : "offers"}`
             : availableCount != null && availableCount > 0 && remaining === 0
               ? "Monthly limit reached"
             : "Choose offers to activate";
@@ -3235,7 +3240,7 @@ function renderBackgroundOwnedIssuerState(snapshot: OfferOperationSnapshot) {
           || enrollmentCount === 0;
       }
       if (runAllButton) {
-        runAllButton.hidden = !showBulkAction;
+        runAllButton.hidden = !showBulkAction || bulkAvailableCount == null;
         runAllButton.textContent =
           !allowanceKnown
             ? "Loading activation allowance…"

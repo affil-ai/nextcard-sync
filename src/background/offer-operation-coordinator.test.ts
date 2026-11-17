@@ -7,13 +7,15 @@ const getTab = vi.fn();
 const removeTab = vi.fn();
 const sendMessage = vi.fn();
 const createTab = vi.fn();
+const updateTab = vi.fn();
 
 beforeEach(() => {
   storage.clear();
   getTab.mockReset();
-  removeTab.mockReset();
+  removeTab.mockReset().mockResolvedValue(undefined);
   sendMessage.mockReset();
   createTab.mockReset();
+  updateTab.mockReset();
   getTab.mockResolvedValue({
     id: 42,
     url: "https://secure.chase.com/web/auth/dashboard",
@@ -40,7 +42,7 @@ beforeEach(() => {
       remove: removeTab,
       sendMessage,
       create: createTab,
-      update: vi.fn(),
+      update: updateTab,
       onUpdated: {
         addListener: vi.fn(),
         removeListener: vi.fn(),
@@ -457,4 +459,70 @@ it("still interrupts Citi discovery when the owned tab leaves Citi", async () =>
   } finally {
     vi.useRealTimers();
   }
+});
+
+it("reuses the previous Citi check tab on retry instead of accumulating tabs", async () => {
+  vi.useFakeTimers();
+  try {
+    const tab: chrome.tabs.Tab = { id: 42, url: "https://citi.com/login", status: "complete", index: 0, windowId: 1, active: true, highlighted: true, pinned: false, incognito: false, selected: true, discarded: false, autoDiscardable: true, groupId: -1 };
+    getTab.mockResolvedValue(tab);
+    updateTab.mockResolvedValue(tab);
+    const store = createOfferOperationStore();
+    const previous = await store.start("citi");
+    await store.patch(previous.state.runId, { phase: "failed", ownedTabId: 42 });
+    const coordinator = createOfferOperationCoordinator(store);
+    expect(await coordinator.startCheck("citi")).toMatchObject({ ok: true, state: { ownedTabId: 42 } });
+    expect(chrome.tabs.update).toHaveBeenCalledWith(42, { active: true });
+    expect(createTab).not.toHaveBeenCalled();
+    await coordinator.cancel();
+    await vi.advanceTimersByTimeAsync(5_000);
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+it.each(["closed", "unrelated", "different-profile"])("opens a fresh Citi tab when the previous tab is %s", async reason => {
+  vi.useFakeTimers();
+  try {
+    const store = createOfferOperationStore();
+    const scope = { accountScopeId: "account", memberId: "member", memberDisplayName: "Member", memberLifecycleVersion: 1, contextRevision: "revision" };
+    const previous = await store.start("citi", reason === "different-profile" ? scope : null);
+    await store.patch(previous.state.runId, { phase: "failed", ownedTabId: 42 });
+    getTab.mockImplementation(async (id: number) => id === 42
+      ? reason === "closed" ? null : { id: 42, url: reason === "unrelated" ? "https://example.com/" : "https://citi.com/login", status: "complete" }
+      : { id: 43, url: "https://citi.com/login", status: "complete" });
+    createTab.mockResolvedValue({ id: 43 });
+    const coordinator = createOfferOperationCoordinator(store);
+    expect(await coordinator.startCheck("citi")).toMatchObject({ ok: true, state: { ownedTabId: 43 } });
+    expect(createTab).toHaveBeenCalledOnce();
+    expect(chrome.tabs.update).not.toHaveBeenCalled();
+    await coordinator.cancel();
+    await vi.advanceTimersByTimeAsync(5_000);
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+it("keeps successful Citi cards reviewable while a failed card has no count or activatable list", async () => {
+  vi.useFakeTimers();
+  try {
+    getTab.mockResolvedValue({ id: 42, url: "https://online.citi.com/US/ag/products-offers/merchantoffers", status: "complete" });
+    sendMessage.mockImplementation((_id: number, _message: unknown, reply: (response: unknown) => void) => reply({
+      cards: [{ id: "personal", name: "Personal card" }, { id: "business", name: "Business card" }],
+      offerCounts: { personal: 1 },
+      offersByCard: { personal: [{ id: "offer", name: "Merchant", value: "10% back", details: null, terms: null }] },
+    }));
+    const store = createOfferOperationStore();
+    const started = await store.start("citi");
+    await store.patch(started.state.runId, { phase: "checking", ownedTabId: 42 });
+    const coordinator = createOfferOperationCoordinator(store);
+    await coordinator.resume();
+    await vi.advanceTimersByTimeAsync(1_500);
+    expect((await store.getSnapshot()).active).toMatchObject({ phase: "ready_to_add", cards: [
+      { key: "personal", availableCount: 1, countStatus: "complete", offers: [{ id: "offer" }] },
+      { key: "business", availableCount: null, countStatus: "unknown", offers: null },
+    ] });
+    expect(await coordinator.startEnrollment(started.state.runId, ["business"], 1, { selectedOfferIdsByCard: { business: ["offer"] } })).toMatchObject({ ok: false, error: "invalid_offer_selection" });
+    await store.finishReview(started.state.runId);
+  } finally { vi.useRealTimers(); }
 });

@@ -288,19 +288,28 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         sendResponse({ type: "CITI_OFFERS_READY", cards: [], offerCounts: {}, error: "no_cards" });
         return;
       }
-      const probes = await Promise.all(cards.map((c) => listOffers(c.accountId)));
+      // One card's issuer error must not discard other cards' valid offers.
+      // Omit failed counts/lists so the review shows unavailable, never zero.
+      const probes = await Promise.allSettled(cards.map((c) => listOffers(c.accountId)));
+      if (probes.every(probe => probe.status === "rejected")) {
+        const first = probes[0];
+        throw first.status === "rejected" ? first.reason : new CitiReadError("request_failed");
+      }
       const offerCounts: Record<string, number> = {};
       for (let i = 0; i < cards.length; i++) {
-        offerCounts[cards[i].accountId] = probes[i].filter((o) => !o.enrolled).length;
+        const probe = probes[i];
+        if (probe.status === "rejected") continue;
+        const offers = probe.value;
+        offerCounts[cards[i].accountId] = offers.filter((o) => !o.enrolled).length;
 
-        if (probes[i].length > 0) {
+        if (offers.length > 0) {
           chrome.runtime.sendMessage({
             type: "CITI_OFFERS_DETECTED",
             runId: activeOfferRunId,
             accountId: cards[i].accountId,
             cardName: cards[i].name,
             cardLastDigits: cards[i].lastDigits,
-            detectedOffers: probes[i].map((o) => ({
+            detectedOffers: offers.map((o) => ({
               issuerOfferId: o.offerId,
               merchantName: o.name,
               offerValue: o.offerTitle,
@@ -323,12 +332,20 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       }
       sendResponse({
         type: "CITI_OFFERS_READY",
-        cards: cards.map((c) => ({ id: c.accountId, name: c.name, lastDigits: c.lastDigits })),
+        // Start the review on a card that was checked successfully. Failed cards
+        // stay visible with an unavailable count and no activatable offer list.
+        cards: cards.map((card, index) => ({ card, checked: probes[index].status === "fulfilled" }))
+          .sort((a, b) => Number(b.checked) - Number(a.checked))
+          .map(({ card }) => ({ id: card.accountId, name: card.name, lastDigits: card.lastDigits })),
         offerCounts,
-        offersByCard: Object.fromEntries(cards.map((card, index) => [card.accountId,
-          probes[index].filter((offer) => !offer.enrolled).map((offer) => ({
-            id: offer.offerId, name: offer.name, value: offer.offerTitle, details: null, terms: null,
-          }))])),
+        offersByCard: Object.fromEntries(cards.flatMap((card, index) => {
+          const probe = probes[index];
+          return probe.status === "rejected" ? [] : [[card.accountId,
+            probe.value.filter((offer) => !offer.enrolled).map((offer) => ({
+              id: offer.offerId, name: offer.name, value: offer.offerTitle, details: null, terms: null,
+            })),
+          ]];
+        })),
         error: undefined,
       });
     })().catch((error: unknown) => sendResponse({

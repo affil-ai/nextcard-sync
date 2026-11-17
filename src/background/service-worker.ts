@@ -1280,6 +1280,8 @@ void initializeMerchantOfferAlertMonitor();
 
 chrome.runtime.onMessage.addListener(
   createMessageRouter({
+    getBofaPageOverlay: async tabId => await bofaOffers?.getPageOverlay(tabId) ?? null,
+    cancelBofaPageOverlay: async (tabId, operationId) => await bofaOffers?.cancelPageOverlay(tabId, operationId) ?? false,
     providerRegistry,
     stateStore,
     syncHandlers,

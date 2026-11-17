@@ -3,7 +3,7 @@
   "incognito": "split",
   "name": "nextcard sync",
   "short_name": "nextcard sync",
-  "version": "0.9.6",
+  "version": "0.9.7",
   "description": "Find and add card offers, get shopping reminders, and sync rewards to your nextcard wallet.",
   "permissions": ["storage", "scripting", "sidePanel", "tabs", "alarms"],
   "host_permissions": [],
@@ -31,7 +31,7 @@
       "run_at": "document_idle"
     },
     {
-      "matches": ["https://online.citi.com/*"],
+      "matches": ["https://online.citi.com/*", "https://www.citi.com/*", "https://citi.com/*"],
       "js": ["src/content-scripts/citi-offers.ts"],
       "run_at": "document_idle"
     }

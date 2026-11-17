@@ -97,16 +97,22 @@ export async function bofaPortalRequest(
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 20000);
     try {
-      const response = await fetch(path, {
-        method: kind === "activate" ? "PUT" : "POST",
-        credentials: "include",
-        headers: {
-          "Content-Type": "application/json",
-          "X-Cardholder-Token": token,
-        },
-        body: JSON.stringify(body),
-        signal: controller.signal,
-      });
+      let response: Response;
+      try {
+        response = await fetch(path, {
+          method: kind === "activate" ? "PUT" : "POST",
+          credentials: "include",
+          headers: {
+            "Content-Type": "application/json",
+            "X-Cardholder-Token": token,
+          },
+          body: JSON.stringify(body),
+          signal: controller.signal,
+        });
+      } catch {
+        return { portalId, code: controller.signal.aborted ? "timeout" : "network_error",
+          error: "BofA could not return this request. Check your connection or reopen the portal." };
+      }
       if (response.status === 401 || response.status === 403)
         throw new Error(
           "Your BofA session expired. Open deals from BofA again.",
@@ -124,8 +130,13 @@ export async function bofaPortalRequest(
           ...(Number.isFinite(retryAfterMs) ? { retryAfterMs } : {}),
         };
       }
-      const data: unknown = await response.json();
-      return { portalId, status: response.status, data };
+      try {
+        const data: unknown = await response.json();
+        return { portalId, status: response.status, data };
+      } catch {
+        return { portalId, code: controller.signal.aborted ? "timeout" : "invalid_response",
+          error: "BofA could not return this request. Check your connection or reopen the portal." };
+      }
     } finally {
       clearTimeout(timer);
     }
@@ -137,6 +148,7 @@ export async function bofaPortalRequest(
       "Your BofA session expired. Open deals from BofA again.",
       "Your BofA portal account changed. Check offers again.",
       "Set and save your location in the BofA portal, then check again.",
+      "The BofA offer location changed. Check offers again.",
       "Invalid BofA request.",
     ];
     const message =

@@ -58,6 +58,7 @@ const replySchema = z.object({
       phase: z.string(),
       reviewFinished: z.boolean().optional(),
       added: z.number(),
+      failed: z.number().optional(),
       discovered: z.number().optional(),
       checked: z.number().optional(),
       retryAt: z.number().optional(),
@@ -448,7 +449,7 @@ describe("BofA portal operation boundaries", () => {
     }
   });
 
-  it.each([200, 429])("handles issuer status %s inside the serialized bridge without exposing its token", async (status) => {
+  it.each([200, 429, 401, "network_error", "timeout", "invalid_response"])("handles issuer status %s inside the serialized bridge without exposing its token", async (status) => {
     const token = `fixture.${Buffer.from(JSON.stringify({ user_id: "synthetic-user", publisher_id: "synthetic-publisher", exp: 4102444800 })).toString("base64url")}.signature`;
     const requests: Array<{ path: string; headers: unknown; body: unknown }> =
       [];
@@ -480,7 +481,9 @@ describe("BofA portal operation boundaries", () => {
         atob,
         TextEncoder,
         crypto,
-        AbortController,
+        AbortController: status === "timeout" ? class extends AbortController {
+          constructor() { super(); this.abort(); }
+        } : AbortController,
         setTimeout,
         clearTimeout,
         fetch: async (path: string, init: RequestInit) => {
@@ -489,8 +492,9 @@ describe("BofA portal operation boundaries", () => {
             headers: init.headers,
             body: JSON.parse(typeof init.body === "string" ? init.body : "{}"),
           });
-          return new Response(status === 200 ? JSON.stringify({ offers: [], total: 0 }) : "Rate limited", {
-            status,
+          if (status === "network_error" || status === "timeout") throw new TypeError("Network request failed");
+          return new Response(status === 200 ? JSON.stringify({ offers: [], total: 0 }) : "Not JSON", {
+            status: typeof status === "number" ? status : 200,
             headers: { "Retry-After": "2" },
           });
         },
@@ -498,7 +502,9 @@ describe("BofA portal operation boundaries", () => {
     );
     expect(result).toMatchObject(status === 200 ? {
       status: 200, data: { offers: [], total: 0 },
-    } : { status: 429, data: null, retryAfterMs: 2000 });
+    } : status === 429 ? { status: 429, data: null, retryAfterMs: 2000 }
+      : status === 401 ? { error: "Your BofA session expired. Open deals from BofA again." }
+      : { portalId: expect.any(String), code: status, error: expect.any(String) });
     expect(requests).toMatchObject([
       {
         path: "/api/offers-search",
@@ -675,7 +681,7 @@ describe("BofA portal operation boundaries", () => {
       expect(attempts).toBe(1);
       await vi.advanceTimersByTimeAsync(4999);
       expect(attempts).toBe(1);
-      await vi.advanceTimersByTimeAsync(5001);
+      await vi.advanceTimersByTimeAsync(10001);
       expect(attempts).toBe(3);
       expect((await send({ type: "BOFA_PORTAL_STATUS" })).state?.phase).toBe("ready");
       expect((await send({ type: "BOFA_PORTAL_STATUS" })).state?.offers).toHaveLength(2);
@@ -780,7 +786,7 @@ describe("BofA portal operation boundaries", () => {
       : bridge?.(args));
     try {
       await send({type:"BOFA_PORTAL_CHECK"});
-      await vi.advanceTimersByTimeAsync(25000);
+      await vi.advanceTimersByTimeAsync(135000);
       const state = (await send({type:"BOFA_PORTAL_STATUS"})).state;
       expect(state?.phase).toBe("failed");
       expect(state?.retryAt).toBeUndefined();
@@ -846,4 +852,186 @@ it("can stop the opening check before it starts scanning", async () => {
   expect(await opening).toMatchObject({ ok: false, error: "BofA check cancelled." });
   expect(engine.isBusy()).toBe(false);
   expect(execute.mock.calls.some(call => call[0].args?.[0] === "search")).toBe(false);
+});
+
+
+it("shows BofA sign-in only on the opening tab and cancels that opening operation", async () => {
+  vi.useFakeTimers();
+  try {
+    Object.assign(chrome.tabs, {
+      query: vi.fn(async () => []),
+      create: vi.fn(async () => ({ id: 7, status: "complete", url: "https://secure.bankofamerica.com/login" })),
+      get: vi.fn(async () => ({ id: 7, status: "complete", url: "https://secure.bankofamerica.com/login" })),
+    });
+    const engine = registerBofaOffers();
+    const checking = send({ type: "BOFA_PORTAL_CHECK" });
+    await vi.advanceTimersByTimeAsync(0);
+    const overlay = await engine.getPageOverlay(7);
+    expect(overlay).toMatchObject({ provider: "bofa", kind: "bofa", status: "waiting_for_login" });
+    if (!overlay) throw new Error("Expected BofA login overlay");
+    expect(await engine.getPageOverlay(99)).toBeNull();
+    expect(await engine.cancelPageOverlay(7, "stale-run")).toBe(false);
+    expect(await engine.cancelPageOverlay(7, overlay.operationId)).toBe(true);
+    expect(await engine.getPageOverlay(7)).toBeNull();
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(await checking).toMatchObject({ ok: false });
+  } finally { vi.useRealTimers(); }
+});
+
+it.each(["timeout", "network_error", "invalid_response"])("retries a temporary %s read with increasing delays", async code => {
+  vi.useFakeTimers();
+  const bridge = execute.getMockImplementation();
+  const times: number[] = [];
+  const began = Date.now();
+  execute.mockImplementation(async args => {
+    if (args.args[0] === "details" && args.args[2] === "1") {
+      times.push(Date.now() - began);
+      if (times.length < 3) return [{ result: { portalId, code, error: "Temporary read failure" } }];
+    }
+    return bridge?.(args);
+  });
+  try {
+    await send({ type: "BOFA_PORTAL_CHECK" });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(times).toEqual([0]);
+    await vi.advanceTimersByTimeAsync(15000);
+    expect(times).toEqual([0,5000,15000]);
+    const state = (await send({ type: "BOFA_PORTAL_STATUS" })).state;
+    expect(state).toMatchObject({ phase: "ready", checked: 2, failed: 0 });
+    expect(state?.offers).toHaveLength(2);
+  } finally { vi.useRealTimers(); }
+});
+
+it("continues past a repeatedly failing offer at 551 and saves all other offers", async () => {
+  vi.useFakeTimers();
+  const bridge = execute.getMockImplementation();
+  let attempts = 0;
+  execute.mockImplementation(async args => {
+    const [kind,,input] = args.args;
+    if (kind === "search" && typeof input === "number") return [{ result: { portalId, status: 200, data: {
+      total: 601, offers: Array.from({ length: Math.min(24,601-input) }, (_,i) => ({ offer_id: String(input+i+1) })),
+    } } }];
+    if (kind === "details" && input === "551") {
+      attempts++;
+      return [{ result: { portalId, code: "timeout", error: "Temporary read failure" } }];
+    }
+    return bridge?.(args);
+  });
+  try {
+    await send({ type: "BOFA_PORTAL_CHECK" });
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(135000);
+    const state = (await send({ type: "BOFA_PORTAL_STATUS" })).state;
+    expect(attempts).toBe(6);
+    expect(state).toMatchObject({ phase: "ready", checked: 601, failed: 1, error: "1 offer could not be read. Your saved offers are still available." });
+    expect(state?.offers).toHaveLength(600);
+    expect(state?.offers.some(offer => offer.issuerOfferId === "551")).toBe(false);
+    expect(state?.offers.some(offer => offer.issuerOfferId === "601")).toBe(true);
+    expect(execute.mock.calls.some(([args]) => args.args[0] === "activate")).toBe(false);
+  } finally { vi.useRealTimers(); }
+});
+
+it("saves successful reads from the current chunk before stopping on an account change", async () => {
+  const bridge = execute.getMockImplementation();
+  execute.mockImplementation(async args => args.args[0] === "details" && args.args[2] === "2"
+    ? [{ result: { error: "Your BofA portal account changed. Check offers again." } }]
+    : bridge?.(args));
+  await send({ type: "BOFA_PORTAL_CHECK" });
+  await vi.waitFor(async () => expect((await send({ type: "BOFA_PORTAL_STATUS" })).state?.phase).toBe("failed"));
+  const state = (await send({ type: "BOFA_PORTAL_STATUS" })).state;
+  expect(state?.offers).toEqual([{ issuerOfferId: "1", action: "ready" }]);
+  expect(execute.mock.calls.filter(([args]) => args.args[0] === "details" && args.args[2] === "2")).toHaveLength(1);
+  expect(fetch).toHaveBeenCalled();
+});
+
+it.each(["cancel", "account change"])("does not retry a transport failure after %s", async reason => {
+  vi.useFakeTimers();
+  const bridge = execute.getMockImplementation();
+  execute.mockImplementation(async args => args.args[0] === "search"
+    ? [{ result: { portalId, code: "network_error", error: "Temporary read failure" } }]
+    : bridge?.(args));
+  try {
+    await send({ type: "BOFA_PORTAL_CHECK" });
+    await vi.advanceTimersByTimeAsync(0);
+    if (reason === "cancel") await send({ type: "BOFA_PORTAL_CANCEL" });
+    else mocks.generation++;
+    await vi.advanceTimersByTimeAsync(150000);
+    expect(execute.mock.calls.filter(([args]) => args.args[0] === "search")).toHaveLength(1);
+    expect((await send({ type: "BOFA_PORTAL_STATUS" })).state?.phase ?? null).toBe(reason === "cancel" ? "cancelled" : null);
+  } finally { vi.useRealTimers(); }
+});
+
+it("does not retry an activation after a transport failure", async () => {
+  const state = await ready();
+  const bridge = execute.getMockImplementation();
+  execute.mockImplementation(async args => args.args[0] === "activate"
+    ? [{ result: { portalId, code: "timeout", error: "Temporary read failure" } }]
+    : bridge?.(args));
+  await send({ type: "BOFA_PORTAL_ACTIVATE", runId: state.runId, ids: ["2"] });
+  await vi.waitFor(async () => expect((await send({ type: "BOFA_PORTAL_STATUS" })).state?.phase).toBe("failed"));
+  expect(execute.mock.calls.filter(([args]) => args.args[0] === "activate")).toHaveLength(1);
+});
+
+it("reduces concurrency for later batches after a temporary read failure", async () => {
+  vi.useFakeTimers();
+  const bridge = execute.getMockImplementation();
+  let firstFailure = true;
+  let active = 0;
+  let laterPeak = 0;
+  execute.mockImplementation(async args => {
+    const [kind,,input] = args.args;
+    if (kind === "search" && typeof input === "number") return [{ result: { portalId, status: 200, data: {
+      total: 60, offers: Array.from({ length: Math.min(24,60-input) }, (_,i) => ({ offer_id: String(input+i+1) })),
+    } } }];
+    if (kind === "details") {
+      if (input === "1" && firstFailure) {
+        firstFailure = false;
+        return [{ result: { portalId, code: "network_error", error: "Temporary read failure" } }];
+      }
+      active++;
+      if (Number(input) > 50) laterPeak = Math.max(laterPeak, active);
+      try {
+        await new Promise(resolve => setTimeout(resolve,1));
+        return await bridge?.(args);
+      } finally { active--; }
+    }
+    return bridge?.(args);
+  });
+  try {
+    await send({ type: "BOFA_PORTAL_CHECK" });
+    await vi.advanceTimersByTimeAsync(10000);
+    expect((await send({ type: "BOFA_PORTAL_STATUS" })).state?.phase).toBe("ready");
+    expect(laterPeak).toBe(4);
+  } finally { vi.useRealTimers(); }
+});
+
+it("stops a sustained detail outage instead of retrying the entire inventory", async () => {
+  vi.useFakeTimers();
+  const bridge = execute.getMockImplementation();
+  execute.mockImplementation(async args => {
+    if (args.args[0] === "search") return [{ result: { portalId, status: 200, data: {
+      total: 20, offers: Array.from({ length:20 }, (_,i) => ({ offer_id:String(i+1) })),
+    } } }];
+    if (args.args[0] === "details") return [{ result: { portalId, code: "timeout", error: "Temporary read failure" } }];
+    return bridge?.(args);
+  });
+  try {
+    await send({ type: "BOFA_PORTAL_CHECK" });
+    await vi.advanceTimersByTimeAsync(300000);
+    expect((await send({ type: "BOFA_PORTAL_STATUS" })).state?.phase).toBe("failed");
+    const ids = new Set(execute.mock.calls.filter(([args]) => args.args[0] === "details").map(([args]) => args.args[2]));
+    expect(ids.size).toBeLessThan(20);
+    expect(fetch).not.toHaveBeenCalled();
+  } finally { vi.useRealTimers(); }
+});
+
+it("does not retry or skip a response whose portal identity changed", async () => {
+  const bridge = execute.getMockImplementation();
+  execute.mockImplementation(async args => args.args[0] === "details" && args.args[2] === "2"
+    ? [{ result: { portalId: `v1:${"b".repeat(64)}`, code: "network_error", error: "Temporary read failure" } }]
+    : bridge?.(args));
+  await send({ type: "BOFA_PORTAL_CHECK" });
+  await vi.waitFor(async () => expect((await send({ type: "BOFA_PORTAL_STATUS" })).state?.phase).toBe("failed"));
+  expect((await send({ type: "BOFA_PORTAL_STATUS" })).state?.error).toContain("account changed");
+  expect(execute.mock.calls.filter(([args]) => args.args[0] === "details" && args.args[2] === "2")).toHaveLength(1);
 });

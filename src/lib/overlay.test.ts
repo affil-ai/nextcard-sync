@@ -56,3 +56,46 @@ it("keeps sign-in nonblocking and offers cancellation during login and reading",
   await vi.advanceTimersByTimeAsync(1500);
   expect(document.getElementById("nextcard-sync-overlay")).toBeNull();
 });
+
+
+it("polls and cancels the offer run instead of rewards syncing", async () => {
+  vi.useFakeTimers();
+  let root: ShadowRoot | null = null;
+  const attach = Element.prototype.attachShadow;
+  vi.spyOn(Element.prototype, "attachShadow").mockImplementation(function (this: Element, options) {
+    root = attach.call(this, options);
+    return root;
+  });
+  let status = "waiting_for_login";
+  const sendMessage = vi.fn((_message: unknown, reply?: (response: { status: string }) => void) => {
+    reply?.({ status });
+    return Promise.resolve({ ok: true });
+  });
+  vi.stubGlobal("chrome", { runtime: { getURL: (path: string) => path, sendMessage } });
+  const overlay = await import("./overlay");
+  const controls = {
+    statusMessage: { type: "GET_PAGE_OVERLAY_STATUS", runId: "offer-run" },
+    cancelMessage: { type: "CANCEL_OFFER_OPERATION", runId: "offer-run" },
+  };
+  overlay.showOverlay("waiting_for_login", "citi", controls);
+  await vi.advanceTimersByTimeAsync(2_020);
+  expect(sendMessage).toHaveBeenCalledWith(controls.statusMessage, expect.any(Function));
+  function currentRoot() { if (!root) throw new Error("Missing overlay"); return root; }
+  expect(currentRoot().textContent).toContain("nextcard is waiting for you to sign in");
+  const cancel = currentRoot().querySelector(".nc-cancel-button");
+  if (!(cancel instanceof HTMLButtonElement)) throw new Error("Missing cancel control");
+  cancel.click();
+  await vi.advanceTimersByTimeAsync(2_000);
+  expect(sendMessage).toHaveBeenCalledWith(controls.cancelMessage);
+  expect(sendMessage).not.toHaveBeenCalledWith({ type: "CANCEL_SYNC", provider: "citi" });
+  overlay.showOverlay("waiting_for_login", "citi", controls);
+  await vi.advanceTimersByTimeAsync(20);
+  status = "awaiting_confirmation";
+  await vi.advanceTimersByTimeAsync(2_000);
+  expect(document.getElementById("nextcard-sync-overlay")).toBeNull();
+  overlay.showOverlay("waiting_for_login", "citi", controls);
+  await vi.advanceTimersByTimeAsync(20);
+  status = "idle";
+  await vi.advanceTimersByTimeAsync(2_000);
+  expect(document.getElementById("nextcard-sync-overlay")).toBeNull();
+});

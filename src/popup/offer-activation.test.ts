@@ -66,7 +66,7 @@ it("keeps card-specific choices through confirmation and releases review with Do
   first.click();
   expect(run.disabled).toBe(true);
   first.click();
-  expect(run.textContent).toContain("1234"); expect(run.disabled).toBe(false);
+  expect(run.textContent).toBe("Activate 1 offer"); expect(run.disabled).toBe(false);
   run.click();
   expect(document.getElementById("offerConfirmBody")?.textContent).toContain("1234");
   const secondCard = document.querySelectorAll("#chaseOfferCardChoices button")[1];

@@ -1,3 +1,4 @@
+import type { PageOverlayOperation } from "../lib/overlay";
 import { z } from "zod";
 import { getAuth, getAuthGeneration } from "../lib/auth";
 import {
@@ -38,6 +39,7 @@ type Operation = {
   authFingerprint: string;
   cancelled: boolean;
   readConcurrency: number;
+  consecutiveReadFailures: number;
   cachedOffers: Map<string, PortalOffer>;
   cachedMeta: NonNullable<BofaPortalState["offerCacheMeta"]>;
   sessionExpiresAt?: number;
@@ -45,6 +47,8 @@ type Operation = {
 };
 
 class BofaRequestError extends Error {}
+// Only exhausted, identity-verified read failures may be skipped per offer.
+class BofaTemporaryReadError extends Error {}
 
 const storedOperationSchema = z.object({
   state: bofaPortalStateSchema,
@@ -58,6 +62,8 @@ export function registerBofaOffers(options: { isOtherBusy?: () => Promise<boolea
   let starting = false;
   let activating = false;
   let openingRevision = 0;
+  let openingPage: { tabId: number; operationId: string; revision: number;
+    scope: HouseholdOperationScope | null; generation: number } | null = null;
   let queue = Promise.resolve();
 
   async function authFingerprint() {
@@ -140,34 +146,44 @@ export function registerBofaOffers(options: { isOtherBusy?: () => Promise<boolea
         world: "MAIN",
         func: bofaPortalRequest,
         args: [kind, op.portalId, input],
+      }).catch(() => {
+        throw new BofaRequestError("Your BofA portal tab closed or changed. Check again.");
       });
       if (kind !== "activate") await requireCurrent(op);
-      const failure = z
-        .object({ error: z.string() })
-        .safeParse(results[0]?.result);
-      if (failure.success) throw new BofaRequestError(failure.data.error);
-      const result = z
-        .object({
-          portalId: z.string(), status: z.number(), data: z.unknown(),
-          retryAfterMs: z.number().finite().nonnegative().optional(),
-        })
-        .parse(results[0]?.result);
-      if (result.portalId !== op.portalId)
+      const failure = z.object({
+        error: z.string(), portalId: z.string().optional(),
+        code: z.enum(["timeout", "network_error", "invalid_response"]).optional(),
+      }).safeParse(results[0]?.result);
+      const result = failure.success ? null : z.object({
+        portalId: z.string(), status: z.number(), data: z.unknown(),
+        retryAfterMs: z.number().finite().nonnegative().optional(),
+      }).parse(results[0]?.result);
+      // Local/session errors have no transient code. Never retry them, and do
+      // not trust a transient response from a different portal identity.
+      if (failure.success && (!failure.data.code || kind === "activate")) {
+        throw new BofaRequestError(failure.data.error);
+      }
+      const responsePortalId = failure.success ? failure.data.portalId : result?.portalId;
+      if (responsePortalId !== op.portalId) {
         throw new BofaRequestError("Your BofA portal account changed. Check offers again.");
-      if (kind !== "activate" && [408, 429, 500, 502, 503, 504].includes(result.status)) {
-        if (attempt < 5 && (result.retryAfterMs ?? 0) <= 60000) {
-          retryAt = Date.now() + Math.max(result.retryAfterMs ?? 0, 5000);
-          // Discovery is sequential. Detail retries leave the other workers running.
+      }
+      const temporary = failure.success || (result && [408, 429, 500, 502, 503, 504].includes(result.status));
+      if (kind !== "activate" && temporary) {
+        if (kind === "details") op.readConcurrency = Math.max(1, Math.floor(op.readConcurrency / 2));
+        const retryAfterMs = result?.retryAfterMs ?? 0;
+        if (attempt < 5 && retryAfterMs <= 60000) {
+          retryAt = Date.now() + Math.max(retryAfterMs, Math.min(5000 * 2 ** attempt, 60000));
           if (kind === "search") {
             op.state.retryAt = retryAt;
             await persist(op);
           }
           continue;
         }
-        throw new BofaRequestError(result.status === 429
+        throw new BofaTemporaryReadError(result?.status === 429
           ? "BofA is still limiting requests. Your saved offers are available. Try again later."
           : "BofA is temporarily unavailable. Your saved offers are available. Try again later.");
       }
+      if (!result) throw new BofaRequestError("BofA could not return this request.");
       if (result.status !== 200)
         throw new BofaRequestError(
           `BofA could not return offers (${result.status}). Check again.`,
@@ -355,6 +371,7 @@ export function registerBofaOffers(options: { isOtherBusy?: () => Promise<boolea
                 readOffers.set(id,cached);
               } else {
                 const offer = await detail(op,id);
+                op.consecutiveReadFailures = 0;
                 readOffers.set(id,offer);
                 changedOffers.push(offer);
                 if (signature) {
@@ -363,11 +380,19 @@ export function registerBofaOffers(options: { isOtherBusy?: () => Promise<boolea
                 } else if (op.state.offerCacheMeta) delete op.state.offerCacheMeta[id];
               }
             } catch (error) {
+              await requireCurrent(op);
               if (error instanceof BofaRequestError) {
                 failures.push(error);
                 return;
               }
               op.state.failed++;
+              if (error instanceof BofaTemporaryReadError && ++op.consecutiveReadFailures >= 3) {
+                // A sustained outage should not spend minutes retrying every
+                // remaining offer. Save this chunk before stopping the scan.
+                failures.push(error);
+                op.state.checked++;
+                return;
+              }
             }
             op.state.checked++;
             if (op.state.checked % 10 === 0) await persist(op);
@@ -375,8 +400,7 @@ export function registerBofaOffers(options: { isOtherBusy?: () => Promise<boolea
         }));
         await requireCurrent(op);
         const failedWorker = workers.find(result => result.status === "rejected");
-        if (failedWorker?.status === "rejected") throw failedWorker.reason;
-        if (failures.length) throw failures[0];
+        if (failedWorker?.status === "rejected") failures.push(failedWorker.reason);
         const offers = chunk.flatMap(id => {
           const offer = readOffers.get(id);
           return offer ? [offer] : [];
@@ -397,6 +421,11 @@ export function registerBofaOffers(options: { isOtherBusy?: () => Promise<boolea
         });
         void pendingSave.catch(() => {});
         await persist(op);
+        if (failures.length) {
+          await pendingSave;
+          pendingSave = null;
+          throw failures[0];
+        }
       }
       if (pendingSave) await pendingSave;
       await requireCurrent(op);
@@ -471,6 +500,7 @@ export function registerBofaOffers(options: { isOtherBusy?: () => Promise<boolea
               })
             : await chrome.tabs.create({ url: dealsUrl, active: true });
         if (opened?.id !== undefined) {
+          openingPage = { tabId: opened.id, operationId: crypto.randomUUID(), revision, scope, generation };
           let redirectedAfterLogin = false;
           for (let attempt = 0; attempt < 480; attempt++) {
             assertOpening();
@@ -612,6 +642,7 @@ export function registerBofaOffers(options: { isOtherBusy?: () => Promise<boolea
         tabId: owned.id,
         cancelled: false,
         readConcurrency: 8,
+        consecutiveReadFailures: 0,
         cachedOffers: new Map(canReuse && previous.success ? previous.data.state.offers.map(offer=>[offer.issuerOfferId,offer]) : []),
         cachedMeta: canReuse && previous.success ? {...previous.data.state.offerCacheMeta} : {},
         sessionExpiresAt:session.expiresAt,
@@ -636,6 +667,7 @@ export function registerBofaOffers(options: { isOtherBusy?: () => Promise<boolea
       void discover(op);
       return op.state;
     } finally {
+      if (openingPage?.revision === revision) openingPage = null;
       starting = false;
     }
   }
@@ -822,5 +854,21 @@ export function registerBofaOffers(options: { isOtherBusy?: () => Promise<boolea
     })();
     return true;
   });
-  return { isBusy: () => starting || activating || operation?.state.phase === "checking" || operation?.state.phase === "activating" };
+  async function getPageOverlay(tabId: number): Promise<PageOverlayOperation | null> {
+    const page = openingPage;
+    if (!page || page.tabId !== tabId || page.revision !== openingRevision
+      || !await scopeCurrent(page.scope, page.generation)) return null;
+    if (openingPage !== page || page.revision !== openingRevision) return null;
+    return { provider: "bofa", kind: "bofa", operationId: page.operationId, status: "waiting_for_login" };
+  }
+  async function cancelPageOverlay(tabId: number, operationId: string) {
+    const page = await getPageOverlay(tabId);
+    if (!page || page.operationId !== operationId) return false;
+    openingRevision++;
+    openingPage = null;
+    return true;
+  }
+  return { getPageOverlay, cancelPageOverlay,
+    isBusy: () => starting || activating || operation?.state.phase === "checking" || operation?.state.phase === "activating" };
+
 }

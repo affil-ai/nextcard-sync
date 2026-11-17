@@ -12,7 +12,16 @@
  *   hideOverlay();                      // done — auto-fades after brief "Done"
  */
 
-type OverlayStatus = "account_check" | "waiting_for_login" | "mfa_challenge" | "extracting" | "done" | "cancelled" | "error";
+export type OverlayStatus = "account_check" | "waiting_for_login" | "mfa_challenge" | "extracting" | "done" | "cancelled" | "error";
+
+export interface PageOverlayOperation {
+  provider: string;
+  kind: "rewards" | "offers" | "bofa";
+  operationId: string;
+  status: OverlayStatus;
+  progressMessage?: string | null;
+  accountPreparation?: { attemptId: string; memberDisplayName: string } | null;
+}
 
 const HOST_ID = "nextcard-sync-overlay";
 const ICON_URL = chrome.runtime.getURL("src/icons/icon128.png");
@@ -23,6 +32,12 @@ let shadowRoot: ShadowRoot | null = null;
 let pollInterval: ReturnType<typeof setInterval> | null = null;
 let currentStatus: OverlayStatus | null = null;
 let knownProvider: string | null = null;
+// Offer checks have their own lifecycle and cancellation, separate from rewards sync.
+interface OverlayOperationControls {
+  statusMessage: Record<string, unknown>;
+  cancelMessage: Record<string, unknown>;
+}
+let operationControls: OverlayOperationControls | null = null;
 let lastProgressMessage: string | null = null;
 let isMinimized = false;
 
@@ -562,7 +577,7 @@ function wireOverlayControls(): void {
       if (!knownProvider) return;
       cancelButton.disabled = true;
       try {
-        const result = await chrome.runtime.sendMessage({ type: "CANCEL_SYNC", provider: knownProvider });
+        const result = await chrome.runtime.sendMessage(operationControls?.cancelMessage ?? { type: "CANCEL_SYNC", provider: knownProvider });
         if (result?.ok === false) throw new Error("Could not cancel. Try the Cancel button in the sidebar.");
         hideOverlay("cancelled");
       } catch {
@@ -617,14 +632,20 @@ function startPollIfNeeded() {
   const p = knownProvider;
   if (!p || pollInterval) return;
   pollInterval = setInterval(() => {
-    chrome.runtime.sendMessage({ type: "GET_PROVIDER_STATUS", provider: p }, (r) => {
+    chrome.runtime.sendMessage(operationControls?.statusMessage ?? { type: "GET_PROVIDER_STATUS", provider: p }, (r) => {
       if (chrome.runtime.lastError) return;
       const s = r?.status;
+      if (operationControls && s === "idle") {
+        removeOverlay();
+        return;
+      }
       // Keep long-running multi-page flows visually in sync as the worker advances.
       if (r?.accountPreparation) {
         updateOverlay("account_check");
       } else if (s === "extracting" && currentStatus !== "extracting") {
         updateOverlay("extracting");
+      } else if (s === "mfa_challenge" && currentStatus !== "mfa_challenge") {
+        updateOverlay("mfa_challenge");
       } else if (s === "waiting_for_login" && currentStatus !== "waiting_for_login" && currentStatus !== "mfa_challenge") {
         updateOverlay("waiting_for_login");
       } else if (s === "awaiting_confirmation") {
@@ -643,8 +664,9 @@ function startPollIfNeeded() {
   }, 2000);
 }
 
-export function showOverlay(status: OverlayStatus, provider?: string): void {
+export function showOverlay(status: OverlayStatus, provider?: string, controls?: OverlayOperationControls): void {
   if (provider) knownProvider = provider;
+  operationControls = controls ?? null;
 
   if (hostEl) {
     updateOverlay(status, provider);
@@ -737,6 +759,7 @@ export function removeOverlay(): void {
   shadowRoot = null;
   currentStatus = null;
   knownProvider = null;
+  operationControls = null;
   lastProgressMessage = null;
   isMinimized = false;
 }

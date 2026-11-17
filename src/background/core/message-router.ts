@@ -1,3 +1,4 @@
+import type { PageOverlayOperation } from "../../lib/overlay";
 import { WELCOME_PAGE_PATH } from "../../lib/welcome";
 import { readOfferSelection, readReviewOffers } from "../../lib/offer-selection";
 import { getCachedAmexOfferIds } from "../../lib/sync-offers-to-nextcard";
@@ -276,6 +277,8 @@ export function createMessageRouter(options: {
   openUpgrade?: () => Promise<void>;
   canWriteOffers?: () => Promise<boolean>;
   retryOfferSaves?: () => Promise<OfferSaveRetryResult>;
+  getBofaPageOverlay?: (tabId: number) => Promise<PageOverlayOperation | null>;
+  cancelBofaPageOverlay?: (tabId: number, operationId: string) => Promise<boolean>;
   offerOperations: OfferOperationStore;
   offerCoordinator: OfferOperationCoordinator;
   startLegacyOfferOperation?: (
@@ -337,6 +340,33 @@ export function createMessageRouter(options: {
       });
     }
     return saveStatus;
+  }
+
+  async function getPageOverlayOperation(tabId: number): Promise<PageOverlayOperation | null> {
+    for (const provider of Object.keys(options.providerRegistry)) {
+      if (!options.stateStore.isProviderId(provider)) continue;
+      const state = options.stateStore.states[provider];
+      const run = options.stateStore.getRun(provider);
+      if (state.tabId !== tabId || !run || run.cancelled) continue;
+      if (state.status !== "detecting_login" && state.status !== "waiting_for_login"
+        && state.status !== "extracting") continue;
+      return {
+        provider, kind: "rewards", operationId: run.attemptId,
+        status: state.accountPreparation ? "account_check"
+          : state.loginState === "mfa_challenge" ? "mfa_challenge"
+          : state.status === "extracting" ? "extracting" : "waiting_for_login",
+        progressMessage: state.progressMessage, accountPreparation: state.accountPreparation,
+      };
+    }
+    const { active } = await options.offerOperations.getSnapshot();
+    if (active?.ownedTabId === tabId && (active.phase === "opening"
+      || active.phase === "waiting_for_login" || active.phase === "checking")) {
+      return {
+        provider: active.issuer, kind: "offers", operationId: active.runId,
+        status: active.phase === "checking" ? "extracting" : "waiting_for_login",
+      };
+    }
+    return await options.getBofaPageOverlay?.(tabId) ?? null;
   }
 
   return (message: Record<string, unknown>, sender: chrome.runtime.MessageSender, sendResponse: (response?: unknown) => void) => {
@@ -468,6 +498,38 @@ export function createMessageRouter(options: {
           return true;
         }
         sendResponse(null);
+        return true;
+
+      case "GET_PAGE_OVERLAY_STATUS":
+      case "CANCEL_PAGE_OVERLAY_OPERATION":
+        void (async () => {
+          const tabId = sender.tab?.id;
+          const operation = tabId == null ? null : await getPageOverlayOperation(tabId);
+          const matches = operation && (message.operationId === undefined
+            || (operation.operationId === message.operationId && operation.provider === message.provider
+              && operation.kind === message.kind));
+          if (message.type === "GET_PAGE_OVERLAY_STATUS") {
+            sendResponse(matches ? operation : { status: "idle" });
+            return;
+          }
+          if (!matches || tabId == null || typeof message.operationId !== "string") {
+            sendResponse({ ok: false });
+            return;
+          }
+          if (operation.kind === "offers") {
+            sendResponse({ ok: Boolean(await options.offerCoordinator.cancel(operation.operationId)) });
+          } else if (operation.kind === "bofa") {
+            sendResponse({ ok: await options.cancelBofaPageOverlay?.(tabId, operation.operationId) === true });
+          } else if (options.stateStore.isProviderId(operation.provider)) {
+            if (options.stateStore.getRun(operation.provider)?.attemptId !== operation.operationId
+              || options.stateStore.states[operation.provider].tabId !== tabId) {
+              sendResponse({ ok: false });
+              return;
+            }
+            await options.cancelRun(operation.provider);
+            sendResponse({ ok: true });
+          }
+        })().catch(() => sendResponse(message.type === "GET_PAGE_OVERLAY_STATUS" ? { status: "idle" } : { ok: false }));
         return true;
 
       case "GET_OFFER_OPERATION_STATUS":
@@ -950,8 +1012,12 @@ export function createMessageRouter(options: {
           sendResponse({ status: "idle", progressMessage: null });
           return true;
         }
-        const { status, progressMessage } = options.stateStore.states[providerId];
-        sendResponse({ status, progressMessage });
+        const state = options.stateStore.states[providerId];
+        if (sender.tab?.id != null && state.tabId !== sender.tab.id) {
+          sendResponse({ status: "idle", progressMessage: null });
+          return true;
+        }
+        sendResponse({ status: state.status, progressMessage: state.progressMessage, accountPreparation: state.accountPreparation });
         return true;
       }
 

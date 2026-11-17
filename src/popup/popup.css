@@ -2593,16 +2593,19 @@
   margin-bottom: 8px;
 }
 
-.offer-card-choice { display: grid; grid-template-columns: minmax(0, 1fr) 76px; align-items: start; gap: 12px; min-height: 56px; padding: 12px; border: 1px solid #eee8e2; border-radius: 10px; background: #fff; color: #342019; font-family: inherit; text-align: left; cursor: pointer; }
+.offer-card-choice { display: block; width: 100%; min-width: 0; box-sizing: border-box; min-height: 56px; padding: 12px; border: 1px solid #eee8e2; border-radius: 10px; background: #fff; color: #342019; font-family: inherit; text-align: left; cursor: pointer; }
 
 .offer-card-choice.selected { border-color: #f6b156; background: #fffaf2; box-shadow: none; }
 
-.offer-card-choice-copy { display: grid; gap: 2px; }
+.offer-card-choice-copy { display: grid; gap: 6px; }
+.offer-card-choice .offer-card-choice-meta { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+.offer-card-choice .offer-card-choice-name { font-weight: 500; }
+.offer-card-choice .offer-card-choice-digits { flex-shrink: 0; }
 .offer-card-choice .offer-card-choice-digits { white-space: nowrap; font-size: 12px; }
 
 .offer-card-choice span { min-width: 0; font-size: 13px; font-weight: 500; line-height: 1.5; overflow-wrap: anywhere; white-space: normal; }
 
-.offer-card-choice strong { padding-top: 1px; white-space: nowrap; color: #342019; font-size: 12px; font-weight: 500; line-height: 1.5; text-align: right; }
+.offer-card-choice strong { min-width: 0; margin-left: auto; white-space: normal; overflow-wrap: anywhere; color: #342019; font-size: 12px; font-weight: 500; line-height: 1.5; text-align: right; }
 
 .legacy-ui .offers-coachmark,
 .legacy-ui .offers-recommendation,

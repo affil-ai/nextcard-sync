@@ -197,9 +197,9 @@ export function createOfferOperationCoordinator(
     await waitForTabComplete(tabId);
     await delay(1_500);
 
-    // Citi redirects to a separate login origin. Allow time for sign-in and MFA
-    // while keeping offer API calls restricted to the authenticated online origin.
-    const maxAttempts = issuer === "citi" ? 100 : 15;
+    // All issuers need time for sign-in and MFA; discovery must not expire
+    // before the user can finish the login flow.
+    const maxAttempts = 100;
     for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
       const snapshot = await store.getSnapshot();
       if (snapshot.active?.runId !== runId) return;
@@ -262,6 +262,7 @@ export function createOfferOperationCoordinator(
         }
         return;
       }
+      await store.patch(runId, { phase: "waiting_for_login", error: null });
       await delay(3_000);
     }
 
@@ -303,10 +304,22 @@ export function createOfferOperationCoordinator(
       if (!scope && getCurrentScope && !await isLegacyScopeCurrent?.()) {
         return { ok: false as const, error: "account_scope_unavailable" };
       }
+      // Reuse only the tab we opened for this profile's previous Citi check.
+      // An arbitrary Citi tab may belong to a different signed-in account.
+      const previous = issuer === "citi" ? (await store.getSnapshot()).history.citi : undefined;
       const result = await store.start(issuer, scope);
       if (!result.ok) return result;
       try {
-        const tab = await chrome.tabs.create({
+        const sameScope = previous && ((previous.scope === null && scope === null)
+          || (previous.scope !== null && scope !== null
+            && householdOperationScopesMatch(previous.scope, scope)));
+        const previousTab = sameScope && previous.ownedTabId != null
+          ? await chrome.tabs.get(previous.ownedTabId).catch(() => null)
+          : null;
+        let tab = previousTab && previousTab.id != null && tabMatchesIssuer(previousTab.url, issuer, true)
+          ? await chrome.tabs.update(previousTab.id, { active: true }).catch(() => null)
+          : null;
+        if (!tab) tab = await chrome.tabs.create({
           url: ISSUER_CONFIG[issuer].url,
           active: true,
         });
