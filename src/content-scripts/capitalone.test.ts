@@ -39,3 +39,37 @@ it("requires visible account data and keeps MFA ahead of stale account tiles", a
   document.body.innerHTML = '<div class="loyalty-tile" hidden>100,000 miles</div>';
   expect(detectLoginState()).toBe("unknown");
 });
+
+it.each([
+  { text: "125,000 miles", amount: 125000, label: "Miles" },
+  { text: "$10 <sup>83</sup> cash back", amount: 10.83, label: "Cash Back" },
+])("reads the rewards display when inner selectors change: $label", async ({ text, amount, label }) => {
+  vi.resetModules();
+  vi.useFakeTimers();
+  window.history.replaceState(null, "", "/rewards");
+  type MessageListener = Parameters<typeof chrome.runtime.onMessage.addListener>[0];
+  let extractionListener: MessageListener | undefined;
+  const sendMessage = vi.fn(async () => null);
+  vi.stubGlobal("chrome", { runtime: {
+    onMessage: { addListener: (listener: MessageListener) => { extractionListener = listener; } },
+    sendMessage,
+  } });
+  const rect = new DOMRect(0, 0, 100, 20);
+  vi.spyOn(Element.prototype, "getClientRects").mockImplementation(() => ({
+    length: 1, 0: rect, item: () => rect, [Symbol.iterator]: () => [rect][Symbol.iterator](),
+  }));
+  document.body.innerHTML = `<main><div>Current balance $9,999</div><c1-ease-card-rewards-display>${text}</c1-ease-card-rewards-display></main>`;
+  try {
+    await import("./capitalone");
+    if (!extractionListener) throw new Error("Missing extraction listener");
+    extractionListener({ type: "START_EXTRACTION", attemptId: "balance-read" }, {}, () => {});
+    await vi.advanceTimersByTimeAsync(1500);
+    expect(sendMessage).toHaveBeenCalledWith(expect.objectContaining({
+      type: "CAPITALONE_REWARDS_DONE", miles: amount, rewardsLabel: label,
+    }));
+  } finally {
+    vi.clearAllTimers();
+    vi.useRealTimers();
+    window.history.replaceState(null, "", "/accountSummary");
+  }
+});

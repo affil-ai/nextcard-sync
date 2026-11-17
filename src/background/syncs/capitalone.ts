@@ -54,7 +54,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function readNumber(value: unknown) {
-  return typeof value === "number" ? value : null;
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 
 function readString(value: unknown) {
@@ -166,7 +166,7 @@ export function createCapitalOneSync(options: CapitalOneSyncDeps) {
     const promise = new Promise<Record<string, unknown>>((resolve, reject) => {
       const timeout = setTimeout(() => {
         cleanup();
-        reject(new Error(`Timed out waiting for ${messageType}`));
+        reject(new Error("Could not read your Capital One rewards balance. Open the rewards page, complete any security verification, then retry syncing."));
       }, timeoutMs);
 
       function listener(
@@ -448,6 +448,13 @@ export function createCapitalOneSync(options: CapitalOneSyncDeps) {
             error,
           );
         }
+      }
+
+      options.stateStore.assertRunActive("capitalone", attemptId);
+      // An unreadable balance is unknown, never a successful empty sync. Keep
+      // the rewards page open so the user can verify the amount and retry.
+      if (getCapitalOneTotalRewards(summaryResult) == null) {
+        throw new Error("Could not read your Capital One rewards balance. Open the rewards page, complete any security verification, then retry syncing.");
       }
 
       let travelCredit: TravelCreditData | null = null;

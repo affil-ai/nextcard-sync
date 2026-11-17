@@ -1,3 +1,4 @@
+import * as tabUtils from "../core/tab-utils";
 import { createProviderSyncTabOpener } from "../core/tab-utils";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createCapitalOneSync } from "./capitalone";
@@ -166,5 +167,67 @@ describe("Capital One sign-in and cancellation", () => {
     expect(pushToNextCard).not.toHaveBeenCalled();
     expect(messages.size).toBe(0);
     expect(updates.size).toBe(0);
+  });
+});
+
+
+describe("Capital One balance recovery", () => {
+  type MessageListener = Parameters<typeof chrome.runtime.onMessage.addListener>[0];
+  const listeners = new Set<MessageListener>();
+  beforeEach(() => {
+    vi.useFakeTimers();
+    listeners.clear();
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.stubGlobal("chrome", {
+      storage: { local: { set: vi.fn(async () => {}) } },
+      runtime: { onMessage: {
+        addListener: (listener: MessageListener) => listeners.add(listener),
+        removeListener: (listener: MessageListener) => listeners.delete(listener),
+      } },
+      scripting: { executeScript: vi.fn(async () => []) },
+    });
+    vi.spyOn(tabUtils, "navigateAndWait").mockResolvedValue();
+  });
+  afterEach(() => {
+    vi.clearAllTimers(); vi.useRealTimers(); vi.restoreAllMocks(); vi.unstubAllGlobals();
+  });
+  async function runBalanceRecovery(balance: number | null, reply = true) {
+    const stateStore = createRuntimeStateStore();
+    const pushToNextCard = vi.fn(async () => ({ ok: true }));
+    vi.spyOn(tabUtils, "triggerExtraction").mockImplementation(async ({ attemptId }) => {
+      if (!reply) return;
+      for (const listener of [...listeners]) listener({
+        type: "CAPITALONE_REWARDS_DONE", provider: "capitalone", attemptId,
+        miles: balance, rewardsLabel: "Miles",
+      }, {}, () => {});
+    });
+    const sync = createCapitalOneSync({
+      openSyncTab: async () => 42, providerRegistry, stateStore,
+      extensionNavigatingTabs: new Set<number>(),
+      waitForGenericLoginAndExtract: async () => ({
+        cards: [{ name: "Test card", lastDigits: "1234" }],
+        totalRewards: null, data: { availablePoints: null },
+      }),
+      isProviderAttemptMessage: (message, provider, attemptId, type) =>
+        message.provider === provider && message.attemptId === attemptId && (!type || message.type === type),
+      pushToNextCard,
+    })();
+    await vi.runAllTimersAsync();
+    await sync;
+    return { stateStore, pushToNextCard };
+  }
+  it.each([true, false])("does not save missing points when the fallback replies: %s", async (reply) => {
+    const { stateStore, pushToNextCard } = await runBalanceRecovery(null, reply);
+    expect(pushToNextCard).not.toHaveBeenCalled();
+    expect(stateStore.states.capitalone.status).toBe("error");
+    expect(stateStore.states.capitalone.error).toMatch(/could not read.*balance/i);
+    expect(tabUtils.navigateAndWait).toHaveBeenCalledTimes(1);
+    expect(listeners.size).toBe(0);
+  });
+  it.each([0, 125000])("saves a recovered balance of %s", async (balance) => {
+    const { pushToNextCard } = await runBalanceRecovery(balance);
+    expect(pushToNextCard).toHaveBeenCalledWith("capitalone", expect.objectContaining({
+      availablePoints: balance, rewardsLabel: "Miles",
+    }));
   });
 });

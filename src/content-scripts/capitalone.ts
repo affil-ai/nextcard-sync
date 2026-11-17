@@ -48,7 +48,10 @@ export function detectLoginState(): LoginState {
   const content = document.querySelectorAll(
     "c1-ease-account-tile .primary-detail__identity__account-number, .account-tile .primary-detail__identity__account-number, c1-ease-rewards-tile-container, .loyalty-tile, .c1-ease-card-rewards-display__balance, .c1-cc-rewards-benefit-tile"
   );
-  return Array.from(content).some((element) => visible(element) && Boolean(element.textContent?.trim()))
+  const rewardsDisplay = document.querySelector("c1-ease-card-rewards-display, .c1-ease-card-rewards-display");
+  const hasRewardsBalance = rewardsDisplay && visible(rewardsDisplay)
+    && parseCapitalOneRewardsTileText(visibleTextOf(rewardsDisplay)).amount != null;
+  return hasRewardsBalance || Array.from(content).some((element) => visible(element) && Boolean(element.textContent?.trim()))
     ? "logged_in" : "unknown";
 }
 
@@ -253,10 +256,12 @@ async function scrapeRewardsPageSummary(attemptId: string) {
     const labelEl = document.querySelector(".c1-ease-card-rewards-display__balance-label, .labels__balance");
 
     const cardText = cardTextEl ? textOf(cardTextEl).replace(/\s*>\s*$/, "") : null;
-    const rewardsSummary = parseCapitalOneRewardsSummary({
+    // Read only the rewards display, never the page's credit or account balance.
+    const display = document.querySelector("c1-ease-card-rewards-display, .c1-ease-card-rewards-display");
+    const rewardsSummary = resolveCapitalOneRewardsSummary(parseCapitalOneRewardsSummary({
       balanceText: balanceEl ? textOf(balanceEl) : "",
       labelText: labelEl ? textOf(labelEl) : null,
-    });
+    }), visibleTextOf(display));
 
     if (rewardsSummary.amount != null) {
       return {
@@ -312,7 +317,7 @@ async function runExtraction(attemptId: string) {
   }
 
   if (url.includes("/rewards")) {
-    await waitForSelector(".c1-ease-card-rewards-display__balance, .c1-ease-card-rewards-tabs");
+    await waitForSelector(".c1-ease-card-rewards-display__balance, .c1-ease-card-rewards-tabs, c1-ease-card-rewards-display, .c1-ease-card-rewards-display");
     await runControl.sleep(1000, attemptId);
 
     const { cardText, rewardsSummary } = await scrapeRewardsPageSummary(attemptId);
