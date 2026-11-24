@@ -3,6 +3,21 @@ import { readFileSync } from "node:fs";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createOfferOperation, type OfferOperationSnapshot, type OfferOperationCard, type OfferOperationState } from "../lib/offer-operation";
 
+// vi.waitFor advances fake timers only as fast as it polls in real time, so the
+// popup's own delays cost real seconds and a busy machine runs past the 5s test
+// limit. Advance fake time directly instead, within the same fake-time budget.
+async function advanceUntil(check: () => void, { timeout = 1000 }: { timeout?: number } = {}) {
+  for (let elapsed = 0; ; elapsed += 50) {
+    try {
+      check();
+      return;
+    } catch (error) {
+      if (elapsed >= timeout) throw error;
+      await vi.advanceTimersByTimeAsync(50);
+    }
+  }
+}
+
 let removeDocumentListeners = () => {};
 beforeEach(() => {
   const listeners = vi.spyOn(document, "addEventListener");
@@ -46,11 +61,11 @@ it("keeps card-specific choices through confirmation and releases review with Do
       onChanged: { addListener: () => {}, removeListener: () => {} } },
     tabs: { create: vi.fn() }, windows: { getCurrent: async () => ({ id: 1 }) } });
   await import("./app");
-  await vi.waitFor(() => expect(sendMessage).toHaveBeenCalledWith({ type: "GET_EXTENSION_PROFILE" }));
+  await advanceUntil(() => expect(sendMessage).toHaveBeenCalledWith({ type: "GET_EXTENSION_PROFILE" }));
   expect(document.getElementById("loadingView")?.classList.contains("active")).toBe(true);
   expect(document.getElementById("disclosureView")?.classList.contains("active")).toBe(false);
   profileReady = true;
-  await vi.waitFor(() => expect(document.querySelectorAll("#chaseOffersReview input")).toHaveLength(1));
+  await advanceUntil(() => expect(document.querySelectorAll("#chaseOffersReview input")).toHaveLength(1));
   expect(document.getElementById("homeView")?.classList.contains("active")).toBe(true);
   expect(document.getElementById("disclosureView")?.classList.contains("active")).toBe(false);
   const run = document.getElementById("chaseOffersRunBtn");
@@ -59,7 +74,7 @@ it("keeps card-specific choices through confirmation and releases review with Do
   expect(run.textContent).toBe("Loading activation allowance…");
   expect(document.getElementById("chaseOffersQuotaNotice")).toBeNull();
   finishUsage?.(usage);
-  await vi.waitFor(() => expect(run.textContent).toContain("Activate 1"));
+  await advanceUntil(() => expect(run.textContent).toContain("Activate 1"));
   const first = document.querySelector("#chaseOffersReview input");
   if (!(first instanceof HTMLInputElement)) throw new Error("Missing offer choice");
   expect(first.checked).toBe(true);
@@ -73,20 +88,20 @@ it("keeps card-specific choices through confirmation and releases review with Do
   if (!(secondCard instanceof HTMLButtonElement)) throw new Error("Missing second card");
   secondCard.click();
   document.getElementById("offerConfirmContinue")?.click();
-  await vi.waitFor(() => expect(sendMessage).toHaveBeenCalledWith(expect.objectContaining({ type: "START_OFFER_ENROLLMENT",
+  await advanceUntil(() => expect(sendMessage).toHaveBeenCalledWith(expect.objectContaining({ type: "START_OFFER_ENROLLMENT",
     runId: "run", selectedCardKeys: ["one"], selectedOfferIdsByCard: { one: ["one-offer"] }, total: 1 })));
   const adding: OfferOperationState = { ...ready, phase: "adding", total: 119, processed: 34, added: 0 };
   snapshot = { active: adding, history: { chase: adding } };
-  await vi.waitFor(() => expect(document.getElementById("chaseOffersProgressDetail")?.textContent).toBe("Processing 34 of 119"));
+  await advanceUntil(() => expect(document.getElementById("chaseOffersProgressDetail")?.textContent).toBe("Processing 34 of 119"));
   expect(document.getElementById("chaseOffersProgressBar")?.style.width).toBe(`${34 / 119 * 100}%`);
   const verifying: OfferOperationState = { ...adding, processed: 119, verifying: true };
   snapshot = { active: verifying, history: { chase: verifying } };
-  await vi.waitFor(() => expect(document.getElementById("chaseOffersProgressDetail")?.textContent).toBe("Verifying activations…"));
+  await advanceUntil(() => expect(document.getElementById("chaseOffersProgressDetail")?.textContent).toBe("Verifying activations…"));
   snapshot = { active: ready, history: { chase: ready } };
-  await vi.waitFor(() => expect(document.getElementById("chaseOffersReady")?.style.display).not.toBe("none"));
+  await advanceUntil(() => expect(document.getElementById("chaseOffersReady")?.style.display).not.toBe("none"));
   const done = document.querySelector('[data-finish-offers="chase"]');
   if (!(done instanceof HTMLButtonElement)) throw new Error("Missing Done button"); done.click();
-  await vi.waitFor(() => expect(document.getElementById("chaseOffersSummary")?.textContent).toContain("No offers activated"));
+  await advanceUntil(() => expect(document.getElementById("chaseOffersSummary")?.textContent).toContain("No offers activated"));
   const otherIssuer = document.getElementById("amexOffersDiscoverBtn");
   if (!(otherIssuer instanceof HTMLButtonElement)) throw new Error("Missing issuer button");
   expect(otherIssuer.disabled).toBe(false);
@@ -116,12 +131,12 @@ it("lets the install guide own sign-in and restores sidebar sign-in when the gui
     windows: { getCurrent: async () => ({ id: 1 }) },
   });
   await import("./app");
-  await vi.waitFor(() => expect(document.getElementById("authView")?.classList.contains("active")).toBe(true), { timeout: 3000 });
+  await advanceUntil(() => expect(document.getElementById("authView")?.classList.contains("active")).toBe(true), { timeout: 3000 });
   expect(document.getElementById("authView")?.classList.contains("guided-setup")).toBe(true);
   expect(document.getElementById("disclosureView")?.classList.contains("active")).toBe(false);
   expect(query).toHaveBeenCalledWith({ url: "chrome-extension://test/src/welcome/index.html", currentWindow: true });
   guideOpen = false;
-  await vi.waitFor(() => expect(document.getElementById("authView")?.classList.contains("guided-setup")).toBe(false), { timeout: 3000 });
+  await advanceUntil(() => expect(document.getElementById("authView")?.classList.contains("guided-setup")).toBe(false), { timeout: 3000 });
   expect(document.getElementById("authView")?.classList.contains("active")).toBe(true);
 });
 
